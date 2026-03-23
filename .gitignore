@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.csv
+op_history.db
+test_*.py
+.env
