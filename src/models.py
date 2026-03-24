@@ -31,7 +31,6 @@ class SaleRecord(BaseModel):
     resource_id: int
     sold_at: datetime
     sold_price: int
-    lowest_bin_at_time: int
 
 
 class PricePoint(BaseModel):
@@ -39,8 +38,6 @@ class PricePoint(BaseModel):
     resource_id: int
     recorded_at: datetime
     lowest_bin: int
-    median_bin: Optional[int] = None
-    listing_count: Optional[int] = None
 
 
 class PlayerMarketData(BaseModel):
@@ -48,10 +45,6 @@ class PlayerMarketData(BaseModel):
     player: Player
     current_lowest_bin: int
     listing_count: int
-    op_listing_count: int
     price_history: list[PricePoint]
     sales: list[SaleRecord]
     live_auction_prices: list[int] = []
-    live_auction_end_times: list[str] = []
-    base_player_ea_id: int = 0
-    base_player_slug: str = ""
