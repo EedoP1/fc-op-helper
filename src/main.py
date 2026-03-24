@@ -18,8 +18,6 @@ import logging
 import sys
 import io
 from datetime import datetime
-from pathlib import Path
-
 import click
 from rich.console import Console
 from rich.table import Table
@@ -71,6 +69,19 @@ def score_player(md: PlayerMarketData) -> dict | None:
         hour_key = point.recorded_at.strftime("%Y-%m-%dT%H")
         price_by_hour[hour_key] = point.lowest_bin
 
+    def get_price_at_time(sale_time):
+        """Get price at sale time, falling back to nearest available hour."""
+        from datetime import timedelta
+        hour_key = sale_time.strftime("%Y-%m-%dT%H")
+        if hour_key in price_by_hour:
+            return price_by_hour[hour_key]
+        # Try nearby hours (±1, ±2)
+        for delta in [-1, 1, -2, 2]:
+            nearby = (sale_time + timedelta(hours=delta)).strftime("%Y-%m-%dT%H")
+            if nearby in price_by_hour:
+                return price_by_hour[nearby]
+        return buy_price  # last resort
+
     # Try each margin — pick the one with the highest net profit
     # that still has at least 3 REAL OP sales (vs price at time of sale)
     best = None
@@ -81,8 +92,7 @@ def score_player(md: PlayerMarketData) -> dict | None:
         # Count OP sales using price AT THE TIME, not current BIN
         op_sales = 0
         for s in sales:
-            sale_hour = s.sold_at.strftime("%Y-%m-%dT%H")
-            price_at_time = price_by_hour.get(sale_hour, buy_price)
+            price_at_time = get_price_at_time(s.sold_at)
             threshold = int(price_at_time * (1 + margin))
             if s.sold_price >= threshold:
                 op_sales += 1
@@ -295,7 +305,7 @@ def display_results(selected, budget, total_used):
         p = s["player"]
         table.add_row(
             str(i + 1),
-            p.name[:20].encode("ascii", "replace").decode(),
+            p.name[:20],
             str(p.rating),
             p.position,
             f"{s['buy_price']:,}",
