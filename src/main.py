@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import io
 import logging
-import sys
 from datetime import datetime
 
 import click
@@ -27,10 +25,6 @@ from src.futgg_client import FutGGClient
 from src.protocols import MarketDataClient
 from src.scorer import score_player
 from src.optimizer import optimize_portfolio
-
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 console = Console(force_terminal=True)
 logger = logging.getLogger("op-seller")
