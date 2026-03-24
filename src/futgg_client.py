@@ -20,11 +20,6 @@ from typing import Optional
 
 import httpx
 
-from src.config import (
-    FUTGG_BASE_URL,
-    REQUEST_DELAY_SECONDS,
-    REQUEST_TIMEOUT_SECONDS,
-)
 from src.models import Player, PlayerMarketData, PricePoint, SaleRecord
 
 logger = logging.getLogger(__name__)
@@ -41,14 +36,15 @@ POSITION_MAP = {
 class FutGGClient:
     """HTTP client for fut.gg's internal API."""
 
+    BASE_URL = "https://www.fut.gg"
+
     def __init__(self):
-        self.base_url = FUTGG_BASE_URL
         self.client: Optional[httpx.AsyncClient] = None
 
     async def start(self) -> None:
         """Create the HTTP client."""
         self.client = httpx.AsyncClient(
-            base_url=self.base_url,
+            base_url=self.BASE_URL,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -56,9 +52,9 @@ class FutGGClient:
                     "Chrome/131.0.0.0 Safari/537.36"
                 ),
                 "Accept": "application/json",
-                "Referer": f"{self.base_url}/players/",
+                "Referer": f"{self.BASE_URL}/players/",
             },
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=30,
             follow_redirects=True,
         )
         logger.info("FutGG client started")
@@ -71,6 +67,8 @@ class FutGGClient:
 
     async def _get(self, path: str) -> Optional[dict]:
         """Make a GET request with minimal delay."""
+        if not self.client:
+            raise RuntimeError("Client not started. Call start() first.")
         try:
             resp = await self.client.get(path)
             resp.raise_for_status()
@@ -145,15 +143,6 @@ class FutGGClient:
             return data["data"]
         return None
 
-    async def get_player_other_versions(self, ea_id: int) -> list[dict]:
-        """Get all card versions for a player."""
-        data = await self._get(
-            f"/api/fut/player-item-definitions/26/{ea_id}/other-versions/"
-        )
-        if data and "data" in data:
-            return data["data"]
-        return []
-
     # ── High-level data assembly ─────────────────────────────────────
 
     async def get_player_market_data(self, ea_id: int) -> Optional[PlayerMarketData]:
@@ -224,7 +213,6 @@ class FutGGClient:
 
         # Completed sales
         sales = []
-        overview = prices.get("overview", {})
         for auction in prices.get("completedAuctions", []):
             try:
                 sales.append(SaleRecord(
