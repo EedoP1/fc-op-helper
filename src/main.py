@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from src.futgg_client import FutGGClient
+from src.protocols import MarketDataClient
 from src.scorer import score_player
 from src.optimizer import optimize_portfolio
 
@@ -35,9 +36,10 @@ console = Console(force_terminal=True)
 logger = logging.getLogger("op-seller")
 
 
-async def run(budget: int, verbose: bool) -> None:
+async def run(budget: int, verbose: bool, client: MarketDataClient | None = None) -> None:
     """Main pipeline: discover → fetch → score → optimize → display."""
-    client = FutGGClient()
+    if client is None:
+        client = FutGGClient()
     await client.start()
 
     try:
