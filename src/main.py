@@ -1,10 +1,8 @@
 """
-FC26 OP Sell List Generator
+FC26 OP Sell List Generator.
 
-All data from fut.gg. Sell rate estimated from:
-- OP/normal ratio in live listings
-- Normal sales per hour (= normal listings per hour)
-- OP sales per hour from completed auctions
+Discovers players from fut.gg, scores them for OP selling potential,
+and outputs the optimal list for a given budget.
 
 Usage:
     python -m src.main --budget 1000000
@@ -14,19 +12,20 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import io
 import logging
 import sys
-import io
 from datetime import datetime
+
 import click
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from src.config import EA_TAX_RATE, TARGET_PLAYER_COUNT
 from src.futgg_client import FutGGClient
-from src.models import PlayerMarketData
+from src.scorer import score_player
+from src.optimizer import optimize_portfolio
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -36,117 +35,17 @@ console = Console(force_terminal=True)
 logger = logging.getLogger("op-seller")
 
 
-def score_player(md: PlayerMarketData) -> dict | None:
-    """
-    Score a player for OP selling using only fut.gg data.
-
-    Key metric: how many OP sales in the data window, extrapolated to 24h.
-    """
-    buy_price = md.current_lowest_bin
-    if buy_price <= 0:
-        return None
-
-    sales = md.sales
-    live_prices = md.live_auction_prices
-
-    if len(sales) < 5 or len(live_prices) < 20:
-        return None
-
-    # Time span of sales data
-    sorted_sales = sorted(sales, key=lambda s: s.sold_at)
-    time_span_hrs = (sorted_sales[-1].sold_at - sorted_sales[0].sold_at).total_seconds() / 3600
-    if time_span_hrs < 0.5:
-        time_span_hrs = 0.5
-
-    total_sales = len(sales)
-    sales_per_hour = total_sales / time_span_hrs
-    if sales_per_hour < 7:
-        return None
-
-    # Build price-at-time lookup from history
-    price_by_hour = {}
-    for point in md.price_history:
-        hour_key = point.recorded_at.strftime("%Y-%m-%dT%H")
-        price_by_hour[hour_key] = point.lowest_bin
-
-    def get_price_at_time(sale_time):
-        """Get price at sale time, falling back to nearest available hour."""
-        from datetime import timedelta
-        hour_key = sale_time.strftime("%Y-%m-%dT%H")
-        if hour_key in price_by_hour:
-            return price_by_hour[hour_key]
-        # Try nearby hours (±1, ±2)
-        for delta in [-1, 1, -2, 2]:
-            nearby = (sale_time + timedelta(hours=delta)).strftime("%Y-%m-%dT%H")
-            if nearby in price_by_hour:
-                return price_by_hour[nearby]
-        return buy_price  # last resort
-
-    # Try each margin — pick the one with the highest net profit
-    # that still has at least 3 REAL OP sales (vs price at time of sale)
-    best = None
-
-    for margin_pct in [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]:
-        margin = margin_pct / 100.0
-
-        # Count OP sales using price AT THE TIME, not current BIN
-        op_sales = 0
-        for s in sales:
-            price_at_time = get_price_at_time(s.sold_at)
-            threshold = int(price_at_time * (1 + margin))
-            if s.sold_price >= threshold:
-                op_sales += 1
-
-        if op_sales < 3:
-            continue
-
-        # Calculate profit based on CURRENT price (what we'd buy/sell at now)
-        sell_price = int(buy_price * (1 + margin))
-        ea_tax = int(sell_price * EA_TAX_RATE)
-        net_profit = sell_price - ea_tax - buy_price
-        if net_profit <= 0:
-            continue
-
-        op_sales_per_24h = op_sales / time_span_hrs * 24
-        op_ratio = op_sales / total_sales
-
-        # Pick highest net profit (we iterate from highest margin down)
-        if best is None:
-            best = {
-                "margin": margin,
-                "margin_pct": margin_pct,
-                "sell_price": sell_price,
-                "net_profit": net_profit,
-                "op_sales": op_sales,
-                "total_sales": total_sales,
-                "op_ratio": op_ratio,
-                "op_sales_24h": round(op_sales_per_24h, 1),
-                "time_span_hrs": round(time_span_hrs, 1),
-                "sales_per_hour": round(sales_per_hour, 1),
-            }
-            break  # highest margin with 3+ OP sales = best profit
-
-    if not best:
-        return None
-
-    return {
-        "player": md.player,
-        "buy_price": buy_price,
-        **best,
-    }
-
-
 async def run(budget: int, verbose: bool) -> None:
-    """discover → fetch → score → optimize → display."""
+    """Main pipeline: discover → fetch → score → optimize → display."""
     client = FutGGClient()
     await client.start()
 
     try:
-        # ── Step 1: Discover all players in price range ──────────────
+        # ── Step 1: Discover players in price range ──────────────
         max_price = int(budget * 0.10)
         min_price = int(budget * 0.005)
         console.print(
-            f"\n[bold]Discovering ALL players {min_price:,}–{max_price:,} "
+            f"\n[bold]Discovering players {min_price:,}–{max_price:,} "
             f"(budget: {budget:,})...[/bold]"
         )
         candidates = await client.discover_players(
@@ -157,121 +56,36 @@ async def run(budget: int, verbose: bool) -> None:
             console.print("[red]No candidates found.[/red]")
             return
 
-        # ── Step 2: Fetch market data (batched) ──────────────────────
+        # ── Step 2: Fetch market data ────────────────────────────
         console.print("[bold]Fetching market data...[/bold]")
-        ea_ids = [c.get("ea_id", 0) for c in candidates if c.get("ea_id")]
-        all_md = []
-        for i in range(0, len(ea_ids), 10):
-            batch = ea_ids[i:i + 10]
-            if (i // 10) % 10 == 0 or i == 0:
-                console.print(f"  [{min(i+10, len(ea_ids))}/{len(ea_ids)}]")
-            results = await client.get_batch_market_data(batch, concurrency=10)
-            all_md.extend(results)
+        ea_ids = [c["ea_id"] for c in candidates if c.get("ea_id")]
+        all_md = await client.get_batch_market_data(ea_ids, concurrency=10)
 
-        valid = [(eid, md) for eid, md in zip(ea_ids, all_md)
-                 if md and md.current_lowest_bin > 0]
-        console.print(f"Got data for [green]{len(valid)}[/green] players\n")
+        valid_md = [md for md in all_md if md and md.current_lowest_bin > 0]
+        console.print(f"Got data for [green]{len(valid_md)}[/green] players\n")
 
-        # ── Step 3: Score all players ────────────────────────────────
+        # ── Step 3: Score ────────────────────────────────────────
         console.print("[bold]Scoring players...[/bold]")
-        scored = []
-        for ea_id, md in valid:
-            result = score_player(md)
-            if result:
-                scored.append(result)
-
+        scored = [s for md in valid_md if (s := score_player(md))]
         console.print(f"Scored [green]{len(scored)}[/green] viable players\n")
 
-        # ── Step 4: Sort by OP sales per 24h ────────────────────────
+        # ── Step 4: Optimize portfolio ───────────────────────────
         console.print("[bold]Optimizing portfolio...[/bold]")
-        # Sort by expected profit per coin invested
-        # = (net_profit × op_ratio) / buy_price
-        # This favors cards where you get the most expected return per coin
-        for s in scored:
-            s["expected_profit"] = s["net_profit"] * s["op_ratio"]
-            s["efficiency"] = s["expected_profit"] / s["buy_price"] if s["buy_price"] > 0 else 0
-        scored.sort(key=lambda s: s["efficiency"], reverse=True)
+        selected = optimize_portfolio(scored, budget)
 
-        selected = []
-        total_used = 0
-        used_ids = set()
-
-        for entry in scored:
-            if len(selected) >= TARGET_PLAYER_COUNT:
-                break
-            pid = entry["player"].resource_id
-            if pid in used_ids:
-                continue
-            cost = entry["buy_price"]
-            if total_used + cost > budget:
-                continue
-            selected.append(entry)
-            used_ids.add(pid)
-            total_used += cost
-
-        # Swap loop
-        swaps = 0
-        while len(selected) < TARGET_PLAYER_COUNT and swaps < 100:
-            if not selected:
-                break
-            exp_idx = max(range(len(selected)), key=lambda i: selected[i]["buy_price"])
-            expensive = selected[exp_idx]
-            freed = expensive["buy_price"]
-            removed_ep = expensive["expected_profit"]
-
-            replacements = []
-            repl_ep = 0
-            repl_cost = 0
-            temp_used = {s["player"].resource_id for s in selected} - {expensive["player"].resource_id}
-
-            for s in scored:
-                pid = s["player"].resource_id
-                if pid in temp_used:
-                    continue
-                if repl_cost + s["buy_price"] <= freed:
-                    replacements.append(s)
-                    repl_ep += s["expected_profit"]
-                    repl_cost += s["buy_price"]
-                    temp_used.add(pid)
-
-            if len(replacements) >= 2 and repl_ep > removed_ep:
-                used_ids.discard(expensive["player"].resource_id)
-                selected.pop(exp_idx)
-                total_used -= freed
-                for r in replacements:
-                    selected.append(r)
-                    used_ids.add(r["player"].resource_id)
-                    total_used += r["buy_price"]
-                swaps += 1
-            else:
-                break
-
-        # Backfill
-        remaining = budget - total_used
-        for s in scored:
-            if len(selected) >= TARGET_PLAYER_COUNT:
-                break
-            pid = s["player"].resource_id
-            if pid in used_ids:
-                continue
-            if s["buy_price"] <= remaining:
-                selected.append(s)
-                used_ids.add(pid)
-                total_used += s["buy_price"]
-                remaining -= s["buy_price"]
-
-        selected.sort(key=lambda s: s["expected_profit"], reverse=True)
-
-        # ── Step 5: Display + Export ─────────────────────────────────
+        # ── Step 5: Display + Export ─────────────────────────────
+        total_used = sum(s["buy_price"] for s in selected)
         display_results(selected, budget, total_used)
-        csv_path = export_csv(selected, budget, total_used)
+
+        csv_path = export_csv(selected)
         console.print(f"\n[bold green]Exported:[/bold green] {csv_path}")
 
     finally:
         await client.stop()
 
 
-def display_results(selected, budget, total_used):
+def display_results(selected: list[dict], budget: int, total_used: int) -> None:
+    """Display portfolio summary and player table."""
     if not selected:
         console.print("[red]No players selected.[/red]")
         return
@@ -283,7 +97,8 @@ def display_results(selected, budget, total_used):
     summary.append(f"Budget: {budget:,}", style="bold")
     summary.append(f"  |  Used: {total_used:,}")
     summary.append(f"  |  Profit/sell: {total_profit:,}", style="bold green")
-    summary.append(f" ({total_profit/total_used:.1%})" if total_used else "")
+    if total_used:
+        summary.append(f" ({total_profit / total_used:.1%})")
     summary.append(f"\nExpected profit: {total_expected:,.0f}", style="bold cyan")
     summary.append(f"  |  Players: {len(selected)}")
     console.print(Panel(summary, title="OP Sell Portfolio", border_style="green"))
@@ -319,7 +134,8 @@ def display_results(selected, budget, total_used):
     console.print(table)
 
 
-def export_csv(selected, budget, total_used):
+def export_csv(selected: list[dict]) -> str:
+    """Export portfolio to CSV file. Returns the file path."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = f"op_sell_list_{ts}.csv"
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -327,17 +143,18 @@ def export_csv(selected, budget, total_used):
         w.writerow([
             "Rank", "Player", "Rating", "Position", "League", "Club",
             "Buy", "Sell", "Profit", "Profit%", "Margin",
-            "OP Sales/24h", "OP Sales", "Total Sales", "OP Ratio",
-            "Sales/hr", "Data Span",
+            "Expected Profit", "OP Sales", "Total Sales", "OP Ratio",
+            "OP Sales/24h", "Sales/hr", "Data Span",
         ])
         for i, s in enumerate(selected):
             p = s["player"]
             w.writerow([
-                i+1, p.name, p.rating, p.position, p.league, p.club,
+                i + 1, p.name, p.rating, p.position, p.league, p.club,
                 s["buy_price"], s["sell_price"], s["net_profit"],
-                f"{s['net_profit']/s['buy_price']:.2%}", f"{s['margin_pct']}%",
-                f"{s['op_sales_24h']:.0f}", s["op_sales"], s["total_sales"],
-                f"{s['op_ratio']:.2%}", s["sales_per_hour"],
+                f"{s['net_profit'] / s['buy_price']:.2%}", f"{s['margin_pct']}%",
+                f"{s['expected_profit']:.0f}",
+                s["op_sales"], s["total_sales"], f"{s['op_ratio']:.2%}",
+                f"{s['op_sales_24h']:.0f}", s["sales_per_hour"],
                 f"{s['time_span_hrs']:.1f}h",
             ])
     return path

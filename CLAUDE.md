@@ -15,9 +15,11 @@ python -m src.main --budget 1000000
 ```
 src/
 ├── __init__.py
-├── config.py        — Constants (EA 5% tax, target 100 players, margin bounds)
+├── config.py        — Constants (EA 5% tax, target 100 players)
 ├── futgg_client.py  — fut.gg API client (discovery, prices, sales, history)
-├── main.py          — Scoring, optimization, CLI, display, CSV export
+├── scorer.py        — OP sell scoring (price-at-time verified OP detection)
+├── optimizer.py     — Portfolio optimizer (efficiency sorting, swap loop, backfill)
+├── main.py          — CLI entry point, display, CSV export
 └── models.py        — Pydantic data models (Player, SaleRecord, PricePoint, etc.)
 ```
 
