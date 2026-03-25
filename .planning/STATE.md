@@ -2,16 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-03-25T15:22:26.939Z"
-last_activity: 2026-03-25 — Roadmap created, phases derived from requirements
+status: Ready to execute
+stopped_at: Completed 01-persistent-scanner plan 01 (01-01-PLAN.md)
+last_updated: "2026-03-25T15:54:42.164Z"
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 3
+  completed_plans: 1
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 1 — Persistent Scanner
+**Current focus:** Phase 01 — persistent-scanner
 
 ## Current Position
 
-Phase: 1 of 3 (Persistent Scanner)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-03-25 — Roadmap created, phases derived from requirements
-
-Progress: [░░░░░░░░░░] 0%
+Phase: 01 (persistent-scanner) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -52,6 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 01-persistent-scanner P01 | 3 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -63,6 +58,9 @@ Recent decisions affecting current work:
 - Architecture: Backend as single source of truth — scorer/optimizer unchanged, plugged into APScheduler
 - Stack: FastAPI 0.135 + APScheduler 3.11 (pinned <4.0) + SQLAlchemy 2.0 async + aiosqlite
 - Concurrency: SQLite WAL mode, `async_sessionmaker(expire_on_commit=False)` required
+- [Phase 01-persistent-scanner]: expire_on_commit=False on all async session factories prevents MissingGreenlet at scale
+- [Phase 01-persistent-scanner]: WAL mode enabled via sync_engine event listener on connect for reliability across all connections
+- [Phase 01-persistent-scanner]: CircuitBreaker is_open is a property for lazy OPEN->HALF_OPEN transition on check
 
 ### Pending Todos
 
@@ -75,6 +73,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T15:22:26.934Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-persistent-scanner/01-CONTEXT.md
+Last session: 2026-03-25T15:54:42.157Z
+Stopped at: Completed 01-persistent-scanner plan 01 (01-01-PLAN.md)
+Resume file: None
