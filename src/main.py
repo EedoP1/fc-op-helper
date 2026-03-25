@@ -65,6 +65,8 @@ async def run_portfolio(url: str, budget: int) -> None:
             "position": item["position"],
             "buy_price": item["price"],       # API key is "price"
             "margin_pct": item["margin_pct"],
+            "op_sold": item["op_sales"],
+            "op_total": item["total_sales"],
             "op_ratio": item["op_ratio"],
             "expected_profit": item["expected_profit"],
             "efficiency": item["efficiency"],
@@ -175,7 +177,7 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
     summary.append(f"  |  Used: {total_used:,}")
     if total_used:
         summary.append(f"  ({total_used / budget:.1%})")
-    summary.append(f"\nExpected profit: {total_expected:,.0f}", style="bold cyan")
+    summary.append(f"\nExpected profit/hr: {total_expected:,.0f}", style="bold cyan")
     summary.append(f"  |  Players: {len(selected)}")
     console.print(Panel(summary, title="OP Sell Portfolio", border_style="green"))
 
@@ -186,8 +188,9 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
     table.add_column("Pos", justify="center", width=3)
     table.add_column("Buy", justify="right")
     table.add_column("Margin", justify="right", width=5)
-    table.add_column("ExpProf", justify="right", style="cyan")
-    table.add_column("OP%", justify="right", width=6)
+    table.add_column("EP/hr", justify="right", style="cyan")
+    table.add_column("Sell%", justify="right", width=6)
+    table.add_column("OP Sales", justify="right", width=7)
     table.add_column("Efficiency", justify="right")
 
     for i, s in enumerate(selected):
@@ -200,6 +203,7 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
             f"{s['margin_pct']}%",
             f"{s['expected_profit']:,.0f}",
             f"{s['op_ratio']:.0%}",
+            f"{s['op_sold']}/{s['op_total']}",
             f"{s['efficiency']:.4f}",
         )
     console.print(table)
@@ -220,13 +224,14 @@ def export_csv(selected: list[dict]) -> str:
         w = csv.writer(f)
         w.writerow([
             "Rank", "Player", "Rating", "Position",
-            "Buy", "Margin", "Expected Profit", "OP Ratio", "Efficiency",
+            "Buy", "Margin", "EP/hr", "Sell Rate", "OP Sales", "Efficiency",
         ])
         for i, s in enumerate(selected):
             w.writerow([
                 i + 1, s["player_name"], s["rating"], s["position"],
                 s["buy_price"], f"{s['margin_pct']}%",
                 f"{s['expected_profit']:.0f}", f"{s['op_ratio']:.1%}",
+                f"{s['op_sold']}/{s['op_total']}",
                 f"{s['efficiency']:.4f}",
             ])
     return path
