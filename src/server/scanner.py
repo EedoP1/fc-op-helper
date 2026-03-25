@@ -328,7 +328,7 @@ class ScannerService:
                     op_ratio=v2_result["op_sell_rate"],
                     expected_profit=v2_result["expected_profit_per_hour"],
                     efficiency=v2_result["expected_profit_per_hour"] / v2_result["buy_price"],
-                    sales_per_hour=v2_result["op_sales_per_hour"],
+                    sales_per_hour=0.0,
                     is_viable=True,
                     expected_profit_per_hour=v2_result["expected_profit_per_hour"],
                 )
@@ -384,7 +384,7 @@ class ScannerService:
                 if market_data is not None:
                     record.listing_count = market_data.listing_count
                     if v2_result is not None:
-                        record.sales_per_hour = v2_result["op_sales_per_hour"]
+                        record.sales_per_hour = 0.0
 
             await session.flush()
 
