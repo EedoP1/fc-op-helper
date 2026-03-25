@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-25T19:56:11.321Z"
-last_activity: "2026-03-25 - Completed quick task 260325-tu9: Retain raw market data per player for 1 month instead of overwriting on each scan"
+status: Phase complete — ready for verification
+stopped_at: Completed 03-01-PLAN.md (CLI as API client)
+last_updated: "2026-03-25T20:08:05.153Z"
+last_activity: 2026-03-25
 progress:
   total_phases: 3
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 02 — full-api-surface
+**Current focus:** Phase 03 — cli-as-api-client
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (cli-as-api-client) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: Not started
 | Phase 01-persistent-scanner P03 | 4min | 1 tasks | 5 files |
 | Phase 02 P01 | 3min | 2 tasks | 3 files |
 | Phase 02 P02 | 8min | 2 tasks | 5 files |
+| Phase 03-cli-as-api-client P01 | 103s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Recent decisions affecting current work:
 - [Phase 02]: _PlayerProxy bridges DB rows to optimize_portfolio() resource_id access pattern
 - [Phase 02]: Trend direction uses 0.005 efficiency delta threshold to avoid noise from minor fluctuations
 - [Phase 02]: Adaptive scheduling uses offset(1) to skip current scan score when comparing to previous
+- [Phase 03-cli-as-api-client]: CLI becomes pure API client — DEFAULT_SERVER_URL=localhost:8000, --budget and --player mutually exclusive, display_results adapted for portfolio API fields (no sell_price/net_profit)
 
 ### Pending Todos
 
@@ -92,7 +94,7 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-25 - Completed quick task 260325-tu9: Retain raw market data per player for 1 month instead of overwriting on each scan
-Last session: 2026-03-25T19:56:11.314Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-cli-as-api-client/03-CONTEXT.md
+Last activity: 2026-03-25
+Last session: 2026-03-25T20:08:05.147Z
+Stopped at: Completed 03-01-PLAN.md (CLI as API client)
+Resume file: None
