@@ -88,10 +88,11 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260325-pki | Speed up initial server heating to under 5 minutes for all player data loading | 2026-03-25 | 065d4ac | [260325-pki-speed-up-initial-server-heating-to-under](./quick/260325-pki-speed-up-initial-server-heating-to-under/) |
+| 260325-tu9 | Retain raw market data per player for 1 month (snapshots, sales, price history) | 2026-03-25 | 4229a2d | [260325-tu9-retain-raw-market-data-per-player-for-1-](./quick/260325-tu9-retain-raw-market-data-per-player-for-1-/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-25
-Last session: 2026-03-25T19:17:16.439Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-03-25T19:39:00.000Z
+Stopped at: Completed 260325-tu9-PLAN.md
 Resume file: None
