@@ -40,4 +40,15 @@ def create_scheduler(scanner) -> AsyncIOScheduler:
         name="Player discovery",
     )
 
+    # Daily cleanup of old market data beyond retention period
+    scheduler.add_job(
+        scanner.run_cleanup,
+        trigger=IntervalTrigger(hours=24),
+        id="cleanup",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+        name="Data cleanup",
+    )
+
     return scheduler
