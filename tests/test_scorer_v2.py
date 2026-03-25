@@ -65,9 +65,8 @@ async def test_expected_profit_per_hour(db):
     8 OP listings (5 sold, 3 expired), buy_price=10000.
     Expected:
       op_sell_rate = 5/8 = 0.625
-      op_sales_per_hour = 5/10 = 0.5
       sell_price = 11000, ea_tax = 550, net_profit = 450
-      expected_profit_per_hour = 450 * 0.625 * 0.5 = 140.625
+      expected_profit_per_hour = 450 * 0.625 = 281.25
     """
     _, session_factory = db
     ea_id = 1001
@@ -130,15 +129,19 @@ async def test_expected_profit_per_hour(db):
     assert result["op_sold"] == 5
     assert result["op_total"] == 8
     assert abs(result["op_sell_rate"] - 0.625) < 0.001
-    assert abs(result["op_sales_per_hour"] - 0.5) < 0.001
     assert result["net_profit"] == 450  # 11000 - 550 - 10000
-    assert abs(result["expected_profit_per_hour"] - 140.625) < 0.1
+    assert abs(result["expected_profit_per_hour"] - 281.25) < 0.1
 
 
 async def test_margin_selection(db):
     """
-    Given observations at two margins where margin 10% produces higher
-    expected_profit_per_hour than 20%, the scorer picks 10%.
+    Given observations where margin 10% produces higher expected_profit_per_hour
+    than margin 20%, the scorer picks 10%.
+
+    Margin 10% only obs: 10 sold, 5 expired → strong sell-through rate.
+    Margin 20% obs: only 2 sold (below MIN_OP_OBSERVATIONS=3) → tier skipped.
+    Result: only margin 10% is viable, expected_profit_per_hour = 450 * (12/17) ≈ 317.
+    (The 2 sold at 20% also count at the 10% threshold since 1.20 >= 1.10.)
     """
     _, session_factory = db
     ea_id = 1002
@@ -149,7 +152,7 @@ async def test_margin_selection(db):
     t_start = now - timedelta(hours=20)
 
     observations = []
-    # Margin 10%: 10 sold, 2 expired (high volume, lower net_profit)
+    # 10 sold at exactly 10% margin (priced at market * 1.10, below 20% threshold)
     for i in range(10):
         observations.append(make_observation(
             ea_id=ea_id,
@@ -161,7 +164,8 @@ async def test_margin_selection(db):
             last_seen_at=t_start + timedelta(hours=i, minutes=30),
             resolved_at=t_start + timedelta(hours=i, minutes=30),
         ))
-    for i in range(2):
+    # 5 expired at 10% margin
+    for i in range(5):
         observations.append(make_observation(
             ea_id=ea_id,
             fingerprint=f"m10-expired-{i}",
@@ -172,8 +176,8 @@ async def test_margin_selection(db):
             last_seen_at=t_start + timedelta(hours=10 + i, minutes=30),
             resolved_at=t_start + timedelta(hours=10 + i, minutes=30),
         ))
-    # Margin 20%: only 3 sold, 1 expired (meets MIN_OP_OBSERVATIONS but lower volume)
-    for i in range(3):
+    # Only 2 sold at 20% margin → op_total=2 < MIN_OP_OBSERVATIONS=3 → tier skipped
+    for i in range(2):
         observations.append(make_observation(
             ea_id=ea_id,
             fingerprint=f"m20-sold-{i}",
@@ -183,17 +187,6 @@ async def test_margin_selection(db):
             first_seen_at=t_start + timedelta(hours=15 + i),
             last_seen_at=t_start + timedelta(hours=15 + i, minutes=30),
             resolved_at=t_start + timedelta(hours=15 + i, minutes=30),
-        ))
-    for i in range(1):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"m20-expired-{i}",
-            buy_now_price=int(market_price * 1.20),
-            market_price_at_obs=market_price,
-            outcome="expired",
-            first_seen_at=t_start + timedelta(hours=18 + i),
-            last_seen_at=t_start + timedelta(hours=18 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=18 + i, minutes=30),
         ))
     # Non-OP filler to reach BOOTSTRAP_MIN_OBSERVATIONS
     for i in range(5):
@@ -216,7 +209,7 @@ async def test_margin_selection(db):
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
 
     assert result is not None
-    # margin 10% should be chosen since it has higher expected_profit_per_hour
+    # margin 10% should be chosen since margin 20% is below MIN_OP_OBSERVATIONS
     assert result["margin_pct"] == 10
 
 
@@ -370,8 +363,8 @@ async def test_return_dict_shape(db):
     assert result is not None
     required_keys = {
         "ea_id", "buy_price", "sell_price", "net_profit", "margin_pct",
-        "op_sold", "op_total", "op_sell_rate", "op_sales_per_hour",
-        "expected_profit_per_hour", "efficiency", "hours_of_data",
+        "op_sold", "op_total", "op_sell_rate",
+        "expected_profit_per_hour", "efficiency",
     }
     assert required_keys == set(result.keys()), (
         f"Missing keys: {required_keys - set(result.keys())}, "
