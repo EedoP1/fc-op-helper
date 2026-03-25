@@ -11,14 +11,14 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **SCAN-01**: Server runs a persistent scanner for all players in the 11k–200k price range
 - [x] **SCAN-02**: Scanner stores player scores, market data, and price history in SQLite
-- [ ] **SCAN-03**: Scanner uses adaptive scheduling per player based on listing activity (e.g., if last listing was 32 mins ago, schedule next scan in ~32 mins)
+- [x] **SCAN-03**: Scanner uses adaptive scheduling per player based on listing activity (e.g., if last listing was 32 mins ago, schedule next scan in ~32 mins)
 - [x] **SCAN-04**: Scanner respects fut.gg rate limits with throttling, exponential backoff, and circuit breaker
-- [ ] **SCAN-05**: Historical score data accumulates over time per player for trend analysis
+- [x] **SCAN-05**: Historical score data accumulates over time per player for trend analysis
 
 ### Backend — API
 
-- [ ] **API-01**: REST API endpoint returns optimized OP sell portfolio for a given budget, built on-demand from accumulated historical data
-- [ ] **API-02**: REST API endpoint returns detailed score breakdown for a specific player (margin, op_ratio, expected_profit, efficiency, sales history)
+- [x] **API-01**: REST API endpoint returns optimized OP sell portfolio for a given budget, built on-demand from accumulated historical data
+- [x] **API-02**: REST API endpoint returns detailed score breakdown for a specific player (margin, op_ratio, expected_profit, efficiency, sales history)
 - [x] **API-03**: REST API endpoint returns top OP sell players with scores, margins, and ratios
 - [x] **API-04**: Scanner prioritizes request budget — more frequent scans for high-value/high-activity players, less frequent for stale ones
 
@@ -75,11 +75,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | SCAN-01 | Phase 1 | Complete |
 | SCAN-02 | Phase 1 | Complete |
-| SCAN-03 | Phase 2 | Pending |
+| SCAN-03 | Phase 2 | Complete |
 | SCAN-04 | Phase 1 | Complete |
-| SCAN-05 | Phase 2 | Pending |
-| API-01 | Phase 2 | Pending |
-| API-02 | Phase 2 | Pending |
+| SCAN-05 | Phase 2 | Complete |
+| API-01 | Phase 2 | Complete |
+| API-02 | Phase 2 | Complete |
 | API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
 | CLI-01 | Phase 3 | Pending |
