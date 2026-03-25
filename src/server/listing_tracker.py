@@ -13,7 +13,7 @@ Public API:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,38 @@ _BUCKET_MINUTES = 10
 def _utcnow() -> datetime:
     """Return current UTC time as a naive datetime (consistent with DB storage)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _extract_remaining_seconds(entry: dict) -> float:
+    """Extract remaining auction time in seconds from a liveAuctions entry.
+
+    Checks fields in order:
+    1. ``expiresOn`` / ``expires`` — ISO datetime string; computes delta from now.
+    2. ``remainingTime`` / ``timeRemaining`` — numeric seconds value.
+    3. Falls back to 3600.0 (1-hour minimum FC26 listing duration).
+
+    Args:
+        entry: Raw liveAuctions dict from fut.gg.
+
+    Returns:
+        Remaining seconds as float (minimum 0.0).
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    expires = entry.get("expiresOn") or entry.get("expires")
+    if expires:
+        try:
+            expiry_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+            remaining = (expiry_dt - now_utc).total_seconds()
+            return max(remaining, 0.0)
+        except (ValueError, TypeError):
+            pass
+
+    rem = entry.get("remainingTime") or entry.get("timeRemaining")
+    if rem is not None and isinstance(rem, (int, float)):
+        return max(float(rem), 0.0)
+
+    return 3600.0  # default: 1-hour minimum FC26 listing duration
 
 
 def _make_fingerprint(ea_id: int, entry: dict, first_seen_at: datetime) -> str:
@@ -115,6 +147,9 @@ async def record_listings(
         fp = _make_fingerprint(ea_id, entry, now)
         fingerprints.append(fp)
 
+        remaining = _extract_remaining_seconds(entry)
+        expected_expiry_at = now + timedelta(seconds=remaining)
+
         stmt = (
             sqlite_insert(ListingObservation)
             .values(
@@ -124,6 +159,7 @@ async def record_listings(
                 market_price_at_obs=current_lowest_bin,
                 first_seen_at=now,
                 last_seen_at=now,
+                expected_expiry_at=expected_expiry_at,
                 scan_count=1,
                 outcome=None,
                 resolved_at=None,
@@ -132,6 +168,7 @@ async def record_listings(
                 index_elements=["fingerprint"],
                 set_=dict(
                     last_seen_at=now,
+                    expected_expiry_at=expected_expiry_at,
                     scan_count=ListingObservation.__table__.c.scan_count + 1,
                 ),
             )
@@ -166,10 +203,14 @@ async def resolve_outcomes(
     """
     now = _utcnow()
 
-    # Query unresolved observations not in current scan
+    # Query unresolved observations not in current scan whose expected expiry has passed.
+    # Listings with NULL expected_expiry_at (created before migration) are excluded —
+    # they will be cleaned up by the retention purge.
     stmt = select(ListingObservation).where(
         ListingObservation.ea_id == ea_id,
         ListingObservation.outcome.is_(None),
+        ListingObservation.expected_expiry_at.isnot(None),
+        ListingObservation.expected_expiry_at < now,
         ListingObservation.fingerprint.not_in(current_fingerprints)
         if current_fingerprints
         else ListingObservation.fingerprint.isnot(None),

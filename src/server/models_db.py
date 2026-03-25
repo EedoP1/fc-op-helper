@@ -109,6 +109,7 @@ class ListingObservation(Base):
     market_price_at_obs: Mapped[int] = mapped_column(Integer)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime)
+    expected_expiry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     scan_count: Mapped[int] = mapped_column(Integer, default=1)
     outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "sold"|"expired"|None
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
