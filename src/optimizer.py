@@ -5,9 +5,7 @@ Selects the best players to fill the budget, maximizing total expected
 profit. Uses efficiency sorting to favor cheaper cards with decent OP
 ratios over expensive cards with tiny OP ratios.
 
-Ranking metric:
-  - v2 players (expected_profit_per_hour present): efficiency = epph / buy_price
-  - v1 players (no expected_profit_per_hour): efficiency = expected_profit / buy_price
+Ranking metric: efficiency = expected_profit_per_hour / buy_price
 
 Swap loop replaces expensive cards with multiple cheaper alternatives when
 profitable. All comparisons use the same ranking metric as initial sort.
@@ -23,23 +21,15 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
     Select up to TARGET_PLAYER_COUNT players that fit within budget,
     maximizing total expected profit.
 
-    When a player has `expected_profit_per_hour` (v2 scorer), that value is
-    used as the ranking profit for efficiency computation and swap decisions.
-    Players without it fall back to v1's `expected_profit`.
+    All players are ranked by expected_profit_per_hour / buy_price.
 
-    Returns the selected list sorted by ranking profit descending.
+    Returns the selected list sorted by efficiency descending.
     """
-    # Compute efficiency and _ranking_profit based on scorer version
+    # Compute efficiency and _ranking_profit from expected_profit_per_hour
     for s in scored:
-        epph = s.get("expected_profit_per_hour")
-        if epph is not None and epph > 0:
-            # v2 path: rank by expected profit per hour
-            s["efficiency"] = epph / s["buy_price"] if s["buy_price"] > 0 else 0
-            s["_ranking_profit"] = epph
-        else:
-            # v1 path: rank by expected profit
-            s["efficiency"] = s["expected_profit"] / s["buy_price"] if s["buy_price"] > 0 else 0
-            s["_ranking_profit"] = s["expected_profit"]
+        epph = s.get("expected_profit_per_hour", 0)
+        s["efficiency"] = epph / s["buy_price"] if s["buy_price"] > 0 else 0
+        s["_ranking_profit"] = epph
 
     # Greedy fill by efficiency
     scored.sort(key=lambda s: s["efficiency"], reverse=True)
@@ -113,9 +103,7 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
             total_used += s["buy_price"]
             remaining -= s["buy_price"]
 
-    # Sort final output by ranking profit descending, then strip internal key.
-    # Use efficiency (already normalised by buy_price) so v2 players with high
-    # expected_profit_per_hour rank correctly relative to v1 players.
+    # Sort final output by efficiency descending (normalised by buy_price).
     selected.sort(key=lambda s: s["efficiency"], reverse=True)
 
     # Remove internal key before returning
