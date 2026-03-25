@@ -109,10 +109,11 @@ None yet.
 | 260326-00a | Make v2 scorer drive portfolio selection — rank by expected_profit_per_hour | 2026-03-26 | c716e68 | [260326-00a-make-v2-scorer-drive-portfolio-selection](./quick/260326-00a-make-v2-scorer-drive-portfolio-selection/) |
 | 260326-0d0 | Remove tier-based scanning, replace with listing-expiry scheduling | 2026-03-26 | 85f8dba | [260326-0d0-remove-tier-based-scanning-replace-with-](./quick/260326-0d0-remove-tier-based-scanning-replace-with-/) |
 | 260326-0lr | Remove v1 scorer entirely — v2-only pipeline with simplified optimizer and portfolio | 2026-03-26 | 1de1740 | [260326-0lr-remove-v1-scorer-entirely-v2-only-with-b](./quick/260326-0lr-remove-v1-scorer-entirely-v2-only-with-b/) |
+| 260326-12g | Update CLI labels for v2 metrics (EP/hr, Sell%, OP Sales) and purge stale v1 scores at startup | 2026-03-26 | e857c19 | [260326-12g-update-cli-labels-for-v2-metrics-and-pur](./quick/260326-12g-update-cli-labels-for-v2-metrics-and-pur/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-26
 Last session: 2026-03-26T00:00:00.000Z
-Stopped at: Completed quick task 260326-0lr
+Stopped at: Completed quick task 260326-12g
 Resume file: None
