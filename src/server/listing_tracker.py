@@ -19,9 +19,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from src.config import MIN_OP_OBSERVATIONS  # noqa: F401 — exported constant
+from src.config import MARGINS
 from src.models import SaleRecord
-from src.scorer import MARGINS
 from src.server.models_db import DailyListingSummary, ListingObservation
 
 logger = logging.getLogger(__name__)

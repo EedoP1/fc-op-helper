@@ -36,5 +36,8 @@ BOOTSTRAP_MIN_OBSERVATIONS = 10       # min resolved listings before v2 scorer a
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
+# OP sell margin tiers (highest first)
+MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
+
 # Database
 DATABASE_URL = "sqlite+aiosqlite:///D:/op-seller/op_seller.db"
