@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-25T21:24:15.606Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-25T21:29:21.776Z"
 last_activity: 2026-03-25
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-25)
 ## Current Position
 
 Phase: 04 (refactor-scoring-db) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 2 of 4
 | Phase 02 P02 | 8min | 2 tasks | 5 files |
 | Phase 03-cli-as-api-client P01 | 103s | 1 tasks | 2 files |
 | Phase 04-refactor-scoring-db P01 | 8min | 2 tasks | 6 files |
+| Phase 04-refactor-scoring-db P02 | 3min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 03-cli-as-api-client]: CLI becomes pure API client — DEFAULT_SERVER_URL=localhost:8000, --budget and --player mutually exclusive, display_results adapted for portfolio API fields (no sell_price/net_profit)
 - [Phase 04-refactor-scoring-db]: ListingObservation.fingerprint is String(128) — actual fingerprint strategy deferred to plan 02 based on available liveAuctions fields
 - [Phase 04-refactor-scoring-db]: live_auctions_raw coexists with live_auction_prices in PlayerMarketData to maintain backward compatibility with existing scorer
+- [Phase 04-refactor-scoring-db]: Fingerprint uses tradeId when present (ea_id:tradeId); falls back to (ea_id:buyNowPrice:10min-bucket) for entries without tradeId
+- [Phase 04-refactor-scoring-db]: Proportional outcome resolution: min(matching_sales, n_listings) sold, rest expired — handles same-price ambiguity without 1-to-1 matching
 
 ### Pending Todos
 
@@ -103,6 +106,6 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-25
-Last session: 2026-03-25T21:24:15.600Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-03-25T21:29:21.770Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
