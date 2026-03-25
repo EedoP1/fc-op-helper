@@ -28,6 +28,8 @@ from src.config import (
     TIER_PROFIT_THRESHOLD,
     INITIAL_SCORING_CONCURRENCY,
     INITIAL_SCORING_BATCH_SIZE,
+    ADAPTIVE_CHANGE_THRESHOLD,
+    ADAPTIVE_MIN_INTERVAL_SECONDS,
 )
 from src.futgg_client import FutGGClient
 from src.scorer import score_player
@@ -388,6 +390,10 @@ class ScannerService:
     ) -> None:
         """Update PlayerRecord with new tier and next_scan_at.
 
+        Applies adaptive scheduling: if sales_per_hour changed by more than
+        ADAPTIVE_CHANGE_THRESHOLD (25%) compared to the previous scan, the
+        interval is halved (floored at ADAPTIVE_MIN_INTERVAL_SECONDS).
+
         Args:
             ea_id: Player EA ID.
             listing_count: Current live listing count.
@@ -401,7 +407,24 @@ class ScannerService:
             "normal": SCAN_INTERVAL_NORMAL,
             "cold": SCAN_INTERVAL_COLD,
         }
-        interval = interval_map[tier]
+        base_interval = interval_map[tier]
+
+        # Adaptive adjustment: compare current activity to previous scan (D-10)
+        interval = base_interval
+        prev_result = await session.execute(
+            select(PlayerScore)
+            .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
+            .order_by(PlayerScore.scored_at.desc())
+            .offset(1)  # skip the score just written in this scan cycle
+            .limit(1)
+        )
+        prev = prev_result.scalars().first()
+
+        if prev is not None and prev.sales_per_hour > 0:
+            delta = abs(sales_per_hour - prev.sales_per_hour) / prev.sales_per_hour
+            if delta >= ADAPTIVE_CHANGE_THRESHOLD:
+                interval = max(base_interval // 2, ADAPTIVE_MIN_INTERVAL_SECONDS)
+
         next_scan = datetime.utcnow() + timedelta(seconds=interval)
 
         record = await session.get(PlayerRecord, ea_id)

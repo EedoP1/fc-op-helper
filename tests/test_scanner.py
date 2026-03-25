@@ -265,18 +265,18 @@ async def test_adaptive_scheduling_shortens_interval(scanner):
             expected_profit=200.0, efficiency=0.01, sales_per_hour=10.0,
             is_viable=True,
         ))
-        # Current score (sales_per_hour=15.0 — 50% delta)
+        # Current score (sales_per_hour=13.0 — 30% delta, above 25% threshold)
         session.add(PlayerScore(
             ea_id=3001, scored_at=now,
             buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
             op_sales=5, total_sales=50, op_ratio=0.1,
-            expected_profit=200.0, efficiency=0.01, sales_per_hour=15.0,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=13.0,
             is_viable=True,
         ))
         await session.commit()
 
     async with session_factory() as session:
-        await svc._classify_and_schedule(3001, 25, 10.0, 200.0, session)
+        await svc._classify_and_schedule(3001, 25, 13.0, 200.0, session)
 
     # Check next_scan_at is closer than normal interval (should be halved)
     async with session_factory() as session:

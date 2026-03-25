@@ -32,5 +32,9 @@ SCANNER_MAX_PRICE = 200_000
 # Tier promotion thresholds
 TIER_PROFIT_THRESHOLD = 500       # expected_profit above this promotes to "hot" regardless of activity (per API-04)
 
+# Adaptive scheduling (per-player interval adjustment within tiers)
+ADAPTIVE_CHANGE_THRESHOLD = 0.25     # 25% change in sales_per_hour triggers interval shortening
+ADAPTIVE_MIN_INTERVAL_SECONDS = 300  # 5-minute floor for adaptive intervals
+
 # Database
 DATABASE_URL = "sqlite+aiosqlite:///./op_seller.db"
