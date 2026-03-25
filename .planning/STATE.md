@@ -77,8 +77,15 @@ None yet.
 - fut.gg has no published rate limits; 24/7 scanning behavior is untested. Monitor `scan_success_rate` in Phase 1 first week and tune throttling empirically.
 - `async_sessionmaker(expire_on_commit=False)` must be applied to all session factories in Phase 1 — omitting this causes subtle `MissingGreenlet` errors at scale.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260325-pki | Speed up initial server heating to under 5 minutes for all player data loading | 2026-03-25 | 065d4ac | [260325-pki-speed-up-initial-server-heating-to-under](./quick/260325-pki-speed-up-initial-server-heating-to-under/) |
+
 ## Session Continuity
 
+Last activity: 2026-03-25 - Completed quick task 260325-pki: Speed up initial server heating to under 5 minutes for all player data loading
 Last session: 2026-03-25T16:08:36.524Z
 Stopped at: Completed 01-persistent-scanner plan 03 (01-03-PLAN.md)
 Resume file: None
