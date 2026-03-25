@@ -27,7 +27,7 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
     """
     # Compute efficiency and _ranking_profit from expected_profit_per_hour
     for s in scored:
-        epph = s.get("expected_profit_per_hour", 0)
+        epph = s.get("expected_profit_per_hour") or 0
         s["efficiency"] = epph / s["buy_price"] if s["buy_price"] > 0 else 0
         s["_ranking_profit"] = epph
 

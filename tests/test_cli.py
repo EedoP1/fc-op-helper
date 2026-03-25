@@ -25,6 +25,9 @@ MOCK_PORTFOLIO_RESPONSE = {
             "op_ratio": 0.15,
             "expected_profit": 450.0,
             "efficiency": 0.03,
+            "op_sales": 5,
+            "total_sales": 30,
+            "expected_profit_per_hour": 450.0,
             "scan_tier": "hot",
             "is_stale": False,
             "last_scanned": "2026-03-25T14:00:00",
@@ -122,8 +125,8 @@ def test_portfolio_csv_export(tmp_path, monkeypatch):
     assert "Rank" in content
     assert "Player" in content
     assert "Test Player" in content
-    assert "Expected Profit" in content
-    assert "OP Ratio" in content
+    assert "EP/hr" in content
+    assert "Sell Rate" in content
     assert "Efficiency" in content
 
 
