@@ -26,6 +26,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 
 - ✓ REST API exposing player details, score history, budget portfolio — Validated in Phase 2: Full API Surface
 - ✓ CLI thin client that queries the API (replaces direct scoring) — Validated in Phase 3: CLI as API Client
+- ✓ Listing-tracking-based scoring replacing snapshot-based scoring — Validated in Phase 4: Refactor Scoring DB
 - [ ] Chrome extension for EA Web App automation (buy, list, relist)
 - [ ] Profit tracking and performance analytics
 - [ ] Separate web dashboard for analytics and monitoring
@@ -46,6 +47,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Phase 1 complete: persistent backend with FastAPI, SQLite WAL, APScheduler, circuit breaker, tier-based scanning
 - Phase 2 complete: full API surface — portfolio endpoint, player detail with trends, adaptive scan scheduling
 - Phase 3 complete: CLI rewritten as thin API client — queries backend for portfolio and player detail, no direct fut.gg calls
+- Phase 4 complete: listing-tracking scoring — fingerprint-based listing observation, outcome resolution, D-10 expected_profit_per_hour formula, v2 scorer with v1 bootstrap fallback
 - fut.gg updates hourly price history, so hourly scanning per player is the right cadence
 - Price range 11k–200k keeps the player pool manageable and focused on liquid cards
 - Architecture already has protocol-based abstraction — good foundation for adding persistence layer
@@ -87,4 +89,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after Phase 3 completion*
+*Last updated: 2026-03-25 after Phase 4 completion*
