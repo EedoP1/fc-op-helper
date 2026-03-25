@@ -103,17 +103,19 @@ async def test_expected_profit_per_hour(db):
             last_seen_at=t_start + timedelta(hours=5 + i, minutes=30),
             resolved_at=t_start + timedelta(hours=5 + i, minutes=30),
         ))
-    # 12 non-OP sold
+    # 12 non-OP sold — last one anchors latest last_seen_at to t_start + 10h
     for i in range(12):
+        # spread evenly, last entry at t_start + 9.5h (last_seen_at = 10h)
+        h = i * (9.5 / 11)
         observations.append(make_observation(
             ea_id=ea_id,
             fingerprint=f"non-op-{i}",
             buy_now_price=market_price - 100,  # below OP threshold
             market_price_at_obs=market_price,
             outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i * 0.7),
-            last_seen_at=t_start + timedelta(hours=i * 0.7, minutes=30),
-            resolved_at=t_start + timedelta(hours=i * 0.7, minutes=30),
+            first_seen_at=t_start + timedelta(hours=h),
+            last_seen_at=t_start + timedelta(hours=h + 0.5),
+            resolved_at=t_start + timedelta(hours=h + 0.5),
         ))
 
     async with session_factory() as session:
