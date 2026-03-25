@@ -108,10 +108,11 @@ None yet.
 | 260325-v54 | Improve scorer to pick margin maximizing expected_profit instead of greedy-highest | 2026-03-25 | ec95d2c | [260325-v54-improve-scorer-to-produce-more-optimal-p](./quick/260325-v54-improve-scorer-to-produce-more-optimal-p/) |
 | 260326-00a | Make v2 scorer drive portfolio selection — rank by expected_profit_per_hour | 2026-03-26 | c716e68 | [260326-00a-make-v2-scorer-drive-portfolio-selection](./quick/260326-00a-make-v2-scorer-drive-portfolio-selection/) |
 | 260326-0d0 | Remove tier-based scanning, replace with listing-expiry scheduling | 2026-03-26 | 85f8dba | [260326-0d0-remove-tier-based-scanning-replace-with-](./quick/260326-0d0-remove-tier-based-scanning-replace-with-/) |
+| 260326-0lr | Remove v1 scorer entirely — v2-only pipeline with simplified optimizer and portfolio | 2026-03-26 | 1de1740 | [260326-0lr-remove-v1-scorer-entirely-v2-only-with-b](./quick/260326-0lr-remove-v1-scorer-entirely-v2-only-with-b/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-26
 Last session: 2026-03-26T00:00:00.000Z
-Stopped at: Completed quick task 260326-0d0
+Stopped at: Completed quick task 260326-0lr
 Resume file: None
