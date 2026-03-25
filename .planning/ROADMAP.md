@@ -73,16 +73,16 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Persistent Scanner | 3/3 | Complete   | 2026-03-25 |
 | 2. Full API Surface | 0/2 | In progress | - |
 | 3. CLI as API Client | 1/1 | Complete   | 2026-03-25 |
-| 4. Refactor Scoring + DB | 3/4 | In Progress|  |
+| 4. Refactor Scoring + DB | 4/4 | Complete   | 2026-03-25 |
 
 ### Phase 4: Refactor Scoring + DB
 **Goal:** Replace the current scoring model with a listing-tracking system that records every individual listing, determines which sold vs expired, and computes a true OP sell conversion rate expressed as expected_profit_per_hour
 **Requirements**: SCAN-P4-01, SCAN-P4-02, SCAN-P4-03, SCAN-P4-04, SCAN-P4-05, SCAN-P4-06, SCAN-P4-07, SCAN-P4-08, SCAN-P4-09, SCAN-P4-10
 **Depends on:** Phase 3
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 04-01-PLAN.md — Foundation: ListingObservation + DailyListingSummary DB models, PlayerScore extension, config constants, liveAuctions field extraction
 - [x] 04-02-PLAN.md — Listing tracker: fingerprint upsert, outcome resolution, daily aggregation
 - [x] 04-03-PLAN.md — Scorer v2: expected_profit_per_hour from accumulated listing data (D-10 formula)
-- [ ] 04-04-PLAN.md — Integration: wire into scanner, scheduler jobs, API updates, bootstrapping fallback, purge
+- [x] 04-04-PLAN.md — Integration: wire into scanner, scheduler jobs, API updates, bootstrapping fallback, purge
