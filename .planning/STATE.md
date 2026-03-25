@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 01-persistent-scanner plan 01 (01-01-PLAN.md)
-last_updated: "2026-03-25T15:54:42.164Z"
+stopped_at: Completed 01-persistent-scanner plan 02 (01-02-PLAN.md)
+last_updated: "2026-03-25T16:01:11.778Z"
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-25)
 ## Current Position
 
 Phase: 01 (persistent-scanner) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Plan: 2 of 3
 
 *Updated after each plan completion*
 | Phase 01-persistent-scanner P01 | 3 | 2 tasks | 9 files |
+| Phase 01-persistent-scanner P02 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,8 @@ Recent decisions affecting current work:
 - [Phase 01-persistent-scanner]: expire_on_commit=False on all async session factories prevents MissingGreenlet at scale
 - [Phase 01-persistent-scanner]: WAL mode enabled via sync_engine event listener on connect for reliability across all connections
 - [Phase 01-persistent-scanner]: CircuitBreaker is_open is a property for lazy OPEN->HALF_OPEN transition on check
+- [Phase 01-persistent-scanner]: Tier classification checks last_expected_profit >= TIER_PROFIT_THRESHOLD first, so high-value low-volume players get hot priority (API-04)
+- [Phase 01-persistent-scanner]: Tenacity retry wraps API call as inner async _fetch_with_retry() decorated with @retry to enable function-level retry behavior
 
 ### Pending Todos
 
@@ -73,6 +76,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T15:54:42.157Z
-Stopped at: Completed 01-persistent-scanner plan 01 (01-01-PLAN.md)
+Last session: 2026-03-25T16:01:11.773Z
+Stopped at: Completed 01-persistent-scanner plan 02 (01-02-PLAN.md)
 Resume file: None

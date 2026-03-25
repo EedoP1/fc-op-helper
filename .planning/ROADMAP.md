@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md — Foundation: dependencies, DB layer (SQLAlchemy async + WAL), ORM models, circuit breaker, config constants
-- [ ] 01-02-PLAN.md — Scanner service: discovery, scoring, tier-based priority scheduling, retry with tenacity, circuit breaker integration
+- [x] 01-02-PLAN.md — Scanner service: discovery, scoring, tier-based priority scheduling, retry with tenacity, circuit breaker integration
 - [ ] 01-03-PLAN.md — FastAPI app: lifespan wiring, GET /api/v1/players/top endpoint, GET /api/v1/health endpoint, integration tests
 
 ### Phase 2: Full API Surface
