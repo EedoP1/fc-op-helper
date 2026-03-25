@@ -117,6 +117,7 @@ async def get_portfolio(
             last_scanned_at is None
             or last_scanned_at < stale_cutoff
         )
+        epph = entry.get("expected_profit_per_hour")
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
@@ -132,9 +133,15 @@ async def get_portfolio(
             "last_scanned": (
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
-            "expected_profit_per_hour": round(entry["expected_profit_per_hour"], 2) if entry.get("expected_profit_per_hour") else None,
+            "expected_profit_per_hour": round(epph, 2) if epph else None,
             "scorer_version": entry.get("scorer_version", "v1"),
+            # Tells the caller which metric drove this player's selection rank
+            "ranking_metric": "expected_profit_per_hour" if epph else "expected_profit",
         })
+
+    # Summarise how many v1 vs v2 players were selected
+    v2_count = sum(1 for e in data if e.get("scorer_version") == "v2")
+    scorer_mix = {"v1": len(data) - v2_count, "v2": v2_count}
 
     return {
         "data": data,
@@ -142,4 +149,5 @@ async def get_portfolio(
         "budget": budget,
         "budget_used": budget_used,
         "budget_remaining": budget - budget_used,
+        "scorer_mix": scorer_mix,
     }

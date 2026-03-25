@@ -187,3 +187,93 @@ async def test_portfolio_empty_db(db):
     assert body["count"] == 0
     assert body["budget_used"] == 0
     assert body["budget_remaining"] == 1000000
+
+
+# ── Test 8: scorer_mix present in response ────────────────────────────────────
+
+async def test_portfolio_returns_scorer_mix(seeded_portfolio_app):
+    """GET /api/v1/portfolio?budget=1000000 response includes scorer_mix summary."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_portfolio_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/portfolio?budget=1000000")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "scorer_mix" in body, "Response should include scorer_mix summary"
+    scorer_mix = body["scorer_mix"]
+    assert "v1" in scorer_mix
+    assert "v2" in scorer_mix
+    # Seeded players have no scorer_version set → all v1
+    assert scorer_mix["v2"] == 0
+    assert scorer_mix["v1"] == body["count"]
+
+
+# ── Test 9: v2 scored player has ranking_metric="expected_profit_per_hour" ───
+
+async def test_portfolio_v2_scored_player(db):
+    """A PlayerScore with expected_profit_per_hour and scorer_version='v2' shows
+    ranking_metric='expected_profit_per_hour' in portfolio response."""
+    engine, session_factory = db
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        rec = PlayerRecord(
+            ea_id=9001,
+            name="V2 Star",
+            rating=92,
+            position="CAM",
+            nation="France",
+            league="Ligue 1",
+            club="PSG",
+            card_type="gold",
+            scan_tier="hot",
+            last_scanned_at=now,
+            is_active=True,
+            listing_count=50,
+            sales_per_hour=15.0,
+        )
+        session.add(rec)
+
+        score = PlayerScore(
+            ea_id=9001,
+            scored_at=now,
+            buy_price=25000,
+            sell_price=30000,
+            net_profit=3750,
+            margin_pct=20,
+            op_sales=8,
+            total_sales=40,
+            op_ratio=0.2,
+            expected_profit=750.0,
+            efficiency=0.03,
+            sales_per_hour=15.0,
+            is_viable=True,
+            expected_profit_per_hour=450.0,
+            scorer_version="v2",
+        )
+        session.add(score)
+        await session.commit()
+
+    app = make_test_app(session_factory)
+    app.include_router(portfolio_router)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/portfolio?budget=1000000")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+
+    player = body["data"][0]
+    assert player["ea_id"] == 9001
+    assert player["scorer_version"] == "v2"
+    assert player["expected_profit_per_hour"] == 450.0
+    assert player["ranking_metric"] == "expected_profit_per_hour", (
+        "v2 player should report ranking_metric='expected_profit_per_hour'"
+    )
+
+    # scorer_mix should show 1 v2 player
+    assert body["scorer_mix"]["v2"] == 1
+    assert body["scorer_mix"]["v1"] == 0
