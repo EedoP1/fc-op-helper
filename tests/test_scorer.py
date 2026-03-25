@@ -156,9 +156,10 @@ def test_picks_margin_maximizing_expected_profit():
         ))
     for i in range(37):
         t = now - timedelta(hours=10.0 * ((60 + i) / 100))
-        # At 8%+ above market but below 40%: e.g. 22000 (10% above)
+        # At 8%+ above market but below 10%: 21700 (8.5% above 20000)
+        # 20000 * 1.08 = 21600 (qualifies at 8%), 20000 * 1.10 = 22000 (not at 10%)
         sales.append(SaleRecord(
-            resource_id=1, sold_at=t, sold_price=22000,
+            resource_id=1, sold_at=t, sold_price=21700,
         ))
     for i in range(3):
         t = now - timedelta(hours=10.0 * ((97 + i) / 100))
