@@ -135,6 +135,8 @@ async def get_portfolio(
             "position": entry["position"],
             "price": entry["buy_price"],
             "margin_pct": entry["margin_pct"],
+            "op_sales": entry["op_sales"],
+            "total_sales": entry["total_sales"],
             "op_ratio": round(entry["op_ratio"], 3),
             "expected_profit": round(entry["expected_profit"], 1),
             "efficiency": round(entry["efficiency"], 4),
