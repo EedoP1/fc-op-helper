@@ -21,6 +21,10 @@ CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 SCAN_CONCURRENCY = 5              # lower than CLI's 10 for 24/7 safety
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
 
+# Initial scoring (one-time after bootstrap)
+INITIAL_SCORING_CONCURRENCY = 10  # double normal concurrency for fast one-time pass
+INITIAL_SCORING_BATCH_SIZE = 50   # players per batch to avoid overwhelming event loop
+
 # Price range for scanner discovery
 SCANNER_MIN_PRICE = 11_000
 SCANNER_MAX_PRICE = 200_000
