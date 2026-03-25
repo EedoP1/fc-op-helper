@@ -34,7 +34,6 @@ MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
 LISTING_RETENTION_DAYS = 7            # days to keep individual listing observations (per D-12)
 BOOTSTRAP_MIN_OBSERVATIONS = 10       # min resolved listings before v2 scorer activates per player
 LISTING_SCAN_BUFFER_SECONDS = 240     # 4-minute safety buffer before youngest listing expiry (per D-06)
-SCORING_JOB_INTERVAL_MINUTES = 15     # how often the v2 scoring job runs
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 

@@ -2,7 +2,7 @@
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from src.config import SCAN_DISPATCH_INTERVAL, SCORING_JOB_INTERVAL_MINUTES
+from src.config import SCAN_DISPATCH_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +49,6 @@ def create_scheduler(scanner) -> AsyncIOScheduler:
         coalesce=True,
         replace_existing=True,
         name="Data cleanup",
-    )
-
-    # V2 scoring job: re-score players from accumulated listing data (D-10)
-    scheduler.add_job(
-        scanner.run_scoring,
-        trigger=IntervalTrigger(minutes=SCORING_JOB_INTERVAL_MINUTES),
-        id="scoring_v2",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-        name="V2 listing scorer",
     )
 
     # Daily aggregation: summarize yesterday's listing observations (D-13)

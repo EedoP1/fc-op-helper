@@ -31,7 +31,6 @@ from src.config import (
     LISTING_RETENTION_DAYS,
 )
 from src.futgg_client import FutGGClient
-from src.scorer import score_player
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.listing_tracker import record_listings, resolve_outcomes
 from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint, ListingObservation
@@ -287,8 +286,6 @@ class ScannerService:
             logger.error(f"scan_player({ea_id}) failed after retries: {exc}")
             return
 
-        score_result = score_player(market_data) if market_data is not None else None
-
         async with self._session_factory() as session:
             # --- Listing tracking (D-01, D-02) ---
             listing_result = None
@@ -308,7 +305,7 @@ class ScannerService:
                     session=session,
                 )
 
-            # --- V2 scoring (D-09, D-10) ---
+            # --- V2 scoring ---
             v2_result = None
             if market_data is not None and market_data.current_lowest_bin > 0:
                 v2_result = await score_player_v2(
@@ -317,30 +314,29 @@ class ScannerService:
                     buy_price=market_data.current_lowest_bin,
                 )
 
-            # Write PlayerScore row
-            if score_result is not None:
+            # Write PlayerScore row built entirely from v2 result
+            if v2_result is not None:
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
-                    buy_price=score_result["buy_price"],
-                    sell_price=score_result["sell_price"],
-                    net_profit=score_result["net_profit"],
-                    margin_pct=score_result["margin_pct"],
-                    op_sales=score_result["op_sales"],
-                    total_sales=score_result["total_sales"],
-                    op_ratio=score_result["op_ratio"],
-                    expected_profit=score_result["expected_profit"],
-                    efficiency=score_result["expected_profit"] / score_result["buy_price"],
-                    sales_per_hour=score_result["sales_per_hour"],
+                    buy_price=v2_result["buy_price"],
+                    sell_price=v2_result["sell_price"],
+                    net_profit=v2_result["net_profit"],
+                    margin_pct=v2_result["margin_pct"],
+                    op_sales=v2_result["op_sold"],
+                    total_sales=v2_result["op_total"],
+                    op_ratio=v2_result["op_sell_rate"],
+                    expected_profit=v2_result["expected_profit_per_hour"],
+                    efficiency=v2_result["expected_profit_per_hour"] / v2_result["buy_price"],
+                    sales_per_hour=v2_result["op_sales_per_hour"],
                     is_viable=True,
-                    expected_profit_per_hour=v2_result["expected_profit_per_hour"] if v2_result else None,
-                    scorer_version="v2" if v2_result else "v1",
+                    expected_profit_per_hour=v2_result["expected_profit_per_hour"],
                 )
             else:
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
-                    buy_price=0,
+                    buy_price=market_data.current_lowest_bin if market_data else 0,
                     sell_price=0,
                     net_profit=0,
                     margin_pct=0,
@@ -352,7 +348,6 @@ class ScannerService:
                     sales_per_hour=0.0,
                     is_viable=False,
                     expected_profit_per_hour=None,
-                    scorer_version="v1",
                 )
             session.add(ps)
 
@@ -388,16 +383,15 @@ class ScannerService:
                 record.last_scanned_at = now
                 if market_data is not None:
                     record.listing_count = market_data.listing_count
-                    # Compute sales_per_hour from score result if available
-                    if score_result is not None:
-                        record.sales_per_hour = score_result["sales_per_hour"]
+                    if v2_result is not None:
+                        record.sales_per_hour = v2_result["op_sales_per_hour"]
 
             await session.flush()
 
             # Classify tier and schedule next scan
             listing_count = record.listing_count if record is not None else 0
             sales_per_hour = record.sales_per_hour if record is not None else 0.0
-            last_expected_profit = score_result["expected_profit"] if score_result is not None else 0.0
+            last_expected_profit = v2_result["expected_profit_per_hour"] if v2_result is not None else 0.0
 
             await self._classify_and_schedule(
                 ea_id, listing_count, sales_per_hour, last_expected_profit, session,
@@ -503,57 +497,7 @@ class ScannerService:
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    # ── Scheduled scoring and aggregation jobs ──────────────────────────────
-
-    async def run_scoring(self) -> None:
-        """Re-score all active players using v2 scorer from accumulated listing data.
-
-        Runs every SCORING_JOB_INTERVAL_MINUTES (15 minutes). Fetches the
-        latest buy_price from PlayerScore, calls score_player_v2, and writes
-        v2 fields back to the most recent viable PlayerScore row.
-        """
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(PlayerRecord.ea_id)
-                .where(PlayerRecord.is_active == True)  # noqa: E712
-            )
-            ea_ids = [row[0] for row in result.all()]
-
-        scored = 0
-        for ea_id in ea_ids:
-            try:
-                async with self._session_factory() as session:
-                    # Get latest buy price from most recent viable PlayerScore
-                    latest = await session.execute(
-                        select(PlayerScore.buy_price)
-                        .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
-                        .order_by(PlayerScore.scored_at.desc())
-                        .limit(1)
-                    )
-                    buy_price = latest.scalar()
-                    if not buy_price or buy_price <= 0:
-                        continue
-
-                    v2 = await score_player_v2(ea_id, session, buy_price)
-                    if v2:
-                        # Update the latest PlayerScore row with v2 fields
-                        latest_score = await session.execute(
-                            select(PlayerScore)
-                            .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
-                            .order_by(PlayerScore.scored_at.desc())
-                            .limit(1)
-                        )
-                        score_row = latest_score.scalars().first()
-                        if score_row:
-                            score_row.expected_profit_per_hour = v2["expected_profit_per_hour"]
-                            score_row.scorer_version = "v2"
-                            await session.commit()
-                            scored += 1
-            except Exception as exc:
-                logger.error(f"V2 scoring failed for {ea_id}: {exc}")
-                continue
-
-        logger.info(f"V2 scoring job: updated {scored}/{len(ea_ids)} players")
+    # ── Scheduled aggregation and cleanup jobs ──────────────────────────────
 
     async def run_aggregation(self) -> None:
         """Aggregate yesterday's listing observations into daily summaries (D-13).
