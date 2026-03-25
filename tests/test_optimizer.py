@@ -12,9 +12,11 @@ def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hou
         buy_price: Buy price in coins.
         net_profit: Net profit per sale.
         op_ratio: OP sale ratio (0.0–1.0).
-        expected_profit_per_hour: v2 scorer metric (float or None for v1).
+        expected_profit_per_hour: v2 scorer metric (float). Defaults to
+            net_profit * op_ratio when not provided.
     """
-    entry = {
+    epph = expected_profit_per_hour if expected_profit_per_hour is not None else net_profit * op_ratio
+    return {
         "player": Player(
             resource_id=ea_id, name=f"Player {ea_id}", rating=88,
             position="ST", nation="X", league="X", club="X", card_type="gold",
@@ -30,10 +32,8 @@ def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hou
         "op_sales_24h": 24,
         "sales_per_hour": 10,
         "time_span_hrs": 10,
+        "expected_profit_per_hour": epph,
     }
-    if expected_profit_per_hour is not None:
-        entry["expected_profit_per_hour"] = expected_profit_per_hour
-    return entry
 
 
 def test_fills_budget():
@@ -105,44 +105,27 @@ def test_backfill_uses_remaining_budget():
 
 # ── v2 scorer ranking tests ───────────────────────────────────────────────────
 
-def test_v2_player_ranks_by_expected_profit_per_hour():
-    """v2 player with high expected_profit_per_hour beats v1 player on efficiency.
+def test_ranks_by_expected_profit_per_hour():
+    """Player with high expected_profit_per_hour beats low-epph player on efficiency.
 
-    v1: expected_profit = net_profit(1000) * op_ratio(0.1) = 100, buy_price=10000
-        → efficiency = 100/10000 = 0.01
-    v2: expected_profit_per_hour = 500, buy_price=2000
-        → efficiency = 500/2000 = 0.25  (higher — v2 should rank first)
+    low: expected_profit_per_hour = 100, buy_price=10000 → efficiency = 0.01
+    high: expected_profit_per_hour = 500, buy_price=2000 → efficiency = 0.25  (should rank first)
     """
-    v1 = _make_scored(1, 10000, 1000, 0.1)  # ep=100, eff=0.01
-    v2 = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)  # epph=500, eff=0.25
+    low = _make_scored(1, 10000, 1000, 0.1, expected_profit_per_hour=100)   # eff=0.01
+    high = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)    # eff=0.25
 
-    # Budget fits both. v2 should rank first (higher efficiency via epph).
-    result = optimize_portfolio([v1, v2], budget=20000)
+    # Budget fits both. high should rank first.
+    result = optimize_portfolio([low, high], budget=20000)
     assert len(result) == 2
-    # First in result list should be v2 (ranked first by efficiency via epph)
-    assert result[0]["player"].resource_id == 2, "v2 player should rank first (eff=0.25 > 0.01)"
+    assert result[0]["player"].resource_id == 2, "Higher epph player should rank first"
 
 
-def test_v1_fallback_when_no_epph():
-    """Entries without expected_profit_per_hour still rank by expected_profit/buy_price."""
-    # Two v1 players, no expected_profit_per_hour
-    high_eff = _make_scored(1, 5000, 2000, 0.5)   # ep=1000, eff=0.20
-    low_eff = _make_scored(2, 50000, 5000, 0.5)    # ep=2500, eff=0.05
+def test_portfolio_with_varied_efficiency():
+    """Players with varied expected_profit_per_hour produce a valid portfolio respecting budget."""
+    players_low = [_make_scored(i, 10000, 1000, 0.5, expected_profit_per_hour=500) for i in range(1, 4)]
+    players_high = [_make_scored(i, 8000, 500, 0.5, expected_profit_per_hour=300) for i in range(4, 7)]
 
-    # Budget fits only one
-    result = optimize_portfolio([high_eff, low_eff], budget=10000)
-    assert len(result) == 1
-    assert result[0]["player"].resource_id == 1, "Higher efficiency v1 player should win"
-
-
-def test_mixed_v1_v2_portfolio():
-    """Mixed v1 and v2 entries produce a valid portfolio respecting budget."""
-    # v1 players (no expected_profit_per_hour)
-    v1_players = [_make_scored(i, 10000, 1000, 0.5) for i in range(1, 4)]
-    # v2 players (with expected_profit_per_hour)
-    v2_players = [_make_scored(i, 8000, 500, 0.5, expected_profit_per_hour=300) for i in range(4, 7)]
-
-    all_players = v1_players + v2_players
+    all_players = players_low + players_high
     budget = 50000
 
     result = optimize_portfolio(all_players, budget=budget)
@@ -158,6 +141,6 @@ def test_mixed_v1_v2_portfolio():
     # All result entries are from our input
     assert len(result) > 0
 
-    # Verify _ranking_profit is stripped (or at least all entries have expected_profit)
+    # Verify _ranking_profit is stripped (all entries should still have expected_profit)
     for entry in result:
         assert "expected_profit" in entry

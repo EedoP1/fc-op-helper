@@ -53,12 +53,17 @@ async def scanner(db, circuit_breaker):
 
 # ── scan_player tests ─────────────────────────────────────────────────────────
 
-async def test_scan_player_writes_score(scanner, db):
-    """Test 6: scan_player writes a PlayerScore row to DB with correct fields."""
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 100, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1, "op_sales_per_hour": 2.0,
+    "expected_profit_per_hour": 560.0, "efficiency": 0.028, "hours_of_data": 10.0,
+})
+async def test_scan_player_writes_score(mock_v2, scanner, db):
+    """Test 6: scan_player writes a PlayerScore row built from v2 result."""
     svc, session_factory, mock_client = scanner
     _, _ = db  # unused directly
 
-    # Make market data that will score as viable
     market_data = make_player(
         ea_id=100,
         name="Scorer",
@@ -89,7 +94,8 @@ async def test_scan_player_writes_score(scanner, db):
     assert row is not None, "Expected a PlayerScore row to be written"
     assert row.ea_id == 100
     assert row.is_viable is True
-    assert row.buy_price > 0
+    assert row.buy_price == 20000
+    assert row.expected_profit_per_hour == 560.0
 
 
 async def test_scan_player_skips_when_cb_open(scanner, db):
@@ -208,15 +214,14 @@ def _seed_player_record(session, ea_id: int = 100) -> None:
     ))
 
 
-@patch("src.server.scanner.score_player")
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 100, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1, "op_sales_per_hour": 2.0,
+    "expected_profit_per_hour": 560.0, "efficiency": 0.028, "hours_of_data": 10.0,
+})
 async def test_snapshot_created_on_scan(mock_score, scanner):
     """Test 15: scan_player creates a MarketSnapshot with correct fields."""
-    mock_score.return_value = {
-        "player": None, "buy_price": 20000, "sell_price": 24000,
-        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
-        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
-        "efficiency": 0.01, "sales_per_hour": 10.0,
-    }
     svc, session_factory, mock_client = scanner
     market_data = make_player(ea_id=100, price=20000, num_sales=50, num_listings=30)
     mock_client.get_player_market_data = AsyncMock(return_value=market_data)
@@ -242,15 +247,14 @@ async def test_snapshot_created_on_scan(mock_score, scanner):
     assert len(prices) == 30
 
 
-@patch("src.server.scanner.score_player")
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 101, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1, "op_sales_per_hour": 2.0,
+    "expected_profit_per_hour": 560.0, "efficiency": 0.028, "hours_of_data": 10.0,
+})
 async def test_snapshot_sales_created(mock_score, scanner):
     """Test 16: scan_player creates SnapshotSale rows matching market data sales."""
-    mock_score.return_value = {
-        "player": None, "buy_price": 20000, "sell_price": 24000,
-        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
-        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
-        "efficiency": 0.01, "sales_per_hour": 10.0,
-    }
     svc, session_factory, mock_client = scanner
     market_data = make_player(ea_id=101, price=20000, num_sales=50, num_listings=30)
     mock_client.get_player_market_data = AsyncMock(return_value=market_data)
@@ -272,15 +276,14 @@ async def test_snapshot_sales_created(mock_score, scanner):
     assert len(sales) == 50, f"Expected 50 SnapshotSale rows, got {len(sales)}"
 
 
-@patch("src.server.scanner.score_player")
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 102, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1, "op_sales_per_hour": 2.0,
+    "expected_profit_per_hour": 560.0, "efficiency": 0.028, "hours_of_data": 10.0,
+})
 async def test_snapshot_price_points_created(mock_score, scanner):
     """Test 17: scan_player creates SnapshotPricePoint rows matching price history."""
-    mock_score.return_value = {
-        "player": None, "buy_price": 20000, "sell_price": 24000,
-        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
-        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
-        "efficiency": 0.01, "sales_per_hour": 10.0,
-    }
     svc, session_factory, mock_client = scanner
     market_data = make_player(
         ea_id=102, price=20000, num_sales=50, num_listings=30, hours_of_data=10.0

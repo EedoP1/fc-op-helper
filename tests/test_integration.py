@@ -182,8 +182,5 @@ async def test_v2_scorer_writes_score():
         assert score_row.expected_profit_per_hour is not None, (
             "Expected expected_profit_per_hour to be populated by v2 scorer"
         )
-        assert score_row.scorer_version == "v2", (
-            f"Expected scorer_version='v2', got '{score_row.scorer_version}'"
-        )
     finally:
         await engine.dispose()
