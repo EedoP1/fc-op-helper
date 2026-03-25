@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 01-persistent-scanner plan 02 (01-02-PLAN.md)
-last_updated: "2026-03-25T16:01:11.778Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 01-persistent-scanner plan 03 (01-03-PLAN.md)
+last_updated: "2026-03-25T16:08:36.529Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -48,6 +48,7 @@ Plan: 3 of 3
 *Updated after each plan completion*
 | Phase 01-persistent-scanner P01 | 3 | 2 tasks | 9 files |
 | Phase 01-persistent-scanner P02 | 10min | 2 tasks | 3 files |
+| Phase 01-persistent-scanner P03 | 4min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,8 @@ Recent decisions affecting current work:
 - [Phase 01-persistent-scanner]: CircuitBreaker is_open is a property for lazy OPEN->HALF_OPEN transition on check
 - [Phase 01-persistent-scanner]: Tier classification checks last_expected_profit >= TIER_PROFIT_THRESHOLD first, so high-value low-volume players get hot priority (API-04)
 - [Phase 01-persistent-scanner]: Tenacity retry wraps API call as inner async _fetch_with_retry() decorated with @retry to enable function-level retry behavior
+- [Phase 01-persistent-scanner]: ASGITransport does not trigger FastAPI lifespan — tests wire app.state directly on the app object before requests
+- [Phase 01-persistent-scanner]: Latest viable score per player uses func.max(scored_at) subquery filtered to is_viable=True — ensures history is preserved while only current score is served
 
 ### Pending Todos
 
@@ -76,6 +79,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T16:01:11.773Z
-Stopped at: Completed 01-persistent-scanner plan 02 (01-02-PLAN.md)
+Last session: 2026-03-25T16:08:36.524Z
+Stopped at: Completed 01-persistent-scanner plan 03 (01-03-PLAN.md)
 Resume file: None

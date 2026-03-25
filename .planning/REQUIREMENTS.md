@@ -19,7 +19,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **API-01**: REST API endpoint returns optimized OP sell portfolio for a given budget, built on-demand from accumulated historical data
 - [ ] **API-02**: REST API endpoint returns detailed score breakdown for a specific player (margin, op_ratio, expected_profit, efficiency, sales history)
-- [ ] **API-03**: REST API endpoint returns top OP sell players with scores, margins, and ratios
+- [x] **API-03**: REST API endpoint returns top OP sell players with scores, margins, and ratios
 - [x] **API-04**: Scanner prioritizes request budget — more frequent scans for high-value/high-activity players, less frequent for stale ones
 
 ### CLI Client
@@ -80,7 +80,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCAN-05 | Phase 2 | Pending |
 | API-01 | Phase 2 | Pending |
 | API-02 | Phase 2 | Pending |
-| API-03 | Phase 1 | Pending |
+| API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
 | CLI-01 | Phase 3 | Pending |
 | CLI-02 | Phase 3 | Pending |
