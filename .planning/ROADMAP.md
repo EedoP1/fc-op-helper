@@ -12,7 +12,7 @@ Starting from a working one-shot Python CLI scorer, this roadmap converts it int
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Persistent Scanner** - FastAPI app with SQLite, APScheduler hourly scanning, rate-limit-safe 24/7 operation, and the top-players endpoint
+- [x] **Phase 1: Persistent Scanner** - FastAPI app with SQLite, APScheduler hourly scanning, rate-limit-safe 24/7 operation, and the top-players endpoint (completed 2026-03-25)
 - [ ] **Phase 2: Full API Surface** - Budget portfolio endpoint, per-player detail endpoint, adaptive scheduling, and historical score accumulation
 - [ ] **Phase 3: CLI as API Client** - Refactor CLI to query the API instead of scoring directly; expose portfolio, player detail, and scan coverage via terminal
 
@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01-PLAN.md — Foundation: dependencies, DB layer (SQLAlchemy async + WAL), ORM models, circuit breaker, config constants
 - [x] 01-02-PLAN.md — Scanner service: discovery, scoring, tier-based priority scheduling, retry with tenacity, circuit breaker integration
-- [ ] 01-03-PLAN.md — FastAPI app: lifespan wiring, GET /api/v1/players/top endpoint, GET /api/v1/health endpoint, integration tests
+- [x] 01-03-PLAN.md — FastAPI app: lifespan wiring, GET /api/v1/players/top endpoint, GET /api/v1/health endpoint, integration tests
 
 ### Phase 2: Full API Surface
 **Goal**: The backend exposes a complete API covering budget-aware portfolio optimization and per-player drill-down, backed by accumulating historical score data and adaptive per-player scan cadence
@@ -64,6 +64,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Persistent Scanner | 1/3 | In Progress|  |
+| 1. Persistent Scanner | 3/3 | Complete   | 2026-03-25 |
 | 2. Full API Surface | 0/? | Not started | - |
 | 3. CLI as API Client | 0/? | Not started | - |
