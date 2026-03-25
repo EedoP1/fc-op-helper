@@ -1,9 +1,9 @@
 """
 OP sell scorer.
 
-For each player, finds the best OP margin by checking how many sales
-happened above market price AT THE TIME of the sale. Requires 3+ verified
-OP sales at a given margin for it to count.
+For each player, evaluates ALL margins and picks the one that maximizes
+expected_profit (net_profit * op_ratio). Each margin is checked against
+market price AT THE TIME of the sale, requiring 3+ verified OP sales.
 """
 
 from __future__ import annotations
@@ -26,8 +26,9 @@ def score_player(md: PlayerMarketData) -> dict | None:
     Score a player for OP selling.
 
     Returns a dict with scoring data, or None if the player isn't viable.
-    Picks the highest margin that has 3+ verified OP sales (checked
-    against the market price at the time each sale happened).
+    Picks the margin that maximizes expected_profit among those with 3+
+    verified OP sales (checked against the market price at the time each
+    sale happened).
     """
     buy_price = md.current_lowest_bin
     if buy_price <= 0:
@@ -53,7 +54,10 @@ def score_player(md: PlayerMarketData) -> dict | None:
         for point in md.price_history
     }
 
-    # Try each margin (highest first) — pick the first with 3+ OP sales
+    # Try ALL margins, pick the one maximizing expected_profit
+    best = None
+    best_expected = 0.0
+
     for margin_pct in MARGINS:
         margin = margin_pct / 100.0
 
@@ -75,22 +79,26 @@ def score_player(md: PlayerMarketData) -> dict | None:
             continue
 
         op_ratio = op_sales / total_sales
-        return {
-            "player": md.player,
-            "buy_price": buy_price,
-            "sell_price": sell_price,
-            "net_profit": net_profit,
-            "margin_pct": margin_pct,
-            "op_sales": op_sales,
-            "total_sales": total_sales,
-            "op_ratio": op_ratio,
-            "op_sales_24h": round(op_sales / time_span_hrs * 24, 1),
-            "expected_profit": net_profit * op_ratio,
-            "sales_per_hour": round(sales_per_hour, 1),
-            "time_span_hrs": round(time_span_hrs, 1),
-        }
+        expected_profit = net_profit * op_ratio
 
-    return None
+        if expected_profit > best_expected:
+            best_expected = expected_profit
+            best = {
+                "player": md.player,
+                "buy_price": buy_price,
+                "sell_price": sell_price,
+                "net_profit": net_profit,
+                "margin_pct": margin_pct,
+                "op_sales": op_sales,
+                "total_sales": total_sales,
+                "op_ratio": op_ratio,
+                "op_sales_24h": round(op_sales / time_span_hrs * 24, 1),
+                "expected_profit": expected_profit,
+                "sales_per_hour": round(sales_per_hour, 1),
+                "time_span_hrs": round(time_span_hrs, 1),
+            }
+
+    return best
 
 
 def _get_price_at_time(sale_time, price_by_hour: dict, fallback: int) -> int:
