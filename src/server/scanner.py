@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -30,11 +31,12 @@ from src.config import (
     INITIAL_SCORING_BATCH_SIZE,
     ADAPTIVE_CHANGE_THRESHOLD,
     ADAPTIVE_MIN_INTERVAL_SECONDS,
+    MARKET_DATA_RETENTION_DAYS,
 )
 from src.futgg_client import FutGGClient
 from src.scorer import score_player
 from src.server.circuit_breaker import CircuitBreaker
-from src.server.models_db import PlayerRecord, PlayerScore
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +327,32 @@ class ScannerService:
                 )
             session.add(ps)
 
+            # Persist raw market snapshot
+            if market_data is not None:
+                snapshot = MarketSnapshot(
+                    ea_id=ea_id,
+                    captured_at=now,
+                    current_lowest_bin=market_data.current_lowest_bin,
+                    listing_count=market_data.listing_count,
+                    live_auction_prices=json.dumps(market_data.live_auction_prices),
+                )
+                session.add(snapshot)
+                await session.flush()  # get snapshot.id for FK references
+
+                for sale in market_data.sales:
+                    session.add(SnapshotSale(
+                        snapshot_id=snapshot.id,
+                        sold_at=sale.sold_at,
+                        sold_price=sale.sold_price,
+                    ))
+
+                for point in market_data.price_history:
+                    session.add(SnapshotPricePoint(
+                        snapshot_id=snapshot.id,
+                        recorded_at=point.recorded_at,
+                        lowest_bin=point.lowest_bin,
+                    ))
+
             # Update PlayerRecord fields
             record = await session.get(PlayerRecord, ea_id)
             if record is not None:
@@ -471,6 +499,37 @@ class ScannerService:
             for p in due_players
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ── Cleanup ─────────────────────────────────────────────────────────────
+
+    async def run_cleanup(self) -> None:
+        """Delete market snapshots older than MARKET_DATA_RETENTION_DAYS.
+
+        FK cascade on SnapshotSale and SnapshotPricePoint ensures child
+        rows are deleted automatically. Also prunes old PlayerScore rows
+        beyond retention to keep the DB lean.
+        """
+        cutoff = datetime.utcnow() - timedelta(days=MARKET_DATA_RETENTION_DAYS)
+        async with self._session_factory() as session:
+            from sqlalchemy import delete
+
+            # Delete old snapshots (cascades to sales + price points)
+            result = await session.execute(
+                delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff)
+            )
+            snapshot_count = result.rowcount
+
+            # Also prune old PlayerScore rows
+            result = await session.execute(
+                delete(PlayerScore).where(PlayerScore.scored_at < cutoff)
+            )
+            score_count = result.rowcount
+
+            await session.commit()
+        logger.info(
+            f"Cleanup: deleted {snapshot_count} snapshots and {score_count} scores "
+            f"older than {MARKET_DATA_RETENTION_DAYS} days"
+        )
 
     # ── Metrics ───────────────────────────────────────────────────────────────
 
