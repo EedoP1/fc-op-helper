@@ -134,3 +134,16 @@ None - no external service configuration required. Database file (`op_seller.db`
 ---
 *Phase: 01-persistent-scanner*
 *Completed: 2026-03-25*
+
+## Self-Check: PASSED
+
+- src/server/db.py: FOUND
+- src/server/models_db.py: FOUND
+- src/server/circuit_breaker.py: FOUND
+- tests/test_db.py: FOUND
+- tests/test_circuit_breaker.py: FOUND
+- pytest.ini: FOUND
+- 01-01-SUMMARY.md: FOUND
+- Task commit 71ec227: FOUND
+- Task commit 3a8d304: FOUND
+- 13 tests pass
