@@ -85,6 +85,8 @@ Recent decisions affecting current work:
 - [Phase 04-refactor-scoring-db]: Proportional outcome resolution: min(matching_sales, n_listings) sold, rest expired — handles same-price ambiguity without 1-to-1 matching
 - [Phase 04]: scorer_v2 evaluates all MARGINS tiers and picks max expected_profit_per_hour — OP sell rate uses only OP cohort denominator (op_sold + op_expired), not all resolved listings
 - [Phase 04]: Import timezone inline inside _classify_and_schedule to compare tz-aware expiresOn datetimes from API against current UTC time
+- [260326-2aw]: resolve_outcomes gates on expected_expiry_at IS NOT NULL AND < now — prevents false resolution of listings rotating off API window
+- [260326-2aw]: SCAN_INTERVAL_SECONDS=300 replaces adaptive expiry-based scheduling; _classify_and_schedule deleted entirely
 
 ### Pending Todos
 
@@ -111,10 +113,11 @@ None yet.
 | 260326-0lr | Remove v1 scorer entirely — v2-only pipeline with simplified optimizer and portfolio | 2026-03-26 | 1de1740 | [260326-0lr-remove-v1-scorer-entirely-v2-only-with-b](./quick/260326-0lr-remove-v1-scorer-entirely-v2-only-with-b/) |
 | 260326-12g | Update CLI labels for v2 metrics (EP/hr, Sell%, OP Sales) and purge stale v1 scores at startup | 2026-03-26 | e857c19 | [260326-12g-update-cli-labels-for-v2-metrics-and-pur](./quick/260326-12g-update-cli-labels-for-v2-metrics-and-pur/) |
 | 260326-1r2 | Fix scorer_v2 formula to net_profit * sell_rate, remove op_sales_per_hour | 2026-03-26 | 416bc9d | [260326-1r2-fix-scorer-v2-formula-to-net-profit-sell](./quick/260326-1r2-fix-scorer-v2-formula-to-net-profit-sell/) |
+| 260326-2aw | Fix listing outcome resolution with expiry gating + fixed 5-min scan interval | 2026-03-26 | 2a25124 | [260326-2aw-fix-listing-outcome-resolution-with-expi](./quick/260326-2aw-fix-listing-outcome-resolution-with-expi/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-26
 Last session: 2026-03-26T00:00:00.000Z
-Stopped at: Completed quick task 260326-1r2
+Stopped at: Completed quick task 260326-2aw
 Resume file: None
