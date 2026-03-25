@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 2 context gathered
-last_updated: "2026-03-25T16:34:19.535Z"
-last_activity: "2026-03-25 - Completed quick task 260325-pki: Speed up initial server heating to under 5 minutes for all player data loading"
+status: Phase complete — ready for verification
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-25T19:17:16.444Z"
+last_activity: 2026-03-25
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 3
+  total_plans: 5
   completed_plans: 3
 ---
 
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 01 — persistent-scanner
+**Current focus:** Phase 02 — full-api-surface
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 02 (full-api-surface) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -50,6 +50,8 @@ Plan: Not started
 | Phase 01-persistent-scanner P01 | 3 | 2 tasks | 9 files |
 | Phase 01-persistent-scanner P02 | 10min | 2 tasks | 3 files |
 | Phase 01-persistent-scanner P03 | 4min | 1 tasks | 5 files |
+| Phase 02 P01 | 3min | 2 tasks | 3 files |
+| Phase 02 P02 | 8min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -68,6 +70,9 @@ Recent decisions affecting current work:
 - [Phase 01-persistent-scanner]: Tenacity retry wraps API call as inner async _fetch_with_retry() decorated with @retry to enable function-level retry behavior
 - [Phase 01-persistent-scanner]: ASGITransport does not trigger FastAPI lifespan — tests wire app.state directly on the app object before requests
 - [Phase 01-persistent-scanner]: Latest viable score per player uses func.max(scored_at) subquery filtered to is_viable=True — ensures history is preserved while only current score is served
+- [Phase 02]: _PlayerProxy bridges DB rows to optimize_portfolio() resource_id access pattern
+- [Phase 02]: Trend direction uses 0.005 efficiency delta threshold to avoid noise from minor fluctuations
+- [Phase 02]: Adaptive scheduling uses offset(1) to skip current scan score when comparing to previous
 
 ### Pending Todos
 
@@ -86,7 +91,7 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-25 - Completed quick task 260325-pki: Speed up initial server heating to under 5 minutes for all player data loading
-Last session: 2026-03-25T16:34:19.530Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-full-api-surface/02-CONTEXT.md
+Last activity: 2026-03-25
+Last session: 2026-03-25T19:17:16.439Z
+Stopped at: Completed 02-02-PLAN.md
+Resume file: None

@@ -1,7 +1,7 @@
 """Top players API endpoint."""
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select, func
 
 from src.server.models_db import PlayerRecord, PlayerScore
@@ -98,3 +98,123 @@ async def get_top_players(
         )
 
     return {"data": players, "count": len(players), "offset": offset, "limit": limit}
+
+
+# ── Trend computation ─────────────────────────────────────────────────────────
+
+def _compute_trend(history: list[PlayerScore]) -> dict:
+    """Compute trend indicators from score history (newest-first order).
+
+    Args:
+        history: PlayerScore rows ordered by scored_at DESC.
+
+    Returns:
+        Dict with direction ("up"/"down"/"stable"), price_change (int),
+        efficiency_change (float).
+    """
+    if len(history) < 2:
+        return {"direction": "stable", "price_change": 0, "efficiency_change": 0.0}
+    newest = history[0]
+    oldest = history[-1]
+    price_delta = newest.buy_price - oldest.buy_price
+    eff_delta = round(newest.efficiency - oldest.efficiency, 4)
+    if eff_delta > 0.005:
+        direction = "up"
+    elif eff_delta < -0.005:
+        direction = "down"
+    else:
+        direction = "stable"
+    return {"direction": direction, "price_change": price_delta, "efficiency_change": eff_delta}
+
+
+# ── Player detail endpoint ────────────────────────────────────────────────────
+
+@router.get("/players/{ea_id}")
+async def get_player(request: Request, ea_id: int):
+    """Return full player detail with current score, history, and trend.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+        ea_id: EA resource ID of the player.
+
+    Returns:
+        Dict with player metadata, current_score, score_history (last 24),
+        and trend indicators.
+
+    Raises:
+        HTTPException: 404 if the player is not found.
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, ea_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Player not found")
+
+        # Latest viable score for this player
+        latest_stmt = (
+            select(PlayerScore)
+            .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
+            .order_by(PlayerScore.scored_at.desc())
+            .limit(1)
+        )
+        latest_result = await session.execute(latest_stmt)
+        latest = latest_result.scalars().first()
+
+        # Score history: last 24 entries regardless of is_viable
+        history_stmt = (
+            select(PlayerScore)
+            .where(PlayerScore.ea_id == ea_id)
+            .order_by(PlayerScore.scored_at.desc())
+            .limit(24)
+        )
+        history_result = await session.execute(history_stmt)
+        history_rows = list(history_result.scalars().all())
+
+    # Trend from viable scores only
+    viable_history = [s for s in history_rows if s.is_viable]
+    trend = _compute_trend(viable_history)
+
+    # Staleness check (same as get_top_players)
+    is_stale = (
+        record.last_scanned_at is None
+        or record.last_scanned_at < datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)
+    )
+
+    return {
+        "ea_id": record.ea_id,
+        "name": record.name,
+        "rating": record.rating,
+        "position": record.position,
+        "nation": record.nation,
+        "league": record.league,
+        "club": record.club,
+        "card_type": record.card_type,
+        "scan_tier": record.scan_tier,
+        "last_scanned": record.last_scanned_at.isoformat() if record.last_scanned_at else None,
+        "is_stale": is_stale,
+        "current_score": {
+            "buy_price": latest.buy_price,
+            "sell_price": latest.sell_price,
+            "net_profit": latest.net_profit,
+            "margin_pct": latest.margin_pct,
+            "op_sales": latest.op_sales,
+            "total_sales": latest.total_sales,
+            "op_ratio": round(latest.op_ratio, 3),
+            "expected_profit": round(latest.expected_profit, 1),
+            "efficiency": round(latest.efficiency, 4),
+            "sales_per_hour": latest.sales_per_hour,
+            "scored_at": latest.scored_at.isoformat(),
+        } if latest else None,
+        "score_history": [
+            {
+                "scored_at": s.scored_at.isoformat(),
+                "buy_price": s.buy_price,
+                "efficiency": round(s.efficiency, 4),
+                "expected_profit": round(s.expected_profit, 1),
+                "op_ratio": round(s.op_ratio, 3),
+                "is_viable": s.is_viable,
+            }
+            for s in history_rows
+        ],
+        "trend": trend,
+    }
