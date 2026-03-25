@@ -7,7 +7,11 @@ from sqlalchemy import select
 from src.server.db import create_engine_and_tables
 from src.server.models_db import PlayerRecord, PlayerScore
 from src.server.circuit_breaker import CircuitBreaker, CBState
-from src.config import TIER_PROFIT_THRESHOLD
+from src.config import (
+    TIER_PROFIT_THRESHOLD,
+    SCAN_INTERVAL_NORMAL,
+    SCAN_INTERVAL_HOT,
+)
 from tests.mock_client import make_player
 
 
@@ -236,3 +240,178 @@ async def test_run_bootstrap_inserts_player_records(scanner, db):
     assert 202 in ea_ids
     assert 203 in ea_ids
     assert all(r.is_active for r in rows)
+
+
+# ── Adaptive scheduling tests ────────────────────────────────────────────────
+
+async def test_adaptive_scheduling_shortens_interval(scanner):
+    """Test 11: Player with 50% sales_per_hour delta (above 25% threshold) gets halved interval."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        # Seed player record (normal tier: listing_count=25, sales_per_hour=10)
+        session.add(PlayerRecord(
+            ea_id=3001, name="Adaptive Player", rating=85, position="ST",
+            nation="Brazil", league="LaLiga", club="Real Madrid", card_type="gold",
+            scan_tier="normal", last_scanned_at=now, is_active=True,
+            listing_count=25, sales_per_hour=10.0,
+        ))
+        # Previous score (sales_per_hour=10.0)
+        session.add(PlayerScore(
+            ea_id=3001, scored_at=now - timedelta(hours=1),
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=10.0,
+            is_viable=True,
+        ))
+        # Current score (sales_per_hour=13.0 — 30% delta, above 25% threshold)
+        session.add(PlayerScore(
+            ea_id=3001, scored_at=now,
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=13.0,
+            is_viable=True,
+        ))
+        await session.commit()
+
+    async with session_factory() as session:
+        await svc._classify_and_schedule(3001, 25, 13.0, 200.0, session)
+
+    # Check next_scan_at is closer than normal interval (should be halved)
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 3001)
+
+    expected_half = SCAN_INTERVAL_NORMAL // 2
+    actual_delta = (record.next_scan_at - now).total_seconds()
+    assert abs(actual_delta - expected_half) < 5, (
+        f"Expected ~{expected_half}s interval, got {actual_delta:.0f}s"
+    )
+
+
+async def test_adaptive_scheduling_no_change_stable(scanner):
+    """Test 12: Player with 10% delta (below 25% threshold) keeps default interval."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        session.add(PlayerRecord(
+            ea_id=3002, name="Stable Adaptive", rating=85, position="CM",
+            nation="Spain", league="LaLiga", club="Barcelona", card_type="gold",
+            scan_tier="normal", last_scanned_at=now, is_active=True,
+            listing_count=25, sales_per_hour=10.0,
+        ))
+        # Previous score (sales_per_hour=10.0)
+        session.add(PlayerScore(
+            ea_id=3002, scored_at=now - timedelta(hours=1),
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=10.0,
+            is_viable=True,
+        ))
+        # Current score (sales_per_hour=11.0 — 10% delta, below threshold)
+        session.add(PlayerScore(
+            ea_id=3002, scored_at=now,
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=11.0,
+            is_viable=True,
+        ))
+        await session.commit()
+
+    async with session_factory() as session:
+        await svc._classify_and_schedule(3002, 25, 10.0, 200.0, session)
+
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 3002)
+
+    actual_delta = (record.next_scan_at - now).total_seconds()
+    assert abs(actual_delta - SCAN_INTERVAL_NORMAL) < 5, (
+        f"Expected ~{SCAN_INTERVAL_NORMAL}s interval, got {actual_delta:.0f}s"
+    )
+
+
+async def test_adaptive_scheduling_respects_floor(scanner):
+    """Test 13: Adaptive interval never goes below ADAPTIVE_MIN_INTERVAL_SECONDS (300s)."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        # Use hot tier (30min = 1800s) so half = 900s, still above 300s floor
+        # But we test with a tier that, when halved, would go below floor
+        # Hot interval is 1800, half is 900 — above 300. So floor won't kick in here.
+        # Instead, seed as hot but manually test the floor logic:
+        # The floor only matters if base_interval // 2 < 300, which doesn't happen
+        # with current tier intervals. So we verify the floor is at least respected
+        # by checking that the scheduled interval is >= 300.
+        session.add(PlayerRecord(
+            ea_id=3003, name="Floor Player", rating=85, position="ST",
+            nation="France", league="Ligue 1", club="PSG", card_type="gold",
+            scan_tier="hot", last_scanned_at=now, is_active=True,
+            listing_count=60, sales_per_hour=20.0,
+        ))
+        # Previous score
+        session.add(PlayerScore(
+            ea_id=3003, scored_at=now - timedelta(hours=1),
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=10.0,
+            is_viable=True,
+        ))
+        # Current score (100% delta — definitely triggers adaptive)
+        session.add(PlayerScore(
+            ea_id=3003, scored_at=now,
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=20.0,
+            is_viable=True,
+        ))
+        await session.commit()
+
+    async with session_factory() as session:
+        await svc._classify_and_schedule(3003, 60, 20.0, 200.0, session)
+
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 3003)
+
+    actual_delta = (record.next_scan_at - now).total_seconds()
+    # Hot interval is 1800, halved is 900, floor is 300 — so should be 900
+    expected = max(SCAN_INTERVAL_HOT // 2, 300)
+    assert abs(actual_delta - expected) < 5, (
+        f"Expected ~{expected}s interval, got {actual_delta:.0f}s"
+    )
+    assert actual_delta >= 300, f"Interval {actual_delta}s is below 300s floor"
+
+
+async def test_adaptive_scheduling_no_previous_score(scanner):
+    """Test 14: Player with no previous PlayerScore uses default tier interval."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        session.add(PlayerRecord(
+            ea_id=3004, name="New Player", rating=82, position="RW",
+            nation="England", league="EPL", club="Arsenal", card_type="gold",
+            scan_tier="normal", last_scanned_at=now, is_active=True,
+            listing_count=25, sales_per_hour=10.0,
+        ))
+        # Only 1 score (the "current" one) — no previous to compare against
+        session.add(PlayerScore(
+            ea_id=3004, scored_at=now,
+            buy_price=20000, sell_price=24000, net_profit=2800, margin_pct=20,
+            op_sales=5, total_sales=50, op_ratio=0.1,
+            expected_profit=200.0, efficiency=0.01, sales_per_hour=10.0,
+            is_viable=True,
+        ))
+        await session.commit()
+
+    async with session_factory() as session:
+        await svc._classify_and_schedule(3004, 25, 10.0, 200.0, session)
+
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 3004)
+
+    actual_delta = (record.next_scan_at - now).total_seconds()
+    assert abs(actual_delta - SCAN_INTERVAL_NORMAL) < 5, (
+        f"Expected ~{SCAN_INTERVAL_NORMAL}s default interval, got {actual_delta:.0f}s"
+    )

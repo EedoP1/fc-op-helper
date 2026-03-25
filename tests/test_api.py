@@ -269,3 +269,184 @@ async def test_health_returns_all_fields(db):
     assert body["last_scan_at"] is None
     assert body["players_in_db"] == 0
     assert body["queue_depth"] == 0
+
+
+# ── Fixture: seeded app with score history ────────────────────────────────────
+
+@pytest.fixture
+async def seeded_app_with_history(db):
+    """App with players seeded for player detail + trend tests.
+
+    Seeds:
+    - ea_id=2001: 5 PlayerScore rows with increasing efficiency (trend "up")
+    - ea_id=2002: 1 PlayerScore row (trend "stable")
+    - ea_id=2003: PlayerRecord only, no PlayerScore rows (no-viable-scores case)
+    """
+    engine, session_factory = db
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        # Player 2001 — 5 scores with increasing efficiency
+        session.add(PlayerRecord(
+            ea_id=2001, name="Trend Up Player", rating=90, position="CAM",
+            nation="France", league="Ligue 1", club="PSG", card_type="gold",
+            scan_tier="hot", last_scanned_at=now, is_active=True,
+            listing_count=40, sales_per_hour=12.0,
+        ))
+        for i in range(5):
+            eff = 0.01 + i * 0.01  # 0.01, 0.02, 0.03, 0.04, 0.05
+            session.add(PlayerScore(
+                ea_id=2001,
+                scored_at=now - timedelta(hours=4 - i),  # oldest first: -4h, -3h, -2h, -1h, now
+                buy_price=30000,
+                sell_price=36000,
+                net_profit=4200,
+                margin_pct=20,
+                op_sales=5,
+                total_sales=50,
+                op_ratio=0.1,
+                expected_profit=30000.0 * eff,
+                efficiency=eff,
+                sales_per_hour=10.0,
+                is_viable=True,
+            ))
+
+        # Player 2002 — 1 score (stable trend)
+        session.add(PlayerRecord(
+            ea_id=2002, name="Stable Player", rating=85, position="CM",
+            nation="Spain", league="LaLiga", club="Barcelona", card_type="gold",
+            scan_tier="normal", last_scanned_at=now, is_active=True,
+            listing_count=25, sales_per_hour=8.0,
+        ))
+        session.add(PlayerScore(
+            ea_id=2002,
+            scored_at=now,
+            buy_price=25000,
+            sell_price=30000,
+            net_profit=3500,
+            margin_pct=20,
+            op_sales=3,
+            total_sales=40,
+            op_ratio=0.075,
+            expected_profit=1875.0,
+            efficiency=0.075,
+            sales_per_hour=8.0,
+            is_viable=True,
+        ))
+
+        # Player 2003 — record only, no scores
+        session.add(PlayerRecord(
+            ea_id=2003, name="No Scores Player", rating=80, position="CB",
+            nation="Germany", league="Bundesliga", club="Bayern", card_type="gold",
+            scan_tier="cold", last_scanned_at=now, is_active=True,
+            listing_count=10, sales_per_hour=3.0,
+        ))
+
+        await session.commit()
+
+    app = make_test_app(session_factory)
+    yield app
+
+
+# ── Test 8: Player detail returns 200 ────────────────────────────────────────
+
+async def test_player_detail_returns_200(seeded_app_with_history):
+    """Test 8: GET /api/v1/players/2001 returns 200."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/2001")
+    assert resp.status_code == 200
+
+
+# ── Test 9: Player detail has all required fields ────────────────────────────
+
+async def test_player_detail_fields(seeded_app_with_history):
+    """Test 9: Player detail response contains all required keys."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/2001")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Top-level keys
+    top_keys = {
+        "ea_id", "name", "rating", "position", "nation", "league", "club",
+        "card_type", "scan_tier", "last_scanned", "is_stale",
+        "current_score", "score_history", "trend",
+    }
+    missing = top_keys - set(body.keys())
+    assert not missing, f"Missing top-level keys: {missing}"
+
+    # current_score keys
+    cs = body["current_score"]
+    assert cs is not None
+    cs_keys = {
+        "buy_price", "sell_price", "net_profit", "margin_pct", "op_sales",
+        "total_sales", "op_ratio", "expected_profit", "efficiency",
+        "sales_per_hour", "scored_at",
+    }
+    cs_missing = cs_keys - set(cs.keys())
+    assert not cs_missing, f"Missing current_score keys: {cs_missing}"
+
+    # score_history is a list
+    assert isinstance(body["score_history"], list)
+    assert len(body["score_history"]) > 0
+
+    # trend keys
+    trend_keys = {"direction", "price_change", "efficiency_change"}
+    t_missing = trend_keys - set(body["trend"].keys())
+    assert not t_missing, f"Missing trend keys: {t_missing}"
+
+
+# ── Test 10: Player detail 404 for unknown player ────────────────────────────
+
+async def test_player_detail_not_found(seeded_app_with_history):
+    """Test 10: GET /api/v1/players/999999 returns 404 with 'Player not found'."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/999999")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Player not found"
+
+
+# ── Test 11: Trend direction "up" for increasing efficiency ──────────────────
+
+async def test_player_detail_trend_up(seeded_app_with_history):
+    """Test 11: Player 2001 with increasing efficiency shows trend direction 'up'."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/2001")
+    body = resp.json()
+    assert body["trend"]["direction"] == "up"
+    assert body["trend"]["efficiency_change"] > 0
+
+
+# ── Test 12: Trend direction "stable" for single score ───────────────────────
+
+async def test_player_detail_trend_stable(seeded_app_with_history):
+    """Test 12: Player 2002 with single score entry shows trend direction 'stable'."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/2002")
+    body = resp.json()
+    assert body["trend"]["direction"] == "stable"
+
+
+# ── Test 13: No viable scores returns null current_score and stable trend ────
+
+async def test_player_detail_no_viable_scores(seeded_app_with_history):
+    """Test 13: Player 2003 with no PlayerScore rows returns current_score=null, empty history, stable trend."""
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_app_with_history), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/players/2003")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["current_score"] is None
+    assert body["score_history"] == []
+    assert body["trend"]["direction"] == "stable"
