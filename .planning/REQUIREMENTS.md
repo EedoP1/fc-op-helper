@@ -10,9 +10,9 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Backend — Scanner
 
 - [ ] **SCAN-01**: Server runs a persistent scanner for all players in the 11k–200k price range
-- [ ] **SCAN-02**: Scanner stores player scores, market data, and price history in SQLite
+- [x] **SCAN-02**: Scanner stores player scores, market data, and price history in SQLite
 - [ ] **SCAN-03**: Scanner uses adaptive scheduling per player based on listing activity (e.g., if last listing was 32 mins ago, schedule next scan in ~32 mins)
-- [ ] **SCAN-04**: Scanner respects fut.gg rate limits with throttling, exponential backoff, and circuit breaker
+- [x] **SCAN-04**: Scanner respects fut.gg rate limits with throttling, exponential backoff, and circuit breaker
 - [ ] **SCAN-05**: Historical score data accumulates over time per player for trend analysis
 
 ### Backend — API
@@ -74,9 +74,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | SCAN-01 | Phase 1 | Pending |
-| SCAN-02 | Phase 1 | Pending |
+| SCAN-02 | Phase 1 | Complete |
 | SCAN-03 | Phase 2 | Pending |
-| SCAN-04 | Phase 1 | Pending |
+| SCAN-04 | Phase 1 | Complete |
 | SCAN-05 | Phase 2 | Pending |
 | API-01 | Phase 2 | Pending |
 | API-02 | Phase 2 | Pending |
