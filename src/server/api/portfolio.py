@@ -50,7 +50,6 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "scan_tier": record.scan_tier,
         "last_scanned_at": record.last_scanned_at,
         "expected_profit_per_hour": score.expected_profit_per_hour,
-        "scorer_version": score.scorer_version or "v1",
     }
 
 
@@ -102,6 +101,17 @@ async def get_portfolio(
     # Build fresh scored entries (never cache — optimizer mutates dicts)
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
 
+    # Return early with descriptive error when no viable players exist yet
+    if not scored_list:
+        return {
+            "error": "Not enough listing data yet. The system needs to accumulate market observations before it can recommend players. This typically takes a few hours of scanning.",
+            "data": [],
+            "count": 0,
+            "budget": budget,
+            "budget_used": 0,
+            "budget_remaining": budget,
+        }
+
     # Run optimizer
     selected = optimize_portfolio(scored_list, budget)
 
@@ -134,14 +144,7 @@ async def get_portfolio(
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
             "expected_profit_per_hour": round(epph, 2) if epph else None,
-            "scorer_version": entry.get("scorer_version", "v1"),
-            # Tells the caller which metric drove this player's selection rank
-            "ranking_metric": "expected_profit_per_hour" if epph else "expected_profit",
         })
-
-    # Summarise how many v1 vs v2 players were selected
-    v2_count = sum(1 for e in data if e.get("scorer_version") == "v2")
-    scorer_mix = {"v1": len(data) - v2_count, "v2": v2_count}
 
     return {
         "data": data,
@@ -149,5 +152,4 @@ async def get_portfolio(
         "budget": budget,
         "budget_used": budget_used,
         "budget_remaining": budget - budget_used,
-        "scorer_mix": scorer_mix,
     }
