@@ -24,7 +24,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 
 ### Active
 
-- [ ] REST API exposing player details, score history, budget portfolio
+- ✓ REST API exposing player details, score history, budget portfolio — Validated in Phase 2: Full API Surface
 - [ ] CLI thin client that queries the API (replaces direct scoring)
 - [ ] Chrome extension for EA Web App automation (buy, list, relist)
 - [ ] Profit tracking and performance analytics
@@ -44,6 +44,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Data source: fut.gg API (player discovery, prices, 100 recent sales, hourly price history)
 - Scoring approach: price-at-time verified OP detection across margin tiers (40% down to 3%), minimum 3 OP sales required
 - Phase 1 complete: persistent backend with FastAPI, SQLite WAL, APScheduler, circuit breaker, tier-based scanning
+- Phase 2 complete: full API surface — portfolio endpoint, player detail with trends, adaptive scan scheduling
 - fut.gg updates hourly price history, so hourly scanning per player is the right cadence
 - Price range 11k–200k keeps the player pool manageable and focused on liquid cards
 - Architecture already has protocol-based abstraction — good foundation for adding persistence layer
