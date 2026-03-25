@@ -24,9 +24,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### CLI Client
 
-- [ ] **CLI-01**: CLI queries the server API instead of scoring directly
-- [ ] **CLI-02**: CLI accepts a budget and displays the optimized portfolio from the API
-- [ ] **CLI-03**: CLI can show detailed score breakdown for a specific player
+- [x] **CLI-01**: CLI queries the server API instead of scoring directly
+- [x] **CLI-02**: CLI accepts a budget and displays the optimized portfolio from the API
+- [x] **CLI-03**: CLI can show detailed score breakdown for a specific player
 
 ## v2 Requirements
 
@@ -82,9 +82,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | API-02 | Phase 2 | Complete |
 | API-03 | Phase 1 | Complete |
 | API-04 | Phase 1 | Complete |
-| CLI-01 | Phase 3 | Pending |
-| CLI-02 | Phase 3 | Pending |
-| CLI-03 | Phase 3 | Pending |
+| CLI-01 | Phase 3 | Complete |
+| CLI-02 | Phase 3 | Complete |
+| CLI-03 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 12 total
