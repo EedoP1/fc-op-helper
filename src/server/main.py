@@ -51,9 +51,9 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     scheduler.start()
 
-    # Launch bootstrap as a one-shot job (per Research pitfall 5 — non-blocking)
-    scheduler.add_job(scanner.run_bootstrap, id="bootstrap", replace_existing=True)
-    logger.info("Server started. Bootstrap scan queued.")
+    # Launch bootstrap + initial scoring as a one-shot job (per Research pitfall 5 — non-blocking)
+    scheduler.add_job(scanner.run_bootstrap_and_score, id="bootstrap", replace_existing=True)
+    logger.info("Server started. Bootstrap + initial scoring queued.")
 
     yield
 
