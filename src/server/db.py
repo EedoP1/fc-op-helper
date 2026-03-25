@@ -25,6 +25,7 @@ def create_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
     return engine
@@ -53,7 +54,7 @@ async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEng
     """
     engine = create_engine(db_url)
     async with engine.begin() as conn:
-        from src.server.models_db import PlayerRecord, PlayerScore  # noqa: F401
+        from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
     session_factory = create_session_factory(engine)
     return engine, session_factory

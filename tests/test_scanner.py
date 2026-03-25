@@ -1,16 +1,21 @@
 """Tests for ScannerService: tier classification, scan lifecycle, bootstrap, scheduling."""
+import json
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import select
 
 from src.server.db import create_engine_and_tables
-from src.server.models_db import PlayerRecord, PlayerScore
+from src.server.models_db import (
+    PlayerRecord, PlayerScore,
+    MarketSnapshot, SnapshotSale, SnapshotPricePoint,
+)
 from src.server.circuit_breaker import CircuitBreaker, CBState
 from src.config import (
     TIER_PROFIT_THRESHOLD,
     SCAN_INTERVAL_NORMAL,
     SCAN_INTERVAL_HOT,
+    MARKET_DATA_RETENTION_DAYS,
 )
 from tests.mock_client import make_player
 
@@ -415,3 +420,195 @@ async def test_adaptive_scheduling_no_previous_score(scanner):
     assert abs(actual_delta - SCAN_INTERVAL_NORMAL) < 5, (
         f"Expected ~{SCAN_INTERVAL_NORMAL}s default interval, got {actual_delta:.0f}s"
     )
+
+
+# ── Market snapshot persistence tests ────────────────────────────────────────
+
+def _seed_player_record(session, ea_id: int = 100) -> None:
+    """Helper to insert a PlayerRecord for snapshot tests."""
+    session.add(PlayerRecord(
+        ea_id=ea_id, name="Snapshot Player", rating=88, position="ST",
+        nation="Brazil", league="LaLiga", club="Real Madrid", card_type="gold",
+    ))
+
+
+@patch("src.server.scanner.score_player")
+async def test_snapshot_created_on_scan(mock_score, scanner):
+    """Test 15: scan_player creates a MarketSnapshot with correct fields."""
+    mock_score.return_value = {
+        "player": None, "buy_price": 20000, "sell_price": 24000,
+        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
+        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
+        "efficiency": 0.01, "sales_per_hour": 10.0,
+    }
+    svc, session_factory, mock_client = scanner
+    market_data = make_player(ea_id=100, price=20000, num_sales=50, num_listings=30)
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 100)
+        await session.commit()
+
+    await svc.scan_player(100)
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 100)
+        )
+        snap = result.scalar_one_or_none()
+
+    assert snap is not None, "Expected a MarketSnapshot row"
+    assert snap.ea_id == 100
+    assert snap.current_lowest_bin == 20000
+    assert snap.listing_count == 30
+    prices = json.loads(snap.live_auction_prices)
+    assert isinstance(prices, list)
+    assert len(prices) == 30
+
+
+@patch("src.server.scanner.score_player")
+async def test_snapshot_sales_created(mock_score, scanner):
+    """Test 16: scan_player creates SnapshotSale rows matching market data sales."""
+    mock_score.return_value = {
+        "player": None, "buy_price": 20000, "sell_price": 24000,
+        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
+        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
+        "efficiency": 0.01, "sales_per_hour": 10.0,
+    }
+    svc, session_factory, mock_client = scanner
+    market_data = make_player(ea_id=101, price=20000, num_sales=50, num_listings=30)
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 101)
+        await session.commit()
+
+    await svc.scan_player(101)
+
+    async with session_factory() as session:
+        snap = (await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 101)
+        )).scalar_one()
+        sales = (await session.execute(
+            select(SnapshotSale).where(SnapshotSale.snapshot_id == snap.id)
+        )).scalars().all()
+
+    assert len(sales) == 50, f"Expected 50 SnapshotSale rows, got {len(sales)}"
+
+
+@patch("src.server.scanner.score_player")
+async def test_snapshot_price_points_created(mock_score, scanner):
+    """Test 17: scan_player creates SnapshotPricePoint rows matching price history."""
+    mock_score.return_value = {
+        "player": None, "buy_price": 20000, "sell_price": 24000,
+        "net_profit": 2800, "margin_pct": 20, "op_sales": 5,
+        "total_sales": 50, "op_ratio": 0.1, "expected_profit": 200.0,
+        "efficiency": 0.01, "sales_per_hour": 10.0,
+    }
+    svc, session_factory, mock_client = scanner
+    market_data = make_player(
+        ea_id=102, price=20000, num_sales=50, num_listings=30, hours_of_data=10.0
+    )
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 102)
+        await session.commit()
+
+    await svc.scan_player(102)
+
+    async with session_factory() as session:
+        snap = (await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 102)
+        )).scalar_one()
+        points = (await session.execute(
+            select(SnapshotPricePoint).where(SnapshotPricePoint.snapshot_id == snap.id)
+        )).scalars().all()
+
+    # make_player creates int(hours_of_data) + 1 price points
+    assert len(points) == 11, f"Expected 11 SnapshotPricePoint rows, got {len(points)}"
+
+
+async def test_no_snapshot_on_none_market_data(scanner):
+    """Test 18: scan_player with None market_data creates no snapshot rows."""
+    svc, session_factory, mock_client = scanner
+    mock_client.get_player_market_data = AsyncMock(return_value=None)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 103)
+        await session.commit()
+
+    await svc.scan_player(103)
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 103)
+        )
+        snaps = result.scalars().all()
+
+    assert len(snaps) == 0, "Expected no MarketSnapshot rows for None market data"
+
+
+async def test_cleanup_deletes_old_snapshots(scanner):
+    """Test 19: run_cleanup deletes snapshots older than retention and preserves recent ones."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+    old_time = now - timedelta(days=MARKET_DATA_RETENTION_DAYS + 1)
+    recent_time = now - timedelta(days=5)
+
+    async with session_factory() as session:
+        old_snap = MarketSnapshot(
+            ea_id=200, captured_at=old_time,
+            current_lowest_bin=10000, listing_count=20,
+            live_auction_prices="[10000]",
+        )
+        session.add(old_snap)
+        await session.flush()
+        session.add(SnapshotSale(
+            snapshot_id=old_snap.id, sold_at=old_time, sold_price=12000,
+        ))
+
+        recent_snap = MarketSnapshot(
+            ea_id=200, captured_at=recent_time,
+            current_lowest_bin=10000, listing_count=20,
+            live_auction_prices="[10000]",
+        )
+        session.add(recent_snap)
+        await session.flush()
+        session.add(SnapshotSale(
+            snapshot_id=recent_snap.id, sold_at=recent_time, sold_price=12000,
+        ))
+        await session.commit()
+
+    await svc.run_cleanup()
+
+    async with session_factory() as session:
+        snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
+        sales = (await session.execute(select(SnapshotSale))).scalars().all()
+
+    assert len(snaps) == 1, f"Expected 1 snapshot after cleanup, got {len(snaps)}"
+    assert snaps[0].captured_at == recent_time
+    assert len(sales) == 1, f"Expected 1 sale after cleanup (cascade), got {len(sales)}"
+
+
+async def test_cleanup_preserves_recent_snapshots(scanner):
+    """Test 20: run_cleanup preserves all snapshots within the retention window."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        for days_ago in [1, 10, 25]:
+            snap = MarketSnapshot(
+                ea_id=300, captured_at=now - timedelta(days=days_ago),
+                current_lowest_bin=15000, listing_count=25,
+                live_auction_prices="[15000]",
+            )
+            session.add(snap)
+        await session.commit()
+
+    await svc.run_cleanup()
+
+    async with session_factory() as session:
+        snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
+
+    assert len(snaps) == 3, f"Expected 3 snapshots preserved, got {len(snaps)}"
