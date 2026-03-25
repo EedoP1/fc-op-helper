@@ -106,17 +106,21 @@ def test_backfill_uses_remaining_budget():
 # ── v2 scorer ranking tests ───────────────────────────────────────────────────
 
 def test_v2_player_ranks_by_expected_profit_per_hour():
-    """v2 player with high expected_profit_per_hour beats v1 player on efficiency."""
-    # v1 player: expected_profit=1000, buy_price=10000 → efficiency = 0.10
-    v1 = _make_scored(1, 10000, 10000, 1.0)  # ep=1000·1.0=1000, eff=0.10
-    # v2 player: expected_profit_per_hour=500, buy_price=2000 → eff = 500/2000 = 0.25
-    v2 = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)
+    """v2 player with high expected_profit_per_hour beats v1 player on efficiency.
+
+    v1: expected_profit = net_profit(1000) * op_ratio(0.1) = 100, buy_price=10000
+        → efficiency = 100/10000 = 0.01
+    v2: expected_profit_per_hour = 500, buy_price=2000
+        → efficiency = 500/2000 = 0.25  (higher — v2 should rank first)
+    """
+    v1 = _make_scored(1, 10000, 1000, 0.1)  # ep=100, eff=0.01
+    v2 = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)  # epph=500, eff=0.25
 
     # Budget fits both. v2 should rank first (higher efficiency via epph).
     result = optimize_portfolio([v1, v2], budget=20000)
     assert len(result) == 2
-    # First in result list should be v2 (ranked first by _ranking_profit sort)
-    assert result[0]["player"].resource_id == 2, "v2 player should rank first"
+    # First in result list should be v2 (ranked first by efficiency via epph)
+    assert result[0]["player"].resource_id == 2, "v2 player should rank first (eff=0.25 > 0.01)"
 
 
 def test_v1_fallback_when_no_epph():
