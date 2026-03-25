@@ -18,12 +18,13 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - ✓ CLI output with Rich tables and CSV export — existing
 - ✓ Protocol-based data source abstraction (MarketDataClient) — existing
 - ✓ Pydantic data models (Player, SaleRecord, PricePoint) — existing
+- ✓ Persistent backend server (FastAPI + SQLite) running 24/7 — Validated in Phase 1: Persistent Scanner
+- ✓ Scheduled scanning per player with tier-based priority (11k–200k range) — Validated in Phase 1: Persistent Scanner
+- ✓ REST API top-players endpoint with scores, margins, ratios — Validated in Phase 1: Persistent Scanner
 
 ### Active
 
-- [ ] Persistent backend server (FastAPI + SQLite) running 24/7
-- [ ] Scheduled hourly scanning per player (11k–200k price range)
-- [ ] REST API exposing top OP sell players, player details, score history
+- [ ] REST API exposing player details, score history, budget portfolio
 - [ ] CLI thin client that queries the API (replaces direct scoring)
 - [ ] Chrome extension for EA Web App automation (buy, list, relist)
 - [ ] Profit tracking and performance analytics
@@ -42,7 +43,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Existing Python 3.12 CLI tool with working OP scoring engine
 - Data source: fut.gg API (player discovery, prices, 100 recent sales, hourly price history)
 - Scoring approach: price-at-time verified OP detection across margin tiers (40% down to 3%), minimum 3 OP sales required
-- Current tool is one-shot (runs, outputs, exits) — needs to become persistent
+- Phase 1 complete: persistent backend with FastAPI, SQLite WAL, APScheduler, circuit breaker, tier-based scanning
 - fut.gg updates hourly price history, so hourly scanning per player is the right cadence
 - Price range 11k–200k keeps the player pool manageable and focused on liquid cards
 - Architecture already has protocol-based abstraction — good foundation for adding persistence layer
@@ -60,8 +61,8 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Chrome extension for automation | Overlays on EA Web App, avoids reverse-engineering EA APIs | — Pending |
-| Python backend with FastAPI | Keeps existing scoring logic, adds API + scheduler naturally | — Pending |
-| SQLite initially | Simple, no infrastructure needed for personal use, migrateable later | — Pending |
+| Python backend with FastAPI | Keeps existing scoring logic, adds API + scheduler naturally | Validated Phase 1 |
+| SQLite initially | Simple, no infrastructure needed for personal use, migrateable later | Validated Phase 1 |
 | CLI becomes API client | All logic on server (needs DB for proper scoring), CLI just displays results | — Pending |
 | Hourly scan cadence | Matches fut.gg price history granularity, respects rate limits | — Pending |
 | 11k–200k price range | Focused on liquid, profitable cards; avoids scanning entire market | — Pending |
@@ -84,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after initialization*
+*Last updated: 2026-03-25 after Phase 1 completion*
