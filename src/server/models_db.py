@@ -45,6 +45,8 @@ class PlayerScore(Base):
     efficiency: Mapped[float] = mapped_column(Float)
     sales_per_hour: Mapped[float] = mapped_column(Float)
     is_viable: Mapped[bool] = mapped_column(Boolean, default=True)
+    expected_profit_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
+    scorer_version: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "v1"|"v2"
 
     __table_args__ = (
         Index("ix_player_scores_ea_id_scored_at", "ea_id", "scored_at"),
@@ -93,3 +95,39 @@ class SnapshotPricePoint(Base):
     )
     recorded_at: Mapped[datetime] = mapped_column(DateTime)
     lowest_bin: Mapped[int] = mapped_column(Integer)
+
+
+class ListingObservation(Base):
+    """Individual listing tracked across scan snapshots (per D-01)."""
+
+    __tablename__ = "listing_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    buy_now_price: Mapped[int] = mapped_column(Integer)
+    market_price_at_obs: Mapped[int] = mapped_column(Integer)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime)
+    scan_count: Mapped[int] = mapped_column(Integer, default=1)
+    outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "sold"|"expired"|None
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DailyListingSummary(Base):
+    """Aggregated daily stats per player per margin tier (per D-13, D-14)."""
+
+    __tablename__ = "daily_listing_summaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    margin_pct: Mapped[int] = mapped_column(Integer)
+    op_listed_count: Mapped[int] = mapped_column(Integer, default=0)
+    op_sold_count: Mapped[int] = mapped_column(Integer, default=0)
+    op_expired_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_listed_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (
+        Index("ix_daily_summary_ea_id_date_margin", "ea_id", "date", "margin_pct"),
+    )
