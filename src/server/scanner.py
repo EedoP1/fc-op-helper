@@ -32,11 +32,15 @@ from src.config import (
     ADAPTIVE_CHANGE_THRESHOLD,
     ADAPTIVE_MIN_INTERVAL_SECONDS,
     MARKET_DATA_RETENTION_DAYS,
+    LISTING_SCAN_BUFFER_SECONDS,
+    LISTING_RETENTION_DAYS,
 )
 from src.futgg_client import FutGGClient
 from src.scorer import score_player
 from src.server.circuit_breaker import CircuitBreaker
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint
+from src.server.listing_tracker import record_listings, resolve_outcomes
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint, ListingObservation
+from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +296,33 @@ class ScannerService:
         score_result = score_player(market_data) if market_data is not None else None
 
         async with self._session_factory() as session:
+            # --- Listing tracking (D-01, D-02) ---
+            listing_result = None
+            resolve_result = None
+            if market_data is not None and market_data.live_auctions_raw:
+                listing_result = await record_listings(
+                    ea_id=ea_id,
+                    live_auctions_raw=market_data.live_auctions_raw,
+                    current_lowest_bin=market_data.current_lowest_bin,
+                    completed_sales=market_data.sales,
+                    session=session,
+                )
+                resolve_result = await resolve_outcomes(
+                    ea_id=ea_id,
+                    current_fingerprints=listing_result["fingerprints"],
+                    completed_sales=market_data.sales,
+                    session=session,
+                )
+
+            # --- V2 scoring (D-09, D-10) ---
+            v2_result = None
+            if market_data is not None and market_data.current_lowest_bin > 0:
+                v2_result = await score_player_v2(
+                    ea_id=ea_id,
+                    session=session,
+                    buy_price=market_data.current_lowest_bin,
+                )
+
             # Write PlayerScore row
             if score_result is not None:
                 ps = PlayerScore(
@@ -308,6 +339,8 @@ class ScannerService:
                     efficiency=score_result["expected_profit"] / score_result["buy_price"],
                     sales_per_hour=score_result["sales_per_hour"],
                     is_viable=True,
+                    expected_profit_per_hour=v2_result["expected_profit_per_hour"] if v2_result else None,
+                    scorer_version="v2" if v2_result else "v1",
                 )
             else:
                 ps = PlayerScore(
@@ -324,6 +357,8 @@ class ScannerService:
                     efficiency=0.0,
                     sales_per_hour=0.0,
                     is_viable=False,
+                    expected_profit_per_hour=None,
+                    scorer_version="v1",
                 )
             session.add(ps)
 
@@ -371,7 +406,8 @@ class ScannerService:
             last_expected_profit = score_result["expected_profit"] if score_result is not None else 0.0
 
             await self._classify_and_schedule(
-                ea_id, listing_count, sales_per_hour, last_expected_profit, session
+                ea_id, listing_count, sales_per_hour, last_expected_profit, session,
+                live_auctions_raw=market_data.live_auctions_raw if market_data else None,
             )
 
         self.last_scan_at = datetime.utcnow()
@@ -415,6 +451,7 @@ class ScannerService:
         sales_per_hour: float,
         last_expected_profit: float,
         session,
+        live_auctions_raw: list[dict] | None = None,
     ) -> None:
         """Update PlayerRecord with new tier and next_scan_at.
 
@@ -422,12 +459,17 @@ class ScannerService:
         ADAPTIVE_CHANGE_THRESHOLD (25%) compared to the previous scan, the
         interval is halved (floored at ADAPTIVE_MIN_INTERVAL_SECONDS).
 
+        Also applies listing-based adaptive timing (D-05, D-06): if
+        live_auctions_raw is provided, the youngest listing expiry time is used
+        to schedule the next scan just before it expires.
+
         Args:
             ea_id: Player EA ID.
             listing_count: Current live listing count.
             sales_per_hour: Sales velocity.
             last_expected_profit: Most recent expected profit for value-based promotion.
             session: Active AsyncSession (will be committed here).
+            live_auctions_raw: Raw liveAuctions entries for adaptive timing (optional).
         """
         tier = self._classify_tier(listing_count, sales_per_hour, last_expected_profit)
         interval_map = {
@@ -452,6 +494,37 @@ class ScannerService:
             delta = abs(sales_per_hour - prev.sales_per_hour) / prev.sales_per_hour
             if delta >= ADAPTIVE_CHANGE_THRESHOLD:
                 interval = max(base_interval // 2, ADAPTIVE_MIN_INTERVAL_SECONDS)
+
+        # Adaptive listing-based timing (D-05, D-06)
+        if live_auctions_raw:
+            remaining_times = []
+            for auction in live_auctions_raw:
+                # Check for expiresOn/remainingTime fields (D-04 discovery)
+                expires = auction.get("expiresOn") or auction.get("expires")
+                if expires:
+                    try:
+                        expiry_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+                        # expiry_dt is tz-aware after parsing; use tz-aware now for comparison
+                        from datetime import timezone as _tz
+                        now_utc = datetime.now(_tz.utc)
+                        remaining = (expiry_dt - now_utc).total_seconds()
+                        if remaining > 0:
+                            remaining_times.append(remaining)
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    # Try remainingTime (seconds) field
+                    rem = auction.get("remainingTime") or auction.get("timeRemaining")
+                    if rem and isinstance(rem, (int, float)) and rem > 0:
+                        remaining_times.append(float(rem))
+
+            if remaining_times:
+                youngest_remaining = min(remaining_times)
+                listing_interval = max(
+                    int(youngest_remaining - LISTING_SCAN_BUFFER_SECONDS),
+                    ADAPTIVE_MIN_INTERVAL_SECONDS,
+                )
+                interval = min(interval, listing_interval)  # use the shorter of tier vs listing timing
 
         next_scan = datetime.utcnow() + timedelta(seconds=interval)
 
@@ -500,6 +573,84 @@ class ScannerService:
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # ── Scheduled scoring and aggregation jobs ──────────────────────────────
+
+    async def run_scoring(self) -> None:
+        """Re-score all active players using v2 scorer from accumulated listing data.
+
+        Runs every SCORING_JOB_INTERVAL_MINUTES (15 minutes). Fetches the
+        latest buy_price from PlayerScore, calls score_player_v2, and writes
+        v2 fields back to the most recent viable PlayerScore row.
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(PlayerRecord.ea_id)
+                .where(PlayerRecord.is_active == True)  # noqa: E712
+            )
+            ea_ids = [row[0] for row in result.all()]
+
+        scored = 0
+        for ea_id in ea_ids:
+            try:
+                async with self._session_factory() as session:
+                    # Get latest buy price from most recent viable PlayerScore
+                    latest = await session.execute(
+                        select(PlayerScore.buy_price)
+                        .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
+                        .order_by(PlayerScore.scored_at.desc())
+                        .limit(1)
+                    )
+                    buy_price = latest.scalar()
+                    if not buy_price or buy_price <= 0:
+                        continue
+
+                    v2 = await score_player_v2(ea_id, session, buy_price)
+                    if v2:
+                        # Update the latest PlayerScore row with v2 fields
+                        latest_score = await session.execute(
+                            select(PlayerScore)
+                            .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
+                            .order_by(PlayerScore.scored_at.desc())
+                            .limit(1)
+                        )
+                        score_row = latest_score.scalars().first()
+                        if score_row:
+                            score_row.expected_profit_per_hour = v2["expected_profit_per_hour"]
+                            score_row.scorer_version = "v2"
+                            await session.commit()
+                            scored += 1
+            except Exception as exc:
+                logger.error(f"V2 scoring failed for {ea_id}: {exc}")
+                continue
+
+        logger.info(f"V2 scoring job: updated {scored}/{len(ea_ids)} players")
+
+    async def run_aggregation(self) -> None:
+        """Aggregate yesterday's listing observations into daily summaries (D-13).
+
+        Runs daily. Summarises all resolved ListingObservation rows for the
+        previous day into DailyListingSummary rows per margin tier.
+        """
+        from src.server.listing_tracker import aggregate_daily_summaries
+        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(PlayerRecord.ea_id).where(PlayerRecord.is_active == True)  # noqa: E712
+            )
+            ea_ids = [row[0] for row in result.all()]
+
+        total = 0
+        for ea_id in ea_ids:
+            try:
+                async with self._session_factory() as session:
+                    count = await aggregate_daily_summaries(ea_id, yesterday, session)
+                    await session.commit()
+                    total += count
+            except Exception as exc:
+                logger.error(f"Aggregation failed for {ea_id}: {exc}")
+        logger.info(f"Daily aggregation: {total} summary rows for {yesterday}")
+
     # ── Cleanup ─────────────────────────────────────────────────────────────
 
     async def run_cleanup(self) -> None:
@@ -507,9 +658,11 @@ class ScannerService:
 
         FK cascade on SnapshotSale and SnapshotPricePoint ensures child
         rows are deleted automatically. Also prunes old PlayerScore rows
-        beyond retention to keep the DB lean.
+        beyond retention to keep the DB lean. Additionally purges old
+        resolved and orphaned ListingObservation rows (D-12).
         """
         cutoff = datetime.utcnow() - timedelta(days=MARKET_DATA_RETENTION_DAYS)
+        listing_cutoff = datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)
         async with self._session_factory() as session:
             from sqlalchemy import delete
 
@@ -525,10 +678,30 @@ class ScannerService:
             )
             score_count = result.rowcount
 
+            # Purge old resolved listing observations (D-12)
+            result = await session.execute(
+                delete(ListingObservation).where(
+                    ListingObservation.resolved_at.isnot(None),
+                    ListingObservation.resolved_at < listing_cutoff,
+                )
+            )
+            resolved_purged = result.rowcount
+
+            # Purge orphaned unresolved observations (last_seen_at too old)
+            result = await session.execute(
+                delete(ListingObservation).where(
+                    ListingObservation.outcome.is_(None),
+                    ListingObservation.last_seen_at < listing_cutoff,
+                )
+            )
+            orphaned_purged = result.rowcount
+
             await session.commit()
         logger.info(
-            f"Cleanup: deleted {snapshot_count} snapshots and {score_count} scores "
-            f"older than {MARKET_DATA_RETENTION_DAYS} days"
+            f"Cleanup: deleted {snapshot_count} snapshots, {score_count} scores "
+            f"older than {MARKET_DATA_RETENTION_DAYS} days; "
+            f"purged {resolved_purged} resolved and {orphaned_purged} orphaned "
+            f"listing observations older than {LISTING_RETENTION_DAYS} days"
         )
 
     # ── Metrics ───────────────────────────────────────────────────────────────

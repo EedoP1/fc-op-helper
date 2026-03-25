@@ -9,6 +9,7 @@ from src.server.db import create_engine_and_tables
 from src.server.models_db import (
     PlayerRecord, PlayerScore,
     MarketSnapshot, SnapshotSale, SnapshotPricePoint,
+    ListingObservation,
 )
 from src.server.circuit_breaker import CircuitBreaker, CBState
 from src.config import (
@@ -16,6 +17,9 @@ from src.config import (
     SCAN_INTERVAL_NORMAL,
     SCAN_INTERVAL_HOT,
     MARKET_DATA_RETENTION_DAYS,
+    LISTING_RETENTION_DAYS,
+    LISTING_SCAN_BUFFER_SECONDS,
+    ADAPTIVE_MIN_INTERVAL_SECONDS,
 )
 from tests.mock_client import make_player
 
@@ -612,3 +616,102 @@ async def test_cleanup_preserves_recent_snapshots(scanner):
         snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
 
     assert len(snaps) == 3, f"Expected 3 snapshots preserved, got {len(snaps)}"
+
+
+# ── Adaptive listing-based timing tests ──────────────────────────────────────
+
+async def test_adaptive_next_scan(scanner):
+    """Test 21: _classify_and_schedule uses youngest listing expiry for adaptive timing (D-05).
+
+    With an auction expiring in 30 minutes and a 4-minute buffer,
+    the interval should be ~26 minutes, not the tier-based default.
+    """
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        session.add(PlayerRecord(
+            ea_id=4001, name="Listing Adaptive", rating=85, position="ST",
+            nation="England", league="EPL", club="Arsenal", card_type="gold",
+            scan_tier="normal", last_scanned_at=now, is_active=True,
+            listing_count=25, sales_per_hour=10.0,
+        ))
+        await session.commit()
+
+    # Build a live_auctions_raw entry with expiresOn 30 minutes from now
+    expires_at = (datetime.utcnow() + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    live_auctions_raw = [
+        {"buyNowPrice": 20000, "expiresOn": expires_at},
+        {"buyNowPrice": 25000, "expiresOn": (datetime.utcnow() + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")},
+    ]
+
+    async with session_factory() as session:
+        await svc._classify_and_schedule(
+            4001, 25, 10.0, 200.0, session,
+            live_auctions_raw=live_auctions_raw,
+        )
+
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 4001)
+
+    # Expected: 30min - 4min buffer = 26 minutes = 1560 seconds
+    # (but at least ADAPTIVE_MIN_INTERVAL_SECONDS = 300)
+    expected_interval = max(int(30 * 60 - LISTING_SCAN_BUFFER_SECONDS), ADAPTIVE_MIN_INTERVAL_SECONDS)
+    actual_delta = (record.next_scan_at - now).total_seconds()
+    assert abs(actual_delta - expected_interval) < 10, (
+        f"Expected ~{expected_interval}s interval from listing expiry, got {actual_delta:.0f}s"
+    )
+
+
+async def test_listing_purge(scanner):
+    """Test 22: run_cleanup deletes resolved and orphaned ListingObservation rows older than retention."""
+    svc, session_factory, _ = scanner
+    now = datetime.utcnow()
+    old_time = now - timedelta(days=LISTING_RETENTION_DAYS + 3)
+
+    async with session_factory() as session:
+        # Resolved observation — old resolved_at should be purged
+        session.add(ListingObservation(
+            fingerprint="old_resolved:1",
+            ea_id=5001,
+            buy_now_price=25000,
+            market_price_at_obs=20000,
+            first_seen_at=old_time,
+            last_seen_at=old_time,
+            scan_count=1,
+            outcome="sold",
+            resolved_at=old_time,
+        ))
+        # Orphaned unresolved — old last_seen_at should be purged
+        session.add(ListingObservation(
+            fingerprint="old_orphaned:1",
+            ea_id=5001,
+            buy_now_price=26000,
+            market_price_at_obs=20000,
+            first_seen_at=old_time,
+            last_seen_at=old_time,
+            scan_count=1,
+            outcome=None,
+            resolved_at=None,
+        ))
+        # Recent resolved — should be preserved
+        session.add(ListingObservation(
+            fingerprint="recent_resolved:1",
+            ea_id=5001,
+            buy_now_price=24000,
+            market_price_at_obs=20000,
+            first_seen_at=now - timedelta(days=2),
+            last_seen_at=now - timedelta(days=1),
+            scan_count=2,
+            outcome="expired",
+            resolved_at=now - timedelta(days=1),
+        ))
+        await session.commit()
+
+    await svc.run_cleanup()
+
+    async with session_factory() as session:
+        obs = (await session.execute(select(ListingObservation))).scalars().all()
+
+    assert len(obs) == 1, f"Expected 1 listing observation preserved, got {len(obs)}"
+    assert obs[0].fingerprint == "recent_resolved:1"
