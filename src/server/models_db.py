@@ -1,7 +1,7 @@
 """SQLAlchemy ORM table definitions for the persistent scanner."""
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Integer, Float, DateTime, Boolean, Index
+from sqlalchemy import String, Integer, Float, DateTime, Boolean, Index, Text, ForeignKey
 from src.server.db import Base
 
 
@@ -49,3 +49,47 @@ class PlayerScore(Base):
     __table_args__ = (
         Index("ix_player_scores_ea_id_scored_at", "ea_id", "scored_at"),
     )
+
+
+class MarketSnapshot(Base):
+    """Raw market data snapshot captured during a player scan."""
+
+    __tablename__ = "market_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime)
+    current_lowest_bin: Mapped[int] = mapped_column(Integer)
+    listing_count: Mapped[int] = mapped_column(Integer)
+    live_auction_prices: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        Index("ix_market_snapshots_ea_id_captured_at", "ea_id", "captured_at"),
+        Index("ix_market_snapshots_captured_at", "captured_at"),
+    )
+
+
+class SnapshotSale(Base):
+    """Individual sale record attached to a market snapshot."""
+
+    __tablename__ = "snapshot_sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("market_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    sold_at: Mapped[datetime] = mapped_column(DateTime)
+    sold_price: Mapped[int] = mapped_column(Integer)
+
+
+class SnapshotPricePoint(Base):
+    """Price history observation attached to a market snapshot."""
+
+    __tablename__ = "snapshot_price_points"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("market_snapshots.id", ondelete="CASCADE"), index=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(DateTime)
+    lowest_bin: Mapped[int] = mapped_column(Integer)
