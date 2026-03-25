@@ -39,6 +39,19 @@ async def lifespan(app: FastAPI):
     logger.info("Starting OP Seller server...")
 
     engine, session_factory = await create_engine_and_tables()
+
+    # Purge stale v1 scores that lack expected_profit_per_hour
+    async with session_factory() as session:
+        from sqlalchemy import delete
+        from src.server.models_db import PlayerScore
+        result = await session.execute(
+            delete(PlayerScore).where(PlayerScore.expected_profit_per_hour == None)  # noqa: E711
+        )
+        purged = result.rowcount
+        await session.commit()
+        if purged:
+            logger.info("Purged %d stale v1 scores (missing expected_profit_per_hour)", purged)
+
     cb = CircuitBreaker()
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
