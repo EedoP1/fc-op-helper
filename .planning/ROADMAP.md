@@ -44,8 +44,11 @@ Plans:
   2. `GET /api/v1/players/{id}` returns the full score breakdown for a player including margin, op_ratio, expected_profit, efficiency, and recent sales history
   3. A player's next scan time adjusts automatically based on its listing activity — observable by comparing `next_scan_at` across active vs stale players in the DB
   4. Each player accumulates a score history row per scan cycle, so trend data grows over time without manual intervention
-**Plans**: TBD
-**UI hint**: no
+**Plans**: 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Portfolio optimization endpoint (API-01) with optimizer bridge, score history index verification (SCAN-05)
+- [ ] 02-02-PLAN.md — Player detail endpoint with trend indicators (API-02), adaptive scan scheduling (SCAN-03)
 
 ### Phase 3: CLI as API Client
 **Goal**: The CLI is a thin display layer that queries the running backend, so all scoring and portfolio logic executes on the server and the terminal just presents results
@@ -65,5 +68,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Persistent Scanner | 3/3 | Complete   | 2026-03-25 |
-| 2. Full API Surface | 0/? | Not started | - |
+| 2. Full API Surface | 0/2 | In progress | - |
 | 3. CLI as API Client | 0/? | Not started | - |
