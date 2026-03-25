@@ -28,7 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The scanner survives a 429 or 5xx from fut.gg without crashing — it backs off, retries with jitter, and trips the circuit breaker if failure rate exceeds 20%
   4. High-activity players are queued for more frequent scans than low-activity ones, observable via scan metadata in the DB
   5. `GET /api/v1/health` returns scheduler status, scan success rate, and last-scan timestamps
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Foundation: dependencies, DB layer (SQLAlchemy async + WAL), ORM models, circuit breaker, config constants
+- [ ] 01-02-PLAN.md — Scanner service: discovery, scoring, tier-based priority scheduling, retry with tenacity, circuit breaker integration
+- [ ] 01-03-PLAN.md — FastAPI app: lifespan wiring, GET /api/v1/players/top endpoint, GET /api/v1/health endpoint, integration tests
 
 ### Phase 2: Full API Surface
 **Goal**: The backend exposes a complete API covering budget-aware portfolio optimization and per-player drill-down, backed by accumulating historical score data and adaptive per-player scan cadence
@@ -59,6 +64,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Persistent Scanner | 0/? | Not started | - |
+| 1. Persistent Scanner | 0/3 | Planning complete | - |
 | 2. Full API Surface | 0/? | Not started | - |
 | 3. CLI as API Client | 0/? | Not started | - |
