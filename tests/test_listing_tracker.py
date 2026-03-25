@@ -373,8 +373,12 @@ async def test_record_listings_op_classification(db):
         ))).scalar_one()
 
     # Verify OP classification using the helper
+    # 15000 >= 10000 * 1.40 = 14000 -> OP at 40%
     assert _is_op_listing(row.buy_now_price, row.market_price_at_obs, 40) is True
-    assert _is_op_listing(row.buy_now_price, row.market_price_at_obs, 50) is False
+    # 15000 >= 10000 * 1.50 = 15000 -> still OP at 50% (boundary equals)
+    assert _is_op_listing(row.buy_now_price, row.market_price_at_obs, 50) is True
+    # 15000 < 10000 * 1.51 = 15100 -> not OP at 51%
+    assert _is_op_listing(row.buy_now_price, row.market_price_at_obs, 51) is False
     # 15000 >= 10000 * 1.40 = 14000 -> OP at 40%
     assert row.buy_now_price == 15000
     assert row.market_price_at_obs == 10000

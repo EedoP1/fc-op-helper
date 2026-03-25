@@ -1,0 +1,286 @@
+"""
+Listing tracking module: fingerprint-based upsert, outcome resolution, daily aggregation.
+
+This is the core data collection layer that records individual liveAuctions entries
+as ListingObservation rows, resolves their outcome (sold/expired) when they disappear,
+and aggregates daily summaries per margin tier.
+
+Public API:
+    record_listings(ea_id, live_auctions_raw, current_lowest_bin, completed_sales, session)
+    resolve_outcomes(ea_id, current_fingerprints, completed_sales, session)
+    aggregate_daily_summaries(ea_id, target_date, session)
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from src.config import MIN_OP_OBSERVATIONS  # noqa: F401 — exported constant
+from src.models import SaleRecord
+from src.scorer import MARGINS
+from src.server.models_db import DailyListingSummary, ListingObservation
+
+logger = logging.getLogger(__name__)
+
+# Bucket size in minutes for fallback fingerprinting (no tradeId available)
+_BUCKET_MINUTES = 10
+
+
+def _utcnow() -> datetime:
+    """Return current UTC time as a naive datetime (consistent with DB storage)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _make_fingerprint(ea_id: int, entry: dict, first_seen_at: datetime) -> str:
+    """Build a deterministic fingerprint for a liveAuctions entry.
+
+    Strategy:
+    - If entry has 'tradeId': use ``{ea_id}:{tradeId}`` — globally unique auction ID.
+    - Fallback: use ``{ea_id}:{buyNowPrice}:{bucket}`` where bucket rounds
+      ``first_seen_at`` down to the nearest 10-minute window.
+
+    Args:
+        ea_id: Player EA ID.
+        entry: Raw liveAuctions dict from fut.gg.
+        first_seen_at: Timestamp when first seen (for bucket calculation).
+
+    Returns:
+        String fingerprint, at most 128 characters.
+    """
+    trade_id = entry.get("tradeId") or entry.get("id")
+    buy_now_price = entry.get("buyNowPrice", 0)
+
+    if trade_id is not None:
+        fp = f"{ea_id}:{trade_id}"
+    else:
+        # Round first_seen_at down to 10-minute bucket to group same listing seen
+        # in rapid successive scans without a tradeId
+        bucket_minutes = (first_seen_at.minute // _BUCKET_MINUTES) * _BUCKET_MINUTES
+        bucket = first_seen_at.strftime(f"%Y%m%d%H") + f"{bucket_minutes:02d}"
+        fp = f"{ea_id}:{buy_now_price}:{bucket}"
+
+    return fp[:128]
+
+
+def _is_op_listing(buy_now_price: int, market_price: int, margin_pct: int) -> bool:
+    """Check if a listing qualifies as OP at the given margin tier.
+
+    Args:
+        buy_now_price: The listing's Buy Now price.
+        market_price: Market reference price (current_lowest_bin) at observation time.
+        margin_pct: Margin percentage threshold (e.g. 40 for 40%).
+
+    Returns:
+        True if buy_now_price >= market_price * (1 + margin_pct / 100).
+    """
+    return buy_now_price >= int(market_price * (1 + margin_pct / 100.0))
+
+
+async def record_listings(
+    ea_id: int,
+    live_auctions_raw: list[dict],
+    current_lowest_bin: int,
+    completed_sales: list[SaleRecord],
+    session: AsyncSession,
+) -> dict:
+    """Record liveAuctions entries as ListingObservation rows with fingerprint dedup.
+
+    For each entry in ``live_auctions_raw``, builds a deterministic fingerprint and
+    upserts a ListingObservation row:
+    - INSERT: sets all fields, scan_count=1, outcome=None
+    - CONFLICT on fingerprint: updates last_seen_at and increments scan_count
+
+    Args:
+        ea_id: Player EA ID.
+        live_auctions_raw: List of raw liveAuctions dicts from fut.gg.
+        current_lowest_bin: Current market price (stored as market_price_at_obs).
+        completed_sales: Unused here; passed for API symmetry with resolve_outcomes.
+        session: Active AsyncSession.
+
+    Returns:
+        Dict with ``recorded`` (count) and ``fingerprints`` (list of fingerprint strings).
+    """
+    now = _utcnow()
+    fingerprints: list[str] = []
+
+    for entry in live_auctions_raw:
+        buy_now_price = entry.get("buyNowPrice", 0)
+        if not buy_now_price:
+            continue
+
+        fp = _make_fingerprint(ea_id, entry, now)
+        fingerprints.append(fp)
+
+        stmt = (
+            sqlite_insert(ListingObservation)
+            .values(
+                fingerprint=fp,
+                ea_id=ea_id,
+                buy_now_price=buy_now_price,
+                market_price_at_obs=current_lowest_bin,
+                first_seen_at=now,
+                last_seen_at=now,
+                scan_count=1,
+                outcome=None,
+                resolved_at=None,
+            )
+            .on_conflict_do_update(
+                index_elements=["fingerprint"],
+                set_=dict(
+                    last_seen_at=now,
+                    scan_count=ListingObservation.__table__.c.scan_count + 1,
+                ),
+            )
+        )
+        await session.execute(stmt)
+
+    return {"recorded": len(fingerprints), "fingerprints": fingerprints}
+
+
+async def resolve_outcomes(
+    ea_id: int,
+    current_fingerprints: list[str],
+    completed_sales: list[SaleRecord],
+    session: AsyncSession,
+) -> dict:
+    """Resolve outcomes for listings that have disappeared since last scan.
+
+    Identifies ListingObservation rows for ``ea_id`` that are unresolved and
+    whose fingerprint is no longer in the current scan (i.e., listing gone).
+    Groups by buy_now_price and assigns outcomes proportionally:
+    - First M listings marked "sold" (M = matching completed sales at that price)
+    - Remaining N-M listings marked "expired"
+
+    Args:
+        ea_id: Player EA ID.
+        current_fingerprints: Fingerprints still visible in latest scan.
+        completed_sales: List of SaleRecord from fut.gg completedAuctions.
+        session: Active AsyncSession.
+
+    Returns:
+        Dict with ``sold`` and ``expired`` counts.
+    """
+    now = _utcnow()
+
+    # Query unresolved observations not in current scan
+    stmt = select(ListingObservation).where(
+        ListingObservation.ea_id == ea_id,
+        ListingObservation.outcome.is_(None),
+        ListingObservation.fingerprint.not_in(current_fingerprints)
+        if current_fingerprints
+        else ListingObservation.fingerprint.isnot(None),
+    )
+    result = await session.execute(stmt)
+    disappeared = result.scalars().all()
+
+    if not disappeared:
+        return {"sold": 0, "expired": 0}
+
+    # Group by price
+    by_price: dict[int, list[ListingObservation]] = {}
+    for obs in disappeared:
+        by_price.setdefault(obs.buy_now_price, []).append(obs)
+
+    # Build sale counts per price from completedAuctions
+    sale_count_by_price: dict[int, int] = {}
+    for sale in completed_sales:
+        price = sale.sold_price
+        sale_count_by_price[price] = sale_count_by_price.get(price, 0) + 1
+
+    total_sold = 0
+    total_expired = 0
+
+    for price, obs_list in by_price.items():
+        matching_sales = sale_count_by_price.get(price, 0)
+        n_sold = min(matching_sales, len(obs_list))
+        n_expired = len(obs_list) - n_sold
+
+        for i, obs in enumerate(obs_list):
+            outcome = "sold" if i < n_sold else "expired"
+            obs.outcome = outcome
+            obs.resolved_at = now
+
+        total_sold += n_sold
+        total_expired += n_expired
+
+    return {"sold": total_sold, "expired": total_expired}
+
+
+async def aggregate_daily_summaries(
+    ea_id: int,
+    target_date: str,
+    session: AsyncSession,
+) -> int:
+    """Aggregate resolved ListingObservations into DailyListingSummary rows.
+
+    For each margin in MARGINS, counts OP listings (and sold/expired sub-counts)
+    among all resolved observations for ``ea_id`` on ``target_date``.
+    Upserts one DailyListingSummary row per (ea_id, date, margin_pct).
+
+    Args:
+        ea_id: Player EA ID.
+        target_date: Date string in YYYY-MM-DD format.
+        session: Active AsyncSession.
+
+    Returns:
+        Number of DailyListingSummary rows written.
+    """
+    # Parse date boundaries
+    day_start = datetime.strptime(target_date, "%Y-%m-%d")
+    day_end = datetime(day_start.year, day_start.month, day_start.day, 23, 59, 59)
+
+    # Fetch all resolved observations for this player on target_date
+    stmt = select(ListingObservation).where(
+        ListingObservation.ea_id == ea_id,
+        ListingObservation.outcome.isnot(None),
+        ListingObservation.first_seen_at >= day_start,
+        ListingObservation.first_seen_at <= day_end,
+    )
+    result = await session.execute(stmt)
+    observations = result.scalars().all()
+
+    total_listed = len(observations)
+    rows_written = 0
+
+    for margin_pct in MARGINS:
+        op_obs = [
+            obs for obs in observations
+            if _is_op_listing(obs.buy_now_price, obs.market_price_at_obs, margin_pct)
+        ]
+        op_listed = len(op_obs)
+        op_sold = sum(1 for obs in op_obs if obs.outcome == "sold")
+        op_expired = sum(1 for obs in op_obs if obs.outcome == "expired")
+
+        stmt = (
+            sqlite_insert(DailyListingSummary)
+            .values(
+                ea_id=ea_id,
+                date=target_date,
+                margin_pct=margin_pct,
+                op_listed_count=op_listed,
+                op_sold_count=op_sold,
+                op_expired_count=op_expired,
+                total_listed_count=total_listed,
+            )
+            .on_conflict_do_update(
+                index_elements=["id"],
+                set_=dict(
+                    op_listed_count=op_listed,
+                    op_sold_count=op_sold,
+                    op_expired_count=op_expired,
+                    total_listed_count=total_listed,
+                ),
+            )
+        )
+        await session.execute(stmt)
+        rows_written += 1
+
+    logger.debug(
+        f"aggregate_daily_summaries: ea_id={ea_id} date={target_date} "
+        f"obs={total_listed} margins={rows_written}"
+    )
+    return rows_written
