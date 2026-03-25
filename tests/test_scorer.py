@@ -129,3 +129,73 @@ def test_op_detection_uses_price_at_time():
     # And at lower margins: 30k * 1.03 = 30.9k > 28k
     # So no OP sales should be found
     assert result is None
+
+
+def test_picks_margin_maximizing_expected_profit():
+    """Scorer should pick the margin that maximizes expected_profit, not greedily the highest."""
+    from datetime import datetime, timezone, timedelta
+    from src.models import SaleRecord, PricePoint
+
+    # Create a player at price=20000 with 100 sales spread over 10 hours
+    md = make_player(
+        price=20000, num_sales=100, op_sales_pct=0.0, op_margin=0.40,
+        hours_of_data=10.0,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    # Rebuild sales manually:
+    # - 3 sales at 40% above market (28000+) -> also count as 8% OP sales
+    # - 37 sales at 8% above market (21600+) but below 40% (< 28000)
+    # - 60 normal sales at/below market price
+    sales = []
+    for i in range(60):
+        t = now - timedelta(hours=10.0 * (i / 100))
+        sales.append(SaleRecord(
+            resource_id=1, sold_at=t, sold_price=20000 - (i % 5) * 100,
+        ))
+    for i in range(37):
+        t = now - timedelta(hours=10.0 * ((60 + i) / 100))
+        # At 8%+ above market but below 40%: e.g. 22000 (10% above)
+        sales.append(SaleRecord(
+            resource_id=1, sold_at=t, sold_price=22000,
+        ))
+    for i in range(3):
+        t = now - timedelta(hours=10.0 * ((97 + i) / 100))
+        # At 40%+ above market: 28500
+        sales.append(SaleRecord(
+            resource_id=1, sold_at=t, sold_price=28500,
+        ))
+
+    md.sales = sales
+
+    # Stable price history at 20000
+    md.price_history = [
+        PricePoint(resource_id=1, recorded_at=now - timedelta(hours=h), lowest_bin=20000)
+        for h in range(11)
+    ]
+
+    result = score_player(md)
+    assert result is not None
+
+    # At 40%: 3 OP sales, ratio=0.03, sell=28000, net=28000-1400-20000=6600, expected=198
+    # At 8%: 40 OP sales (37+3), ratio=0.40, sell=21600, net=21600-1080-20000=520, expected=208
+    # 8% wins with higher expected_profit
+    assert result["margin_pct"] == 8, (
+        f"Expected margin 8% (expected_profit=208) but got {result['margin_pct']}% "
+        f"(expected_profit={result['expected_profit']})"
+    )
+
+
+def test_optimal_margin_still_picks_highest_when_it_wins():
+    """When highest margin has the best expected_profit, it should still be picked."""
+    # 10% OP sales all at 40% margin -> only 40% has OP sales, so 40% maximizes expected_profit
+    md = make_player(
+        price=15000, num_sales=100, op_sales_pct=0.10, op_margin=0.40,
+    )
+    result = score_player(md)
+    assert result is not None
+    # At 40%: 10 OP, ratio=0.10, sell=21000, net=21000-1050-15000=4950, expected=495
+    # At lower margins: same 10 OP count (sales above 40% also above lower margins),
+    # same ratio=0.10, but lower net_profit -> lower expected_profit
+    assert result["margin_pct"] == 40
