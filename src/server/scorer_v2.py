@@ -2,11 +2,14 @@
 OP sell scorer v2: listing-observation-based scoring.
 
 Reads accumulated ListingObservation rows for a player and computes
-expected_profit_per_hour using the D-10 formula:
-  expected_profit_per_hour = net_profit * op_sell_rate * op_sales_per_hour
+expected_profit_per_hour using the corrected formula:
+  expected_profit_per_hour = net_profit * sell_rate
 where:
-  op_sell_rate = OP listings that sold / total OP listings observed
-  op_sales_per_hour = OP sold count / hours of tracking data
+  sell_rate = op_sold / (op_sold + op_expired)
+
+The previous op_sales_per_hour multiplier penalised players with longer
+observation windows and has been removed. Sell-through probability alone
+determines the expected profit weight.
 
 Unlike the v1 scorer (which infers OP behaviour from completedAuctions
 snapshots), v2 operates on directly observed listing outcomes (sold/expired),
@@ -24,9 +27,9 @@ from src.config import (
     EA_TAX_RATE,
     LISTING_RETENTION_DAYS,
     BOOTSTRAP_MIN_OBSERVATIONS,
+    MARGINS,
     MIN_OP_OBSERVATIONS,
 )
-from src.scorer import MARGINS
 from src.server.models_db import ListingObservation
 
 logger = logging.getLogger(__name__)
@@ -41,8 +44,9 @@ async def score_player_v2(
     Score a player for OP selling using accumulated listing observation data.
 
     Reads resolved ListingObservation rows within the retention window and
-    applies the D-10 formula to compute expected_profit_per_hour for each
-    margin tier, returning the tier that maximises the metric.
+    evaluates each margin tier via ``expected_profit_per_hour = net_profit *
+    sell_rate`` (where sell_rate = op_sold / (op_sold + op_expired)), returning
+    the tier that maximises the metric.
 
     Args:
         ea_id: The player's EA numeric ID.
@@ -74,12 +78,7 @@ async def score_player_v2(
         )
         return None
 
-    # ── 3. Compute hours of tracking data ─────────────────────────────────────
-    earliest = min(obs.first_seen_at for obs in observations)
-    latest = max(obs.last_seen_at for obs in observations)
-    hours_of_data = max((latest - earliest).total_seconds() / 3600, 0.5)
-
-    # ── 4. Evaluate each margin tier ──────────────────────────────────────────
+    # ── 3. Evaluate each margin tier ──────────────────────────────────────────
     best_expected_profit_per_hour = -1.0
     best: dict | None = None
 
@@ -106,7 +105,6 @@ async def score_player_v2(
 
         # OP sell-through rate: sold / (sold + expired)
         op_sell_rate = op_sold / op_total
-        op_sales_per_hour = op_sold / hours_of_data
 
         sell_price = int(buy_price * (1 + margin))
         ea_tax = int(sell_price * EA_TAX_RATE)
@@ -115,7 +113,7 @@ async def score_player_v2(
         if net_profit <= 0:
             continue
 
-        expected_profit_per_hour = net_profit * op_sell_rate * op_sales_per_hour
+        expected_profit_per_hour = net_profit * op_sell_rate
 
         if expected_profit_per_hour > best_expected_profit_per_hour:
             best_expected_profit_per_hour = expected_profit_per_hour
@@ -128,10 +126,8 @@ async def score_player_v2(
                 "op_sold": op_sold,
                 "op_total": op_total,
                 "op_sell_rate": op_sell_rate,
-                "op_sales_per_hour": round(op_sales_per_hour, 4),
                 "expected_profit_per_hour": round(expected_profit_per_hour, 2),
                 "efficiency": round(expected_profit_per_hour / buy_price, 6),
-                "hours_of_data": round(hours_of_data, 1),
             }
 
     # ── 5. Return best margin result or None ──────────────────────────────────
