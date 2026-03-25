@@ -49,6 +49,8 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "position": record.position,
         "scan_tier": record.scan_tier,
         "last_scanned_at": record.last_scanned_at,
+        "expected_profit_per_hour": score.expected_profit_per_hour,
+        "scorer_version": score.scorer_version or "v1",
     }
 
 
@@ -130,6 +132,8 @@ async def get_portfolio(
             "last_scanned": (
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
+            "expected_profit_per_hour": round(entry["expected_profit_per_hour"], 2) if entry.get("expected_profit_per_hour") else None,
+            "scorer_version": entry.get("scorer_version", "v1"),
         })
 
     return {
