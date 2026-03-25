@@ -25,7 +25,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 ### Active
 
 - ✓ REST API exposing player details, score history, budget portfolio — Validated in Phase 2: Full API Surface
-- [ ] CLI thin client that queries the API (replaces direct scoring)
+- ✓ CLI thin client that queries the API (replaces direct scoring) — Validated in Phase 3: CLI as API Client
 - [ ] Chrome extension for EA Web App automation (buy, list, relist)
 - [ ] Profit tracking and performance analytics
 - [ ] Separate web dashboard for analytics and monitoring
@@ -45,6 +45,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Scoring approach: price-at-time verified OP detection across margin tiers (40% down to 3%), minimum 3 OP sales required
 - Phase 1 complete: persistent backend with FastAPI, SQLite WAL, APScheduler, circuit breaker, tier-based scanning
 - Phase 2 complete: full API surface — portfolio endpoint, player detail with trends, adaptive scan scheduling
+- Phase 3 complete: CLI rewritten as thin API client — queries backend for portfolio and player detail, no direct fut.gg calls
 - fut.gg updates hourly price history, so hourly scanning per player is the right cadence
 - Price range 11k–200k keeps the player pool manageable and focused on liquid cards
 - Architecture already has protocol-based abstraction — good foundation for adding persistence layer
@@ -64,7 +65,7 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 | Chrome extension for automation | Overlays on EA Web App, avoids reverse-engineering EA APIs | — Pending |
 | Python backend with FastAPI | Keeps existing scoring logic, adds API + scheduler naturally | Validated Phase 1 |
 | SQLite initially | Simple, no infrastructure needed for personal use, migrateable later | Validated Phase 1 |
-| CLI becomes API client | All logic on server (needs DB for proper scoring), CLI just displays results | — Pending |
+| CLI becomes API client | All logic on server (needs DB for proper scoring), CLI just displays results | Validated Phase 3 |
 | Hourly scan cadence | Matches fut.gg price history granularity, respects rate limits | — Pending |
 | 11k–200k price range | Focused on liquid, profitable cards; avoids scanning entire market | — Pending |
 
@@ -86,4 +87,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after Phase 1 completion*
+*Last updated: 2026-03-25 after Phase 3 completion*
