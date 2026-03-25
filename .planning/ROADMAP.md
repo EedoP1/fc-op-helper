@@ -58,7 +58,10 @@ Plans:
   1. `python -m src.main --budget 1000000` fetches and displays the portfolio from the API — no direct fut.gg calls happen from the CLI process
   2. `python -m src.main --player {id}` displays the detailed score breakdown returned by the API, matching the server-side calculation
   3. Running the CLI when the server is offline produces a clear error message identifying the backend as unreachable, not a Python traceback
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 03-01-PLAN.md — Rewrite CLI as thin API client: portfolio display via /api/v1/portfolio, player detail via /api/v1/players/{ea_id}, offline error handling
 
 ## Progress
 
@@ -69,4 +72,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Persistent Scanner | 3/3 | Complete   | 2026-03-25 |
 | 2. Full API Surface | 0/2 | In progress | - |
-| 3. CLI as API Client | 0/? | Not started | - |
+| 3. CLI as API Client | 0/1 | Not started | - |
