@@ -7,9 +7,7 @@ EA_TAX_RATE = 0.05
 TARGET_PLAYER_COUNT = 100
 
 # Scanner scheduling intervals (seconds)
-SCAN_INTERVAL_HOT = 30 * 60       # 30 minutes
-SCAN_INTERVAL_NORMAL = 60 * 60    # 1 hour
-SCAN_INTERVAL_COLD = int(2.5 * 3600)  # 2.5 hours
+DEFAULT_SCAN_INTERVAL_SECONDS = 3360  # 56 minutes (60min - LISTING_SCAN_BUFFER_SECONDS)
 STALE_THRESHOLD_HOURS = 4         # per D-12: stale after 4 hours
 
 # Circuit breaker
@@ -28,13 +26,6 @@ INITIAL_SCORING_BATCH_SIZE = 50   # players per batch to avoid overwhelming even
 # Price range for scanner discovery
 SCANNER_MIN_PRICE = 11_000
 SCANNER_MAX_PRICE = 200_000
-
-# Tier promotion thresholds
-TIER_PROFIT_THRESHOLD = 500       # expected_profit above this promotes to "hot" regardless of activity (per API-04)
-
-# Adaptive scheduling (per-player interval adjustment within tiers)
-ADAPTIVE_CHANGE_THRESHOLD = 0.25     # 25% change in sales_per_hour triggers interval shortening
-ADAPTIVE_MIN_INTERVAL_SECONDS = 300  # 5-minute floor for adaptive intervals
 
 # Market data retention
 MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
