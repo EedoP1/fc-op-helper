@@ -1,6 +1,7 @@
 """Integration test: CLI as API client with mocked HTTP responses."""
 
 import json
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import httpx
@@ -99,3 +100,90 @@ def test_pipeline_csv_contains_all_players():
 
     assert len(rows) == 10
     assert all("Player" in r and "Buy" in r for r in rows)
+
+
+# ── V2 scorer integration test ────────────────────────────────────────────────
+
+async def test_v2_scorer_writes_score():
+    """Integration: scan_player with enough listing data produces v2 score.
+
+    Seeds enough resolved ListingObservation rows to exceed BOOTSTRAP_MIN_OBSERVATIONS,
+    then calls scan_player and asserts the written PlayerScore has v2 fields populated.
+    """
+    from src.server.db import create_engine_and_tables
+    from src.server.models_db import PlayerRecord, PlayerScore, ListingObservation
+    from src.server.scanner import ScannerService
+    from src.server.circuit_breaker import CircuitBreaker
+    from src.config import BOOTSTRAP_MIN_OBSERVATIONS, MIN_OP_OBSERVATIONS
+    from tests.mock_client import make_player
+    from sqlalchemy import select
+
+    engine, session_factory = await create_engine_and_tables("sqlite+aiosqlite:///:memory:")
+    try:
+        ea_id = 9001
+        buy_price = 20000
+        op_sell_price = int(buy_price * 1.20)  # 20% above market
+        now = datetime.utcnow()
+
+        # Seed PlayerRecord
+        async with session_factory() as session:
+            session.add(PlayerRecord(
+                ea_id=ea_id, name="V2 Test Player", rating=88, position="ST",
+                nation="Brazil", league="LaLiga", club="Real Madrid", card_type="gold",
+                scan_tier="normal", is_active=True, listing_count=25, sales_per_hour=10.0,
+            ))
+            await session.commit()
+
+        # Seed enough resolved ListingObservations to exceed BOOTSTRAP_MIN_OBSERVATIONS
+        # Use 15 observations: 10 OP sold, 5 OP expired (all at 20% above market)
+        n_obs = max(BOOTSTRAP_MIN_OBSERVATIONS + 5, MIN_OP_OBSERVATIONS + 12)
+        async with session_factory() as session:
+            for i in range(n_obs):
+                hours_ago = i + 1
+                outcome = "sold" if i < (n_obs * 2 // 3) else "expired"
+                session.add(ListingObservation(
+                    fingerprint=f"v2test:{ea_id}:{i}",
+                    ea_id=ea_id,
+                    buy_now_price=op_sell_price,
+                    market_price_at_obs=buy_price,
+                    first_seen_at=now - timedelta(hours=hours_ago + 1),
+                    last_seen_at=now - timedelta(hours=hours_ago),
+                    scan_count=1,
+                    outcome=outcome,
+                    resolved_at=now - timedelta(hours=hours_ago),
+                ))
+            await session.commit()
+
+        # Set up scanner with mock client
+        # Use parameters that satisfy v1 scorer: >=7 sales/hr, >=3 OP sales, >=20 listings
+        # 100 sales over 10 hours = 10 sales/hr, 15% OP rate = 15 OP sales at 40% margin
+        cb = CircuitBreaker(failure_threshold=5, success_threshold=2, recovery_timeout=60.0)
+        svc = ScannerService(session_factory=session_factory, circuit_breaker=cb)
+        market_data = make_player(
+            ea_id=ea_id, price=buy_price, num_sales=100, num_listings=25,
+            op_sales_pct=0.15, op_margin=0.40, hours_of_data=10.0,
+        )
+        mock_client = AsyncMock()
+        mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+        svc._client = mock_client
+
+        await svc.scan_player(ea_id)
+
+        async with session_factory() as session:
+            result = await session.execute(
+                select(PlayerScore)
+                .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
+                .order_by(PlayerScore.scored_at.desc())
+                .limit(1)
+            )
+            score_row = result.scalars().first()
+
+        assert score_row is not None, "Expected a viable PlayerScore row"
+        assert score_row.expected_profit_per_hour is not None, (
+            "Expected expected_profit_per_hour to be populated by v2 scorer"
+        )
+        assert score_row.scorer_version == "v2", (
+            f"Expected scorer_version='v2', got '{score_row.scorer_version}'"
+        )
+    finally:
+        await engine.dispose()

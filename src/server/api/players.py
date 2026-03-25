@@ -94,6 +94,8 @@ async def get_top_players(
                 "scan_tier": player.scan_tier,
                 "rating": player.rating,
                 "position": player.position,
+                "expected_profit_per_hour": round(score.expected_profit_per_hour, 2) if score.expected_profit_per_hour else None,
+                "scorer_version": score.scorer_version or "v1",
             }
         )
 
@@ -204,6 +206,8 @@ async def get_player(request: Request, ea_id: int):
             "efficiency": round(latest.efficiency, 4),
             "sales_per_hour": latest.sales_per_hour,
             "scored_at": latest.scored_at.isoformat(),
+            "expected_profit_per_hour": round(latest.expected_profit_per_hour, 2) if latest.expected_profit_per_hour else None,
+            "scorer_version": latest.scorer_version or "v1",
         } if latest else None,
         "score_history": [
             {
@@ -213,6 +217,7 @@ async def get_player(request: Request, ea_id: int):
                 "expected_profit": round(s.expected_profit, 1),
                 "op_ratio": round(s.op_ratio, 3),
                 "is_viable": s.is_viable,
+                "expected_profit_per_hour": round(s.expected_profit_per_hour, 2) if s.expected_profit_per_hour else None,
             }
             for s in history_rows
         ],
