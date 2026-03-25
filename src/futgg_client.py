@@ -115,13 +115,15 @@ class FutGGClient:
         if not current_bin:
             return None
 
+        raw_auctions = prices.get("liveAuctions", [])
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
-            listing_count=len(prices.get("liveAuctions", [])),
+            listing_count=len(raw_auctions),
             price_history=self._parse_price_history(ea_id, prices),
             sales=self._parse_sales(ea_id, prices),
-            live_auction_prices=[a["buyNowPrice"] for a in prices.get("liveAuctions", [])],
+            live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
+            live_auctions_raw=raw_auctions,  # preserve all fields for fingerprinting (D-04)
         )
 
     async def get_batch_market_data(
@@ -259,6 +261,19 @@ class FutGGClient:
             except Exception:
                 continue
         return sales
+
+    @staticmethod
+    def log_live_auction_fields(raw_auctions: list[dict]) -> list[str]:
+        """Log available fields in liveAuctions entries for fingerprint strategy selection.
+
+        Called once during first scan to discover available fields.
+        Returns list of field names found.
+        """
+        if not raw_auctions:
+            return []
+        fields = sorted(raw_auctions[0].keys())
+        logger.info(f"liveAuctions fields discovered: {fields}")
+        return fields
 
     def _build_player(self, defn: dict) -> Player:
         """Build a Player model from a card definition response."""

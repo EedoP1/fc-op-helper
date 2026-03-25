@@ -48,3 +48,4 @@ class PlayerMarketData(BaseModel):
     price_history: list[PricePoint]
     sales: list[SaleRecord]
     live_auction_prices: list[int] = []
+    live_auctions_raw: list[dict] = []  # Full liveAuctions entries with all fields preserved
