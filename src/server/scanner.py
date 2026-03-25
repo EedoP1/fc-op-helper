@@ -20,17 +20,12 @@ from tenacity import (
 )
 
 from src.config import (
-    SCAN_INTERVAL_HOT,
-    SCAN_INTERVAL_NORMAL,
-    SCAN_INTERVAL_COLD,
+    DEFAULT_SCAN_INTERVAL_SECONDS,
     SCAN_CONCURRENCY,
     SCANNER_MIN_PRICE,
     SCANNER_MAX_PRICE,
-    TIER_PROFIT_THRESHOLD,
     INITIAL_SCORING_CONCURRENCY,
     INITIAL_SCORING_BATCH_SIZE,
-    ADAPTIVE_CHANGE_THRESHOLD,
-    ADAPTIVE_MIN_INTERVAL_SECONDS,
     MARKET_DATA_RETENTION_DAYS,
     LISTING_SCAN_BUFFER_SECONDS,
     LISTING_RETENTION_DAYS,
@@ -114,7 +109,7 @@ class ScannerService:
                 league="",
                 club="",
                 card_type="",
-                scan_tier="normal",
+                scan_tier="",
                 next_scan_at=now,
                 is_active=True,
                 listing_count=0,
@@ -228,7 +223,7 @@ class ScannerService:
                     league="",
                     club="",
                     card_type="",
-                    scan_tier="normal",
+                    scan_tier="",
                     next_scan_at=now,
                     is_active=True,
                     listing_count=0,
@@ -250,7 +245,6 @@ class ScannerService:
                 all_active = result.scalars().all()
                 for record in all_active:
                     if record.ea_id not in discovered_ids:
-                        record.scan_tier = "cold"
                         record.next_scan_at = far_future
 
             await session.commit()
@@ -412,37 +406,7 @@ class ScannerService:
 
         self.last_scan_at = datetime.utcnow()
 
-    # ── Tier classification ───────────────────────────────────────────────────
-
-    def _classify_tier(
-        self,
-        listing_count: int,
-        sales_per_hour: float,
-        last_expected_profit: float = 0.0,
-    ) -> str:
-        """Classify a player into hot/normal/cold scan tier.
-
-        Per D-05, D-06, and API-04:
-        - High-value players (profit >= threshold) are always hot regardless of activity.
-        - High-activity players (many listings or fast sales) are hot.
-        - Moderate-activity players are normal.
-        - Low-activity players are cold.
-
-        Args:
-            listing_count: Current number of live listings.
-            sales_per_hour: Sales velocity over recent history.
-            last_expected_profit: Most recent expected_profit from scorer.
-
-        Returns:
-            One of "hot", "normal", or "cold".
-        """
-        if last_expected_profit >= TIER_PROFIT_THRESHOLD:
-            return "hot"
-        if listing_count >= 50 or sales_per_hour >= 15:
-            return "hot"
-        if listing_count >= 20 or sales_per_hour >= 7:
-            return "normal"
-        return "cold"
+    # ── Scheduling ────────────────────────────────────────────────────────────
 
     async def _classify_and_schedule(
         self,
@@ -453,85 +417,51 @@ class ScannerService:
         session,
         live_auctions_raw: list[dict] | None = None,
     ) -> None:
-        """Update PlayerRecord with new tier and next_scan_at.
+        """Schedule next scan based on listing expiry times (D-05).
 
-        Applies adaptive scheduling: if sales_per_hour changed by more than
-        ADAPTIVE_CHANGE_THRESHOLD (25%) compared to the previous scan, the
-        interval is halved (floored at ADAPTIVE_MIN_INTERVAL_SECONDS).
-
-        Also applies listing-based adaptive timing (D-05, D-06): if
-        live_auctions_raw is provided, the youngest listing expiry time is used
-        to schedule the next scan just before it expires.
+        From all live auction remaining times, pick the max remaining time
+        under 60 minutes, subtract LISTING_SCAN_BUFFER_SECONDS, and use that
+        as next_scan_at. If no listing has <60min remaining, default to
+        DEFAULT_SCAN_INTERVAL_SECONDS (56 minutes).
 
         Args:
             ea_id: Player EA ID.
-            listing_count: Current live listing count.
-            sales_per_hour: Sales velocity.
-            last_expected_profit: Most recent expected profit for value-based promotion.
+            listing_count: Current live listing count (unused, kept for call-site compat).
+            sales_per_hour: Sales velocity (unused, kept for call-site compat).
+            last_expected_profit: Most recent expected profit (unused, kept for call-site compat).
             session: Active AsyncSession (will be committed here).
-            live_auctions_raw: Raw liveAuctions entries for adaptive timing (optional).
+            live_auctions_raw: Raw liveAuctions entries for expiry timing (optional).
         """
-        tier = self._classify_tier(listing_count, sales_per_hour, last_expected_profit)
-        interval_map = {
-            "hot": SCAN_INTERVAL_HOT,
-            "normal": SCAN_INTERVAL_NORMAL,
-            "cold": SCAN_INTERVAL_COLD,
-        }
-        base_interval = interval_map[tier]
+        interval = DEFAULT_SCAN_INTERVAL_SECONDS
 
-        # Adaptive adjustment: compare current activity to previous scan (D-10)
-        interval = base_interval
-        prev_result = await session.execute(
-            select(PlayerScore)
-            .where(PlayerScore.ea_id == ea_id, PlayerScore.is_viable == True)  # noqa: E712
-            .order_by(PlayerScore.scored_at.desc())
-            .offset(1)  # skip the score just written in this scan cycle
-            .limit(1)
-        )
-        prev = prev_result.scalars().first()
-
-        if prev is not None and prev.sales_per_hour > 0:
-            delta = abs(sales_per_hour - prev.sales_per_hour) / prev.sales_per_hour
-            if delta >= ADAPTIVE_CHANGE_THRESHOLD:
-                interval = max(base_interval // 2, ADAPTIVE_MIN_INTERVAL_SECONDS)
-
-        # Adaptive listing-based timing (D-05, D-06)
         if live_auctions_raw:
-            remaining_times = []
+            remaining_under_60 = []
             for auction in live_auctions_raw:
-                # Check for expiresOn/remainingTime fields (D-04 discovery)
                 expires = auction.get("expiresOn") or auction.get("expires")
                 if expires:
                     try:
                         expiry_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
-                        # expiry_dt is tz-aware after parsing; use tz-aware now for comparison
-                        from datetime import timezone as _tz
-                        now_utc = datetime.now(_tz.utc)
+                        now_utc = datetime.now(timezone.utc)
                         remaining = (expiry_dt - now_utc).total_seconds()
-                        if remaining > 0:
-                            remaining_times.append(remaining)
+                        if 0 < remaining < 3600:  # under 60 minutes
+                            remaining_under_60.append(remaining)
                     except (ValueError, TypeError):
                         pass
                 else:
-                    # Try remainingTime (seconds) field
                     rem = auction.get("remainingTime") or auction.get("timeRemaining")
-                    if rem and isinstance(rem, (int, float)) and rem > 0:
-                        remaining_times.append(float(rem))
+                    if rem and isinstance(rem, (int, float)) and 0 < rem < 3600:
+                        remaining_under_60.append(float(rem))
 
-            if remaining_times:
-                youngest_remaining = min(remaining_times)
-                listing_interval = max(
-                    int(youngest_remaining - LISTING_SCAN_BUFFER_SECONDS),
-                    ADAPTIVE_MIN_INTERVAL_SECONDS,
-                )
-                interval = min(interval, listing_interval)  # use the shorter of tier vs listing timing
+            if remaining_under_60:
+                max_remaining = max(remaining_under_60)
+                interval = max(int(max_remaining - LISTING_SCAN_BUFFER_SECONDS), 60)  # floor at 60s
 
         next_scan = datetime.utcnow() + timedelta(seconds=interval)
 
         record = await session.get(PlayerRecord, ea_id)
         if record is not None:
-            record.scan_tier = tier
             record.next_scan_at = next_scan
+            # Stop writing scan_tier — column stays in DB but is no longer updated
 
         await session.commit()
 
