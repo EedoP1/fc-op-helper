@@ -13,10 +13,9 @@ from src.server.models_db import (
 )
 from src.server.circuit_breaker import CircuitBreaker, CBState
 from src.config import (
-    DEFAULT_SCAN_INTERVAL_SECONDS,
+    SCAN_INTERVAL_SECONDS,
     MARKET_DATA_RETENTION_DAYS,
     LISTING_RETENTION_DAYS,
-    LISTING_SCAN_BUFFER_SECONDS,
 )
 from tests.mock_client import make_player
 
@@ -393,111 +392,43 @@ async def test_cleanup_preserves_recent_snapshots(scanner):
     assert len(snaps) == 3, f"Expected 3 snapshots preserved, got {len(snaps)}"
 
 
-# ── Expiry-based scheduling tests ────────────────────────────────────────────
+# ── Fixed scan interval test ──────────────────────────────────────────────────
 
-async def test_expiry_based_scheduling_uses_max_under_60min(scanner):
-    """Test 21: _classify_and_schedule picks max(remaining under 60min) minus buffer.
-
-    With auctions expiring in 30min and 50min (both under 60min), the interval
-    should be based on the 50min one (max), minus 4min buffer = 46min = 2760s.
-    """
-    svc, session_factory, _ = scanner
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 5001, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1,
+    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
+})
+async def test_fixed_5min_scan_interval(mock_v2, scanner):
+    """Test 21: scan_player schedules next_scan_at at exactly SCAN_INTERVAL_SECONDS (300s) from now."""
+    svc, session_factory, mock_client = scanner
     now = datetime.utcnow()
+
+    market_data = make_player(
+        ea_id=5001, name="Fixed Interval", price=20000, num_sales=50, num_listings=25,
+    )
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
 
     async with session_factory() as session:
         session.add(PlayerRecord(
-            ea_id=4001, name="Expiry Scheduling", rating=85, position="ST",
+            ea_id=5001, name="Fixed Interval", rating=85, position="ST",
             nation="England", league="EPL", club="Arsenal", card_type="gold",
             last_scanned_at=now, is_active=True,
             listing_count=25, sales_per_hour=10.0,
         ))
         await session.commit()
 
-    # Two auctions under 60 minutes: 30min and 50min
-    expires_30 = (datetime.utcnow() + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    expires_50 = (datetime.utcnow() + timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    live_auctions_raw = [
-        {"buyNowPrice": 20000, "expiresOn": expires_30},
-        {"buyNowPrice": 25000, "expiresOn": expires_50},
-    ]
+    await svc.scan_player(5001)
 
     async with session_factory() as session:
-        await svc._classify_and_schedule(
-            4001, 25, 10.0, 200.0, session,
-            live_auctions_raw=live_auctions_raw,
-        )
+        record = await session.get(PlayerRecord, 5001)
 
-    async with session_factory() as session:
-        record = await session.get(PlayerRecord, 4001)
-
-    # Expected: max(30min, 50min) - 4min buffer = 46min = 2760s (floor at 60s)
-    expected_interval = max(int(50 * 60 - LISTING_SCAN_BUFFER_SECONDS), 60)
+    assert record is not None, "PlayerRecord should exist after scan"
+    assert record.next_scan_at is not None, "next_scan_at should be set"
     actual_delta = (record.next_scan_at - now).total_seconds()
-    assert abs(actual_delta - expected_interval) < 10, (
-        f"Expected ~{expected_interval}s interval from max expiry, got {actual_delta:.0f}s"
-    )
-
-
-async def test_expiry_scheduling_defaults_when_no_listing_under_60min(scanner):
-    """Test 22b: _classify_and_schedule uses DEFAULT_SCAN_INTERVAL_SECONDS when no listing < 60min.
-
-    With one auction expiring in 90 minutes (over 60min threshold), the interval
-    should fall back to DEFAULT_SCAN_INTERVAL_SECONDS (3360s = 56min).
-    """
-    svc, session_factory, _ = scanner
-    now = datetime.utcnow()
-
-    async with session_factory() as session:
-        session.add(PlayerRecord(
-            ea_id=4002, name="No Short Expiry", rating=82, position="CM",
-            nation="Spain", league="LaLiga", club="Barcelona", card_type="gold",
-            last_scanned_at=now, is_active=True,
-            listing_count=20, sales_per_hour=5.0,
-        ))
-        await session.commit()
-
-    # Only one auction expiring in 90 minutes — over the 60min threshold
-    expires_90 = (datetime.utcnow() + timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    live_auctions_raw = [{"buyNowPrice": 20000, "expiresOn": expires_90}]
-
-    async with session_factory() as session:
-        await svc._classify_and_schedule(
-            4002, 20, 5.0, 0.0, session,
-            live_auctions_raw=live_auctions_raw,
-        )
-
-    async with session_factory() as session:
-        record = await session.get(PlayerRecord, 4002)
-
-    actual_delta = (record.next_scan_at - now).total_seconds()
-    assert abs(actual_delta - DEFAULT_SCAN_INTERVAL_SECONDS) < 10, (
-        f"Expected ~{DEFAULT_SCAN_INTERVAL_SECONDS}s default interval, got {actual_delta:.0f}s"
-    )
-
-
-async def test_expiry_scheduling_no_auctions_uses_default(scanner):
-    """Test 22c: _classify_and_schedule uses DEFAULT_SCAN_INTERVAL_SECONDS when live_auctions_raw=None."""
-    svc, session_factory, _ = scanner
-    now = datetime.utcnow()
-
-    async with session_factory() as session:
-        session.add(PlayerRecord(
-            ea_id=4003, name="No Auctions", rating=80, position="GK",
-            nation="Germany", league="Bundesliga", club="Bayern", card_type="gold",
-            last_scanned_at=now, is_active=True,
-            listing_count=0, sales_per_hour=0.0,
-        ))
-        await session.commit()
-
-    async with session_factory() as session:
-        await svc._classify_and_schedule(4003, 0, 0.0, 0.0, session, live_auctions_raw=None)
-
-    async with session_factory() as session:
-        record = await session.get(PlayerRecord, 4003)
-
-    actual_delta = (record.next_scan_at - now).total_seconds()
-    assert abs(actual_delta - DEFAULT_SCAN_INTERVAL_SECONDS) < 10, (
-        f"Expected ~{DEFAULT_SCAN_INTERVAL_SECONDS}s default interval, got {actual_delta:.0f}s"
+    assert abs(actual_delta - SCAN_INTERVAL_SECONDS) < 10, (
+        f"Expected ~{SCAN_INTERVAL_SECONDS}s fixed interval, got {actual_delta:.0f}s"
     )
 
 

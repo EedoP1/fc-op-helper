@@ -7,7 +7,7 @@ EA_TAX_RATE = 0.05
 TARGET_PLAYER_COUNT = 100
 
 # Scanner scheduling intervals (seconds)
-DEFAULT_SCAN_INTERVAL_SECONDS = 3360  # 56 minutes (60min - LISTING_SCAN_BUFFER_SECONDS)
+SCAN_INTERVAL_SECONDS = 300       # 5-minute fixed scan interval
 STALE_THRESHOLD_HOURS = 4         # per D-12: stale after 4 hours
 
 # Circuit breaker
@@ -33,7 +33,6 @@ MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
 # Listing tracking
 LISTING_RETENTION_DAYS = 7            # days to keep individual listing observations (per D-12)
 BOOTSTRAP_MIN_OBSERVATIONS = 10       # min resolved listings before v2 scorer activates per player
-LISTING_SCAN_BUFFER_SECONDS = 240     # 4-minute safety buffer before youngest listing expiry (per D-06)
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
