@@ -28,6 +28,8 @@ PORTFOLIO_DATA = {
             "position": "ST", "price": 15000 + i * 1000,
             "margin_pct": 10, "op_ratio": 0.12,
             "expected_profit": 450.0 + i * 10, "efficiency": 0.03,
+            "op_sales": 3 + i, "total_sales": 20 + i,
+            "expected_profit_per_hour": 450.0 + i * 10,
             "scan_tier": "hot", "is_stale": False,
             "last_scanned": "2026-03-25T14:00:00",
         }
