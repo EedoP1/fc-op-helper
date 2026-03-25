@@ -91,10 +91,11 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260325-pki | Speed up initial server heating to under 5 minutes for all player data loading | 2026-03-25 | 065d4ac | [260325-pki-speed-up-initial-server-heating-to-under](./quick/260325-pki-speed-up-initial-server-heating-to-under/) |
 | 260325-tu9 | Retain raw market data per player for 1 month (snapshots, sales, price history) | 2026-03-25 | 4229a2d | [260325-tu9-retain-raw-market-data-per-player-for-1-](./quick/260325-tu9-retain-raw-market-data-per-player-for-1-/) |
+| 260325-v54 | Improve scorer to pick margin maximizing expected_profit instead of greedy-highest | 2026-03-25 | ec95d2c | [260325-v54-improve-scorer-to-produce-more-optimal-p](./quick/260325-v54-improve-scorer-to-produce-more-optimal-p/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-25
 Last session: 2026-03-25T20:08:05.147Z
-Stopped at: Completed 03-01-PLAN.md (CLI as API client)
+Stopped at: Completed quick task 260325-v54
 Resume file: None
