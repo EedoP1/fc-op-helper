@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Persistent Scanner** - FastAPI app with SQLite, APScheduler hourly scanning, rate-limit-safe 24/7 operation, and the top-players endpoint (completed 2026-03-25)
 - [ ] **Phase 2: Full API Surface** - Budget portfolio endpoint, per-player detail endpoint, adaptive scheduling, and historical score accumulation
-- [ ] **Phase 3: CLI as API Client** - Refactor CLI to query the API instead of scoring directly; expose portfolio, player detail, and scan coverage via terminal
+- [x] **Phase 3: CLI as API Client** - Refactor CLI to query the API instead of scoring directly; expose portfolio, player detail, and scan coverage via terminal (completed 2026-03-25)
 
 ## Phase Details
 
@@ -61,7 +61,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 03-01-PLAN.md — Rewrite CLI as thin API client: portfolio display via /api/v1/portfolio, player detail via /api/v1/players/{ea_id}, offline error handling
+- [x] 03-01-PLAN.md — Rewrite CLI as thin API client: portfolio display via /api/v1/portfolio, player detail via /api/v1/players/{ea_id}, offline error handling
 
 ## Progress
 
@@ -72,4 +72,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Persistent Scanner | 3/3 | Complete   | 2026-03-25 |
 | 2. Full API Surface | 0/2 | In progress | - |
-| 3. CLI as API Client | 0/1 | Not started | - |
+| 3. CLI as API Client | 1/1 | Complete   | 2026-03-25 |
