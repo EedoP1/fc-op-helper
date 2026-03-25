@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -25,6 +26,8 @@ from src.config import (
     SCANNER_MIN_PRICE,
     SCANNER_MAX_PRICE,
     TIER_PROFIT_THRESHOLD,
+    INITIAL_SCORING_CONCURRENCY,
+    INITIAL_SCORING_BATCH_SIZE,
 )
 from src.futgg_client import FutGGClient
 from src.scorer import score_player
@@ -76,43 +79,117 @@ class ScannerService:
 
         Upserts PlayerRecord rows with scan_tier='normal' and next_scan_at=now
         so the dispatch loop picks them up immediately.
+
+        Uses batched DB writes (chunks of 200) to reduce round-trips vs the
+        previous one-insert-per-player approach.
         """
+        t_discovery = time.monotonic()
         players = await self._client.discover_players(
             budget=SCANNER_MAX_PRICE,
             min_price=SCANNER_MIN_PRICE,
             max_price=SCANNER_MAX_PRICE,
         )
-        logger.info(f"Bootstrap discovered {len(players)} players")
+        discovery_elapsed = time.monotonic() - t_discovery
+        logger.info(
+            f"Bootstrap discovered {len(players)} players in {discovery_elapsed:.1f}s"
+        )
         now = datetime.utcnow()
 
+        # Build values list for bulk upsert
+        values_list = [
+            dict(
+                ea_id=p["ea_id"],
+                name=str(p["ea_id"]),
+                rating=0,
+                position="UNK",
+                nation="",
+                league="",
+                club="",
+                card_type="",
+                scan_tier="normal",
+                next_scan_at=now,
+                is_active=True,
+                listing_count=0,
+                sales_per_hour=0.0,
+            )
+            for p in players
+        ]
+
+        t_db = time.monotonic()
+        chunk_size = 200
         async with self._session_factory() as session:
-            for p in players:
-                ea_id = p["ea_id"]
-                stmt = sqlite_insert(PlayerRecord).values(
-                    ea_id=ea_id,
-                    name=str(ea_id),
-                    rating=0,
-                    position="UNK",
-                    nation="",
-                    league="",
-                    club="",
-                    card_type="",
-                    scan_tier="normal",
-                    next_scan_at=now,
-                    is_active=True,
-                    listing_count=0,
-                    sales_per_hour=0.0,
+            for i in range(0, len(values_list), chunk_size):
+                chunk = values_list[i : i + chunk_size]
+                for row in chunk:
+                    stmt = sqlite_insert(PlayerRecord).values(**row)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["ea_id"],
+                        set_=dict(
+                            is_active=True,
+                            next_scan_at=now,
+                        ),
+                    )
+                    await session.execute(stmt)
+                await session.commit()
+        db_elapsed = time.monotonic() - t_db
+        logger.info(
+            f"Bootstrap upserted {len(players)} PlayerRecord rows in {db_elapsed:.1f}s"
+        )
+
+    async def run_initial_scoring(self) -> None:
+        """Score all unscored active players with elevated concurrency.
+
+        Called once after bootstrap. Uses INITIAL_SCORING_CONCURRENCY (10)
+        instead of normal SCAN_CONCURRENCY (5) to complete faster.
+        Processes players in batches of INITIAL_SCORING_BATCH_SIZE to avoid
+        overwhelming the event loop.
+        """
+        start = time.monotonic()
+
+        async with self._session_factory() as session:
+            stmt = (
+                select(PlayerRecord.ea_id)
+                .where(
+                    PlayerRecord.is_active == True,  # noqa: E712
+                    PlayerRecord.last_scanned_at == None,  # noqa: E711
                 )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["ea_id"],
-                    set_=dict(
-                        is_active=True,
-                        next_scan_at=now,
-                    ),
-                )
-                await session.execute(stmt)
-            await session.commit()
-        logger.info(f"Bootstrap upserted {len(players)} PlayerRecord rows")
+                .order_by(PlayerRecord.ea_id)
+            )
+            result = await session.execute(stmt)
+            unscored_ids = [row[0] for row in result.all()]
+
+        total = len(unscored_ids)
+        logger.info(f"Initial scoring: {total} unscored players")
+
+        semaphore = asyncio.Semaphore(INITIAL_SCORING_CONCURRENCY)
+        scored = 0
+
+        async def _scan_with_sem(ea_id: int) -> None:
+            nonlocal scored
+            async with semaphore:
+                await self.scan_player(ea_id)
+                scored += 1
+                if scored % 100 == 0:
+                    logger.info(f"Initial scoring progress: {scored}/{total}")
+
+        # Process in batches to avoid creating thousands of tasks at once
+        for i in range(0, total, INITIAL_SCORING_BATCH_SIZE):
+            batch = unscored_ids[i : i + INITIAL_SCORING_BATCH_SIZE]
+            tasks = [asyncio.create_task(_scan_with_sem(eid)) for eid in batch]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        elapsed = time.monotonic() - start
+        logger.info(
+            f"Initial scoring complete: {scored}/{total} players in {elapsed:.1f}s"
+        )
+
+    async def run_bootstrap_and_score(self) -> None:
+        """Run bootstrap discovery then immediately score all discovered players.
+
+        Single method for startup chaining — called as one-shot job.
+        """
+        await self.run_bootstrap()
+        await self.run_initial_scoring()
 
     async def run_discovery(self) -> None:
         """Periodic rediscovery: upsert new players and deactivate removed ones.
