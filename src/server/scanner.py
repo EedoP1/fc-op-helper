@@ -20,14 +20,13 @@ from tenacity import (
 )
 
 from src.config import (
-    DEFAULT_SCAN_INTERVAL_SECONDS,
+    SCAN_INTERVAL_SECONDS,
     SCAN_CONCURRENCY,
     SCANNER_MIN_PRICE,
     SCANNER_MAX_PRICE,
     INITIAL_SCORING_CONCURRENCY,
     INITIAL_SCORING_BATCH_SIZE,
     MARKET_DATA_RETENTION_DAYS,
-    LISTING_SCAN_BUFFER_SECONDS,
     LISTING_RETENTION_DAYS,
 )
 from src.futgg_client import FutGGClient
@@ -386,78 +385,13 @@ class ScannerService:
                     if v2_result is not None:
                         record.sales_per_hour = 0.0
 
-            await session.flush()
+            # Schedule next scan at fixed 5-minute interval
+            if record is not None:
+                record.next_scan_at = datetime.utcnow() + timedelta(seconds=SCAN_INTERVAL_SECONDS)
 
-            # Classify tier and schedule next scan
-            listing_count = record.listing_count if record is not None else 0
-            sales_per_hour = record.sales_per_hour if record is not None else 0.0
-            last_expected_profit = v2_result["expected_profit_per_hour"] if v2_result is not None else 0.0
-
-            await self._classify_and_schedule(
-                ea_id, listing_count, sales_per_hour, last_expected_profit, session,
-                live_auctions_raw=market_data.live_auctions_raw if market_data else None,
-            )
+            await session.commit()
 
         self.last_scan_at = datetime.utcnow()
-
-    # ── Scheduling ────────────────────────────────────────────────────────────
-
-    async def _classify_and_schedule(
-        self,
-        ea_id: int,
-        listing_count: int,
-        sales_per_hour: float,
-        last_expected_profit: float,
-        session,
-        live_auctions_raw: list[dict] | None = None,
-    ) -> None:
-        """Schedule next scan based on listing expiry times (D-05).
-
-        From all live auction remaining times, pick the max remaining time
-        under 60 minutes, subtract LISTING_SCAN_BUFFER_SECONDS, and use that
-        as next_scan_at. If no listing has <60min remaining, default to
-        DEFAULT_SCAN_INTERVAL_SECONDS (56 minutes).
-
-        Args:
-            ea_id: Player EA ID.
-            listing_count: Current live listing count (unused, kept for call-site compat).
-            sales_per_hour: Sales velocity (unused, kept for call-site compat).
-            last_expected_profit: Most recent expected profit (unused, kept for call-site compat).
-            session: Active AsyncSession (will be committed here).
-            live_auctions_raw: Raw liveAuctions entries for expiry timing (optional).
-        """
-        interval = DEFAULT_SCAN_INTERVAL_SECONDS
-
-        if live_auctions_raw:
-            remaining_under_60 = []
-            for auction in live_auctions_raw:
-                expires = auction.get("expiresOn") or auction.get("expires")
-                if expires:
-                    try:
-                        expiry_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
-                        now_utc = datetime.now(timezone.utc)
-                        remaining = (expiry_dt - now_utc).total_seconds()
-                        if 0 < remaining < 3600:  # under 60 minutes
-                            remaining_under_60.append(remaining)
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    rem = auction.get("remainingTime") or auction.get("timeRemaining")
-                    if rem and isinstance(rem, (int, float)) and 0 < rem < 3600:
-                        remaining_under_60.append(float(rem))
-
-            if remaining_under_60:
-                max_remaining = max(remaining_under_60)
-                interval = max(int(max_remaining - LISTING_SCAN_BUFFER_SECONDS), 60)  # floor at 60s
-
-        next_scan = datetime.utcnow() + timedelta(seconds=interval)
-
-        record = await session.get(PlayerRecord, ea_id)
-        if record is not None:
-            record.next_scan_at = next_scan
-            # Stop writing scan_tier — column stays in DB but is no longer updated
-
-        await session.commit()
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
