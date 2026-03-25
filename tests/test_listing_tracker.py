@@ -24,11 +24,24 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _make_live_auction(buy_now_price: int, trade_id: int | None = None) -> dict:
-    """Create a minimal liveAuctions entry dict."""
+def _make_live_auction(
+    buy_now_price: int,
+    trade_id: int | None = None,
+    remaining_seconds: float | None = None,
+) -> dict:
+    """Create a minimal liveAuctions entry dict.
+
+    Args:
+        buy_now_price: The listing's Buy Now price.
+        trade_id: Optional trade ID for fingerprinting.
+        remaining_seconds: Remaining auction time in seconds. If None, no expiry
+            field is set (defaults to 3600s in _extract_remaining_seconds).
+    """
     entry = {"buyNowPrice": buy_now_price}
     if trade_id is not None:
         entry["tradeId"] = trade_id
+    if remaining_seconds is not None:
+        entry["remainingTime"] = remaining_seconds
     return entry
 
 
@@ -134,7 +147,8 @@ async def test_outcome_sold(db):
     _, session_factory = db
     ea_id = 11111
     now = _utcnow()
-    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=1001)]
+    # Use remaining_seconds=-60 so expected_expiry_at is set in the past (already expired)
+    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=1001, remaining_seconds=-60)]
 
     # First scan records the listing
     async with session_factory() as session:
@@ -181,7 +195,8 @@ async def test_outcome_expired(db):
 
     _, session_factory = db
     ea_id = 22222
-    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=2001)]
+    # Use remaining_seconds=-60 so expected_expiry_at is set in the past (already expired)
+    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=2001, remaining_seconds=-60)]
 
     # Record the listing
     async with session_factory() as session:
@@ -226,10 +241,11 @@ async def test_outcome_proportional(db):
     ea_id = 33333
     now = _utcnow()
 
+    # Use remaining_seconds=-60 so expected_expiry_at is in the past for all three
     live_auctions = [
-        _make_live_auction(buy_now_price=15000, trade_id=3001),
-        _make_live_auction(buy_now_price=15000, trade_id=3002),
-        _make_live_auction(buy_now_price=15000, trade_id=3003),
+        _make_live_auction(buy_now_price=15000, trade_id=3001, remaining_seconds=-60),
+        _make_live_auction(buy_now_price=15000, trade_id=3002, remaining_seconds=-60),
+        _make_live_auction(buy_now_price=15000, trade_id=3003, remaining_seconds=-60),
     ]
 
     async with session_factory() as session:
