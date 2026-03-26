@@ -38,7 +38,11 @@
   3. `GET /api/v1/profit/summary` returns aggregated trade activity (total buys, coins spent, estimated profit)
   4. Chrome extension origin (`chrome-extension://*`) can make requests to the backend without CORS errors
   5. User can remove a player from the portfolio and the backend returns replacement player(s) within the freed budget
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 05-01-PLAN.md — DB models (TradeAction, TradeRecord, PortfolioSlot) + CORS middleware
+- [ ] 05-02-PLAN.md — Action queue endpoints (GET /pending, POST /complete) + tests
+- [ ] 05-03-PLAN.md — Profit summary endpoint + player swap DELETE endpoint + tests
 
 ### Phase 6: Extension Architecture Foundation
 **Goal**: Extension scaffolding is proven — service worker communicates with backend, survives termination, and relays typed commands to the content script
@@ -89,7 +93,7 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 2. Full API Surface | v1.0 | 2/2 | Complete | 2026-03-25 |
 | 3. CLI as API Client | v1.0 | 1/1 | Complete | 2026-03-25 |
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
-| 5. Backend Infrastructure | v1.1 | 0/TBD | Not started | - |
+| 5. Backend Infrastructure | v1.1 | 0/3 | Planning | - |
 | 6. Extension Architecture Foundation | v1.1 | 0/TBD | Not started | - |
 | 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
 | 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
