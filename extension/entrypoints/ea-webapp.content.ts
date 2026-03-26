@@ -25,12 +25,16 @@ export default defineContentScript({
     function handleMessage(
       msg: ExtensionMessage,
       _sender: chrome.runtime.MessageSender,
-      sendResponse: (r: ExtensionMessage) => void,
+      sendResponse: (response?: any) => void,
     ): boolean {
       switch (msg.type) {
         case 'PING':
-          sendResponse({ type: 'PONG' });
+          sendResponse({ type: 'PONG' } satisfies ExtensionMessage);
           return true;
+        case 'PONG':
+          // PONG is a response type — content script should not receive it;
+          // handle explicitly to satisfy exhaustive switch (D-05 compile-time safety).
+          return false;
         default:
           assertNever(msg);
       }
