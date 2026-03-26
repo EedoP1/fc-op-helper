@@ -3,20 +3,85 @@
 ## Milestones
 
 - **v1.0 MVP** — Phases 1-4 (shipped 2026-03-26) | [Archive](milestones/v1.0-ROADMAP.md)
+- **v1.1 Chrome Extension** — Phases 5-8 (in progress)
 
 ## Phases
 
 <details>
 <summary>v1.0 MVP (Phases 1-4) — SHIPPED 2026-03-26</summary>
 
-- [x] Phase 1: Persistent Scanner (3/3 plans) — completed 2026-03-25
-- [x] Phase 2: Full API Surface (2/2 plans) — completed 2026-03-25
-- [x] Phase 3: CLI as API Client (1/1 plan) — completed 2026-03-25
-- [x] Phase 4: Refactor Scoring + DB (4/4 plans) — completed 2026-03-25
+- [x] **Phase 1: Persistent Scanner** - Scanner backend with APScheduler, SQLite, circuit breaker — completed 2026-03-25
+- [x] **Phase 2: Full API Surface** - REST API for portfolio, player detail, top players, health — completed 2026-03-25
+- [x] **Phase 3: CLI as API Client** - CLI rewritten as thin API client, no direct fut.gg calls — completed 2026-03-25
+- [x] **Phase 4: Refactor Scoring + DB** - Listing-tracking scorer (v2), D-10 formula, schema cleanup — completed 2026-03-25
 
 </details>
 
+### v1.1 Chrome Extension — Automated OP Sell Cycle (In Progress)
+
+**Milestone Goal:** Chrome extension that automates the full buy/list/relist cycle on the EA Web App, powered by the backend's OP sell recommendations, with profit tracking.
+
+- [ ] **Phase 5: Backend Infrastructure** - New DB tables and API endpoints for action queue, trade tracking, and profit summary
+- [ ] **Phase 6: Extension Architecture Foundation** - WXT scaffold, MV3 service worker with chrome.alarms polling, typed message protocol
+- [ ] **Phase 7: DOM Automation Layer** - Buy/list/relist automation with price guard, human-paced delays, CAPTCHA detection, centralized selectors
+- [ ] **Phase 8: Extension UI + Validation** - Overlay panel, start/stop controls, player swap, end-to-end cycle validation
+
+## Phase Details
+
+### Phase 5: Backend Infrastructure
+**Goal**: Backend is ready to serve the extension — action queue, trade recording, and profit summary are live and integrated with existing data
+**Depends on**: Phase 4 (v1.0 complete)
+**Requirements**: BACK-01, BACK-02, BACK-03, BACK-04, BACK-05, BACK-06
+**Success Criteria** (what must be TRUE):
+  1. `GET /api/v1/actions/pending` returns one pending action at a time; stale IN_PROGRESS records older than 5 minutes are auto-reset
+  2. `POST /api/v1/actions/{id}/complete` accepts a buy/list/relist outcome and the record appears in the DB immediately
+  3. `GET /api/v1/profit/summary` returns aggregated trade activity (total buys, coins spent, estimated profit)
+  4. Chrome extension origin (`chrome-extension://*`) can make requests to the backend without CORS errors
+  5. User can remove a player from the portfolio and the backend returns replacement player(s) within the freed budget
+**Plans**: TBD
+
+### Phase 6: Extension Architecture Foundation
+**Goal**: Extension scaffolding is proven — service worker communicates with backend, survives termination, and relays typed commands to the content script
+**Depends on**: Phase 5
+**Requirements**: ARCH-01, ARCH-02, ARCH-03, ARCH-04
+**Success Criteria** (what must be TRUE):
+  1. Extension loads in Chrome without manifest errors; service worker registers and stays alive via chrome.alarms keepalive
+  2. Service worker fetches the pending action from the backend every 30 seconds and the result survives a DevTools-close + 60-second idle cycle
+  3. A PING message from the service worker reaches the content script and a typed PONG response returns; shape mismatches are caught at compile time
+  4. Navigating between EA Web App pages (SPA route change) does not orphan the content script — MutationObserver re-initializes listeners on navigation
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 7: DOM Automation Layer
+**Goal**: Extension can autonomously execute the full buy/list/relist cycle on the EA Web App with price guard, human-paced timing, and loud failure on any DOM error
+**Depends on**: Phase 6
+**Requirements**: AUTO-01, AUTO-02, AUTO-03, AUTO-04, AUTO-05, AUTO-06, AUTO-07, AUTO-08
+**Success Criteria** (what must be TRUE):
+  1. Extension searches for a target player and executes Buy Now only when the live BIN is at or below the backend buy price; cards priced above are skipped without any action
+  2. A purchased card is auto-listed at the locked OP price from the portfolio within one automation cycle
+  3. An expired card is auto-relisted at the same locked OP price it was originally listed at (price does not update)
+  4. All DOM interactions have randomized jitter (800-2500ms); no two consecutive action intervals are identical
+  5. When automation encounters a CAPTCHA, it stops immediately and alerts the user; when any DOM element is missing, it fails loudly with the selector name rather than silently continuing
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 8: Extension UI + Validation
+**Goal**: User can operate the full automation cycle through the EA Web App overlay — view recommendations, confirm the list, swap players, start/stop automation, and see running status — with end-to-end behavior validated on a real account
+**Depends on**: Phase 7
+**Requirements**: UI-01, UI-02, UI-03, UI-04, UI-05
+**Success Criteria** (what must be TRUE):
+  1. Overlay panel appears on the EA Web App showing the backend portfolio (player name, buy price, OP price, margin) without disrupting existing page layout
+  2. User clicks Confirm to start the automated cycle; the extension begins processing actions immediately
+  3. User can remove a player from the overlay list and a replacement player appears within the same panel
+  4. Start/stop toggle halts automation mid-cycle and resumes from the correct next action on restart
+  5. Status display shows current action, last event, and running/stopped/error state at all times
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 5 → 6 → 7 → 8
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -24,3 +89,7 @@
 | 2. Full API Surface | v1.0 | 2/2 | Complete | 2026-03-25 |
 | 3. CLI as API Client | v1.0 | 1/1 | Complete | 2026-03-25 |
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
+| 5. Backend Infrastructure | v1.1 | 0/TBD | Not started | - |
+| 6. Extension Architecture Foundation | v1.1 | 0/TBD | Not started | - |
+| 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
+| 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
