@@ -22,7 +22,7 @@
 **Milestone Goal:** Chrome extension that automates the full buy/list/relist cycle on the EA Web App, powered by the backend's OP sell recommendations, with profit tracking.
 
 - [ ] **Phase 5: Backend Infrastructure** - New DB tables and API endpoints for action queue, trade tracking, and profit summary
-- [ ] **Phase 6: Extension Architecture Foundation** - WXT scaffold, MV3 service worker with chrome.alarms polling, typed message protocol
+- [x] **Phase 6: Extension Architecture Foundation** - WXT scaffold, MV3 service worker with chrome.alarms polling, typed message protocol (completed 2026-03-26)
 - [ ] **Phase 7: DOM Automation Layer** - Buy/list/relist automation with price guard, human-paced delays, CAPTCHA detection, centralized selectors
 - [ ] **Phase 8: Extension UI + Validation** - Overlay panel, start/stop controls, player swap, end-to-end cycle validation
 
@@ -56,7 +56,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 06-01-PLAN.md — WXT scaffold, shared types/storage, service worker with alarm polling
-- [ ] 06-02-PLAN.md — Content script with typed message handling, SPA re-init, Chrome load verification
+- [x] 06-02-PLAN.md — Content script with typed message handling, SPA re-init, Chrome load verification
 **UI hint**: yes
 
 ### Phase 7: DOM Automation Layer
@@ -97,6 +97,6 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 3. CLI as API Client | v1.0 | 1/1 | Complete | 2026-03-25 |
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
-| 6. Extension Architecture Foundation | v1.1 | 1/2 | In Progress|  |
+| 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
 | 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
 | 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
