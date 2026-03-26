@@ -70,8 +70,8 @@ Explicitly excluded. Documented to prevent scope creep.
 | Auto-bidding | Cost unpredictability incompatible with OP sell strategy |
 | CAPTCHA auto-solving | External dependency, robotic patterns still trigger detection |
 | Headless/background tab operation | EA detects hidden tabs, severe ban risk |
-| FUTBIN price cross-reference | Previously removed; adds rate limits and stale data risk |
 | Parallel buying | EA rate-limits transfer market; triggers soft bans in minutes |
+| FUTBIN price cross-reference | Previously removed; adds rate limits and stale data risk |
 
 ## Traceability
 
@@ -79,35 +79,35 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BACK-01 | — | Pending |
-| BACK-02 | — | Pending |
-| BACK-03 | — | Pending |
-| BACK-04 | — | Pending |
-| BACK-05 | — | Pending |
-| BACK-06 | — | Pending |
-| ARCH-01 | — | Pending |
-| ARCH-02 | — | Pending |
-| ARCH-03 | — | Pending |
-| ARCH-04 | — | Pending |
-| AUTO-01 | — | Pending |
-| AUTO-02 | — | Pending |
-| AUTO-03 | — | Pending |
-| AUTO-04 | — | Pending |
-| AUTO-05 | — | Pending |
-| AUTO-06 | — | Pending |
-| AUTO-07 | — | Pending |
-| AUTO-08 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
-| UI-04 | — | Pending |
-| UI-05 | — | Pending |
+| BACK-01 | Phase 5 | Pending |
+| BACK-02 | Phase 5 | Pending |
+| BACK-03 | Phase 5 | Pending |
+| BACK-04 | Phase 5 | Pending |
+| BACK-05 | Phase 5 | Pending |
+| BACK-06 | Phase 5 | Pending |
+| ARCH-01 | Phase 6 | Pending |
+| ARCH-02 | Phase 6 | Pending |
+| ARCH-03 | Phase 6 | Pending |
+| ARCH-04 | Phase 6 | Pending |
+| AUTO-01 | Phase 7 | Pending |
+| AUTO-02 | Phase 7 | Pending |
+| AUTO-03 | Phase 7 | Pending |
+| AUTO-04 | Phase 7 | Pending |
+| AUTO-05 | Phase 7 | Pending |
+| AUTO-06 | Phase 7 | Pending |
+| AUTO-07 | Phase 7 | Pending |
+| AUTO-08 | Phase 7 | Pending |
+| UI-01 | Phase 8 | Pending |
+| UI-02 | Phase 8 | Pending |
+| UI-03 | Phase 8 | Pending |
+| UI-04 | Phase 8 | Pending |
+| UI-05 | Phase 8 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 23 total
-- Mapped to phases: 0
-- Unmapped: 23
+- Mapped to phases: 23
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-26*
-*Last updated: 2026-03-26 after initial definition*
+*Last updated: 2026-03-26 after roadmap creation — traceability complete*
