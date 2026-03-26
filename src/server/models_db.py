@@ -1,7 +1,7 @@
 """SQLAlchemy ORM table definitions for the persistent scanner."""
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Integer, Float, DateTime, Boolean, Index, Text, ForeignKey
+from sqlalchemy import String, Integer, Float, DateTime, Boolean, Index, Text, ForeignKey, UniqueConstraint
 from src.server.db import Base
 
 
@@ -82,6 +82,10 @@ class SnapshotSale(Base):
     )
     sold_at: Mapped[datetime] = mapped_column(DateTime)
     sold_price: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "sold_at", "sold_price", name="uq_snapshot_sale"),
+    )
 
 
 class SnapshotPricePoint(Base):
