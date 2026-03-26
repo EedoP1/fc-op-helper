@@ -40,7 +40,7 @@
   5. User can remove a player from the portfolio and the backend returns replacement player(s) within the freed budget
 **Plans**: 3 plans
 Plans:
-- [ ] 05-01-PLAN.md — DB models (TradeAction, TradeRecord, PortfolioSlot) + CORS middleware
+- [x] 05-01-PLAN.md — DB models (TradeAction, TradeRecord, PortfolioSlot) + CORS middleware
 - [ ] 05-02-PLAN.md — Action queue endpoints (GET /pending, POST /complete) + tests
 - [ ] 05-03-PLAN.md — Profit summary endpoint + player swap DELETE endpoint + tests
 
@@ -93,7 +93,7 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 2. Full API Surface | v1.0 | 2/2 | Complete | 2026-03-25 |
 | 3. CLI as API Client | v1.0 | 1/1 | Complete | 2026-03-25 |
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
-| 5. Backend Infrastructure | v1.1 | 0/3 | Planning | - |
+| 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 0/TBD | Not started | - |
 | 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
 | 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |

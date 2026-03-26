@@ -11,9 +11,9 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 
 - [ ] **BACK-01**: Backend exposes action queue endpoint that returns one pending action at a time with stale-record auto-reset
 - [ ] **BACK-02**: Backend accepts action completion reports (buy, list, relist outcomes with player, price, timestamp)
-- [ ] **BACK-03**: Backend stores all trade activity in DB for profit tracking (trade_actions, trade_records tables)
+- [x] **BACK-03**: Backend stores all trade activity in DB for profit tracking (trade_actions, trade_records tables)
 - [ ] **BACK-04**: Backend exposes profit summary endpoint aggregating trade activity data
-- [ ] **BACK-05**: Backend CORS configured to accept requests from chrome-extension origin
+- [x] **BACK-05**: Backend CORS configured to accept requests from chrome-extension origin
 - [ ] **BACK-06**: Backend supports player swap — user removes a player from portfolio, backend returns replacement(s) within freed budget
 
 ### Extension Architecture
@@ -81,9 +81,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | BACK-01 | Phase 5 | Pending |
 | BACK-02 | Phase 5 | Pending |
-| BACK-03 | Phase 5 | Pending |
+| BACK-03 | Phase 5 | Complete |
 | BACK-04 | Phase 5 | Pending |
-| BACK-05 | Phase 5 | Pending |
+| BACK-05 | Phase 5 | Complete |
 | BACK-06 | Phase 5 | Pending |
 | ARCH-01 | Phase 6 | Pending |
 | ARCH-02 | Phase 6 | Pending |
