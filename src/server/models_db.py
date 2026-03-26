@@ -132,3 +132,57 @@ class DailyListingSummary(Base):
     __table_args__ = (
         Index("ix_daily_summary_ea_id_date_margin", "ea_id", "date", "margin_pct"),
     )
+
+
+class PortfolioSlot(Base):
+    """A confirmed player slot in the active portfolio."""
+
+    __tablename__ = "portfolio_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    buy_price: Mapped[int] = mapped_column(Integer)
+    sell_price: Mapped[int] = mapped_column(Integer)
+    added_at: Mapped[datetime] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index("ix_portfolio_slots_ea_id", "ea_id"),
+    )
+
+
+class TradeAction(Base):
+    """Pending/active action queue entry. One row per queued work item."""
+
+    __tablename__ = "trade_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    action_type: Mapped[str] = mapped_column(String(10))   # "BUY" | "LIST" | "RELIST"
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")  # "PENDING" | "IN_PROGRESS" | "DONE" | "CANCELLED"
+    target_price: Mapped[int] = mapped_column(Integer)
+    player_name: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_trade_actions_status_created_at", "status", "created_at"),
+    )
+
+
+class TradeRecord(Base):
+    """One row per lifecycle event (bought, listed, sold, expired)."""
+
+    __tablename__ = "trade_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    action_type: Mapped[str] = mapped_column(String(10))   # "buy" | "list" | "relist"
+    price: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(String(20))        # "bought" | "listed" | "sold" | "expired"
+    recorded_at: Mapped[datetime] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index("ix_trade_records_ea_id_outcome", "ea_id", "outcome"),
+        Index("ix_trade_records_recorded_at", "recorded_at"),
+    )
