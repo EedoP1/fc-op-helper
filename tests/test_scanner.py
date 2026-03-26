@@ -484,3 +484,98 @@ async def test_listing_purge(scanner):
 
     assert len(obs) == 1, f"Expected 1 listing observation preserved, got {len(obs)}"
     assert obs[0].fingerprint == "recent_resolved:1"
+
+
+# ── Deduplication and name population tests ──────────────────────────────────
+
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 400, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1,
+    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
+})
+async def test_scan_player_deduplicates_snapshot_sales(mock_v2, scanner):
+    """scan_player deduplicates sales with identical (sold_at, sold_price) within a snapshot."""
+    svc, session_factory, mock_client = scanner
+
+    market_data = make_player(ea_id=400, name="Dedup Player", price=20000, num_sales=10, num_listings=30)
+    # Inject duplicate sales: copy the first 3 sales to create duplicates
+    original_sales = list(market_data.sales)
+    market_data.sales = original_sales + [original_sales[0], original_sales[1], original_sales[2]]
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 400)
+        await session.commit()
+
+    await svc.scan_player(400)
+
+    async with session_factory() as session:
+        snap = (await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 400)
+        )).scalar_one()
+        sales = (await session.execute(
+            select(SnapshotSale).where(SnapshotSale.snapshot_id == snap.id)
+        )).scalars().all()
+
+    # Should have 10 unique sales, not 13 (10 + 3 duplicates)
+    assert len(sales) == 10, f"Expected 10 unique SnapshotSale rows, got {len(sales)}"
+
+
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 401, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1,
+    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
+})
+async def test_scan_player_populates_name(mock_v2, scanner):
+    """scan_player updates PlayerRecord.name from market_data.player.name."""
+    svc, session_factory, mock_client = scanner
+
+    market_data = make_player(ea_id=401, name="Klostermann", price=20000, num_sales=10, num_listings=30)
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    # Seed with ea_id as name (simulating the old behavior)
+    async with session_factory() as session:
+        session.add(PlayerRecord(
+            ea_id=401, name="401", rating=80, position="CB",
+            nation="Germany", league="Bundesliga", club="Leipzig", card_type="gold",
+        ))
+        await session.commit()
+
+    await svc.scan_player(401)
+
+    async with session_factory() as session:
+        record = await session.get(PlayerRecord, 401)
+
+    assert record is not None
+    assert record.name == "Klostermann", f"Expected 'Klostermann', got '{record.name}'"
+
+
+@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
+    "ea_id": 402, "buy_price": 20000, "sell_price": 24000,
+    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
+    "op_total": 50, "op_sell_rate": 0.1,
+    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
+})
+async def test_scan_player_sets_scorer_version(mock_v2, scanner):
+    """scan_player sets scorer_version='v2' on PlayerScore rows from v2 scorer."""
+    svc, session_factory, mock_client = scanner
+
+    market_data = make_player(ea_id=402, name="Version Test", price=20000, num_sales=10, num_listings=30)
+    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+
+    async with session_factory() as session:
+        _seed_player_record(session, 402)
+        await session.commit()
+
+    await svc.scan_player(402)
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(PlayerScore).where(PlayerScore.ea_id == 402)
+        )
+        score = result.scalar_one_or_none()
+
+    assert score is not None, "Expected a PlayerScore row"
+    assert score.scorer_version == "v2", f"Expected scorer_version='v2', got '{score.scorer_version}'"

@@ -100,7 +100,7 @@ class ScannerService:
         values_list = [
             dict(
                 ea_id=p["ea_id"],
-                name=str(p["ea_id"]),
+                name=p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(p["ea_id"]),
                 rating=0,
                 position="UNK",
                 nation="",
@@ -126,6 +126,7 @@ class ScannerService:
                     stmt = stmt.on_conflict_do_update(
                         index_elements=["ea_id"],
                         set_=dict(
+                            name=row["name"],
                             is_active=True,
                             next_scan_at=now,
                         ),
@@ -212,9 +213,10 @@ class ScannerService:
             # Upsert all discovered players
             for p in players:
                 ea_id = p["ea_id"]
+                player_name = p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(ea_id)
                 stmt = sqlite_insert(PlayerRecord).values(
                     ea_id=ea_id,
-                    name=str(ea_id),
+                    name=player_name,
                     rating=0,
                     position="UNK",
                     nation="",
@@ -229,7 +231,7 @@ class ScannerService:
                 )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["ea_id"],
-                    set_=dict(is_active=True),
+                    set_=dict(name=player_name, is_active=True),
                 )
                 await session.execute(stmt)
 
@@ -330,6 +332,7 @@ class ScannerService:
                     sales_per_hour=0.0,
                     is_viable=True,
                     expected_profit_per_hour=v2_result["expected_profit_per_hour"],
+                    scorer_version="v2",
                 )
             else:
                 ps = PlayerScore(
@@ -387,6 +390,9 @@ class ScannerService:
                 record.last_scanned_at = now
                 if market_data is not None:
                     record.listing_count = market_data.listing_count
+                    # Populate player name from API data
+                    if market_data.player and market_data.player.name:
+                        record.name = market_data.player.name
 
             # Schedule next scan at fixed 5-minute interval
             if record is not None:
