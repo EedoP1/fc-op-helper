@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from src.config import MARGINS
 from src.models import SaleRecord
@@ -219,6 +219,29 @@ async def resolve_outcomes(
 
     if not disappeared:
         return {"sold": 0, "expired": 0}
+
+    # Query the most recent resolved_at for this ea_id to filter stale sales
+    last_resolved_stmt = select(
+        func.max(ListingObservation.resolved_at)
+    ).where(
+        ListingObservation.ea_id == ea_id,
+        ListingObservation.resolved_at.isnot(None),
+    )
+    last_resolved_result = await session.execute(last_resolved_stmt)
+    last_resolved_at = last_resolved_result.scalar()
+
+    # Only count sales that occurred AFTER the last resolution (avoid double-counting)
+    # If last_resolved_at is None (first resolution), keep all sales -- bootstrap case
+    if last_resolved_at is not None:
+        completed_sales = [
+            sale for sale in completed_sales
+            if sale.sold_at > last_resolved_at
+        ]
+
+    logger.debug(
+        f"resolve_outcomes: ea_id={ea_id} last_resolved_at={last_resolved_at} "
+        f"sales_after_filter={len(completed_sales)} disappeared={len(disappeared)}"
+    )
 
     # Group by price
     by_price: dict[int, list[ListingObservation]] = {}
