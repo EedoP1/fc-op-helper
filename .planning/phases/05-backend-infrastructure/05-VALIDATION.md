@@ -38,13 +38,12 @@ created: 2026-03-26
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 05-01-01 | 01 | 1 | BACK-03 | unit | `python -m pytest tests/test_trade_models.py -v` | ❌ W0 | ⬜ pending |
-| 05-01-02 | 01 | 1 | BACK-01 | unit | `python -m pytest tests/test_action_queue.py -v` | ❌ W0 | ⬜ pending |
-| 05-02-01 | 02 | 1 | BACK-01 | integration | `python -m pytest tests/test_actions_api.py -v` | ❌ W0 | ⬜ pending |
-| 05-02-02 | 02 | 1 | BACK-02 | integration | `python -m pytest tests/test_actions_api.py -v` | ❌ W0 | ⬜ pending |
-| 05-02-03 | 02 | 1 | BACK-04 | integration | `python -m pytest tests/test_profit_api.py -v` | ❌ W0 | ⬜ pending |
-| 05-02-04 | 02 | 1 | BACK-06 | integration | `python -m pytest tests/test_swap_api.py -v` | ❌ W0 | ⬜ pending |
-| 05-03-01 | 03 | 2 | BACK-05 | integration | `python -m pytest tests/test_cors.py -v` | ❌ W0 | ⬜ pending |
+| 05-01-01 | 01 | 1 | BACK-03 | unit | `python -c "from src.server.models_db import TradeAction, TradeRecord, PortfolioSlot"` | ✅ | ⬜ pending |
+| 05-01-02 | 01 | 1 | BACK-05 | unit | `python -c "from src.server.main import app; ..."` | ✅ | ⬜ pending |
+| 05-01-03 | 01 | 1 | BACK-05 | integration | `python -m pytest tests/test_cors.py -v` | ❌ W0 | ⬜ pending |
+| 05-02-01 | 02 | 2 | BACK-01, BACK-02 | integration | `python -m pytest tests/test_actions.py -v` | ❌ W0 | ⬜ pending |
+| 05-03-01 | 03 | 3 | BACK-04 | integration | `python -m pytest tests/test_profit.py -v` | ❌ W0 | ⬜ pending |
+| 05-03-02 | 03 | 3 | BACK-06 | integration | `python -m pytest tests/test_portfolio_swap.py -v` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,12 +51,10 @@ created: 2026-03-26
 
 ## Wave 0 Requirements
 
-- [ ] `tests/test_trade_models.py` — stubs for BACK-03 trade DB models
-- [ ] `tests/test_action_queue.py` — stubs for BACK-01 action queue logic
-- [ ] `tests/test_actions_api.py` — stubs for BACK-01, BACK-02 API endpoints
-- [ ] `tests/test_profit_api.py` — stubs for BACK-04 profit summary
-- [ ] `tests/test_swap_api.py` — stubs for BACK-06 player swap
-- [ ] `tests/test_cors.py` — stubs for BACK-05 CORS config
+- [ ] `tests/test_cors.py` — BACK-05 CORS preflight integration tests (Plan 01, Task 3)
+- [ ] `tests/test_actions.py` — BACK-01, BACK-02 action queue + completion tests (Plan 02, Task 1)
+- [ ] `tests/test_profit.py` — BACK-04 profit summary tests (Plan 03, Task 1)
+- [ ] `tests/test_portfolio_swap.py` — BACK-06 player swap tests (Plan 03, Task 2)
 
 *Existing pytest + pytest-asyncio infrastructure covers framework needs.*
 
