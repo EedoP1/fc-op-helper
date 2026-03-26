@@ -1,0 +1,20 @@
+{
+  "name": "op-seller-extension",
+  "version": "0.1.0",
+  "description": "FC26 OP sell automation assistant",
+  "private": true,
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "test": "vitest",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.38",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2",
+    "wxt": "^0.20.20"
+  }
+}
