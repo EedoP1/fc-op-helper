@@ -9,20 +9,28 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Resolve the content script source path relative to this test file
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CONTENT_SCRIPT_PATH = resolve(__dirname, '../entrypoints/ea-webapp.content.ts');
+
+/**
+ * Track registered wxt:locationchange handlers so we can clean them up between tests.
+ */
+const registeredLocationChangeHandlers: EventListener[] = [];
 
 /**
  * Minimal mock for WXT ContentScriptContext.
  * Provides ctx.isInvalid, ctx.setTimeout, ctx.onInvalidated, ctx.addEventListener.
  */
-function createMockCtx(overrides: Partial<{
-  isInvalid: boolean;
-  onInvalidatedCallback: (() => void) | null;
-}> = {}) {
+function createMockCtx(overrides: { isInvalid?: boolean } = {}) {
   const state = {
     isInvalid: overrides.isInvalid ?? false,
     invalidatedCallbacks: [] as (() => void)[],
-    eventListeners: [] as Array<{ target: EventTarget; type: string; listener: EventListener }>,
-    timeouts: [] as Array<{ fn: () => void; delay: number }>,
+    timeoutCalls: [] as Array<{ fn: () => void; delay: number }>,
   };
 
   return {
@@ -33,17 +41,17 @@ function createMockCtx(overrides: Partial<{
       state.invalidatedCallbacks.push(cb);
     },
     addEventListener(target: EventTarget, type: string, listener: EventListener) {
-      state.eventListeners.push({ target, type, listener });
       target.addEventListener(type, listener);
+      // Track locationchange handlers for cleanup
+      if (type === 'wxt:locationchange') {
+        registeredLocationChangeHandlers.push(listener);
+      }
     },
     setTimeout(fn: () => void, delay: number) {
-      state.timeouts.push({ fn, delay });
-      // Execute immediately in tests (don't actually wait)
-      // Tests verify the timeout was scheduled, not that it fires
+      state.timeoutCalls.push({ fn, delay });
+      // Do NOT auto-execute — tests verify timeout was scheduled
     },
-    // Expose internals for assertions
     _state: state,
-    // Invalidate the context
     _invalidate() {
       state.isInvalid = true;
       state.invalidatedCallbacks.forEach(cb => cb());
@@ -56,6 +64,10 @@ describe('content script message handling', () => {
     fakeBrowser.reset();
     vi.restoreAllMocks();
     vi.resetModules();
+    // Clean up any wxt:locationchange listeners from previous tests
+    registeredLocationChangeHandlers.splice(0).forEach(handler => {
+      window.removeEventListener('wxt:locationchange', handler);
+    });
   });
 
   afterEach(() => {
@@ -63,89 +75,80 @@ describe('content script message handling', () => {
   });
 
   it('returns PONG when receiving PING message', async () => {
-    // Import the content script
+    // Spy on addListener to capture the registered handleMessage function
+    const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
     const mod = await import('../entrypoints/ea-webapp.content');
-    const cs = mod.default;
-
     const ctx = createMockCtx();
-    // Call main with mock ctx
-    cs.main(ctx as any);
+    mod.default.main(ctx as any);
 
-    // Simulate receiving a PING via chrome.runtime.onMessage
-    let capturedResponse: any = undefined;
-    const sendResponse = vi.fn((res: any) => { capturedResponse = res; });
+    // The first addListener call registers handleMessage
+    const registeredHandler = addListenerSpy.mock.calls[0]?.[0];
+    expect(registeredHandler).toBeDefined();
 
-    // fakeBrowser tracks listeners — trigger onMessage with PING
-    const listeners = fakeBrowser.runtime.onMessage.addListener.mock?.calls ?? [];
-    // Use the real chrome.runtime.onMessage dispatch mechanism
-    // In jsdom, we can invoke registered listeners directly
-    const onMessageListeners = (fakeBrowser.runtime.onMessage as any)._listeners ?? [];
-
-    // Dispatch message through the fakeBrowser
-    await fakeBrowser.runtime.onMessage.callListeners(
+    // Call the handler directly simulating Chrome's message dispatch
+    // Chrome passes (message, sender, sendResponse) — sendResponse is a function
+    const sendResponse = vi.fn();
+    const returnValue = registeredHandler(
       { type: 'PING' },
-      { id: 'test-sender' } as chrome.runtime.MessageSender,
+      {} as chrome.runtime.MessageSender,
       sendResponse,
     );
 
+    // Handler should call sendResponse with PONG
     expect(sendResponse).toHaveBeenCalledWith({ type: 'PONG' });
+    // Handler returns true to signal async response
+    expect(returnValue).toBe(true);
   });
 
-  it('has assertNever in the default branch for exhaustive switch', async () => {
-    // This is a structural (source-level) test — assertNever must appear in the switch default
-    const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../entrypoints/ea-webapp.content.ts', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'),
-      'utf-8'
-    );
+  it('has assertNever in the default branch for exhaustive switch', () => {
+    // Structural (source-level) test — assertNever must appear in the default switch branch
+    const source = readFileSync(CONTENT_SCRIPT_PATH, 'utf-8');
     expect(source).toContain('assertNever(msg)');
-    // Verify it's in a default case context
+    // Verify it appears in a default case context
     expect(source).toMatch(/default:\s*\n?\s*assertNever\(msg\)/);
   });
 
   it('re-initializes message listeners on SPA navigation (wxt:locationchange)', async () => {
-    const mod = await import('../entrypoints/ea-webapp.content');
-    const cs = mod.default;
-
-    const ctx = createMockCtx();
-    cs.main(ctx as any);
-
-    // Track how many times onMessage.addListener and removeListener are called
+    // Spy on fakeBrowser.runtime.onMessage before calling main
     const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
     const removeListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'removeListener');
 
-    // Simulate SPA navigation by dispatching the wxt:locationchange event on window
-    const locationChangeEvent = new Event('wxt:locationchange');
-    window.dispatchEvent(locationChangeEvent);
+    const mod = await import('../entrypoints/ea-webapp.content');
+    const ctx = createMockCtx();
+    mod.default.main(ctx as any);
 
-    // After navigation: removeListener called once (teardown), addListener called once (re-init)
+    // At this point: initListeners() was called once during main() → addListener count = 1
+    // Reset the spy counts to baseline (ignoring initial setup calls)
+    addListenerSpy.mockClear();
+    removeListenerSpy.mockClear();
+
+    // Simulate SPA navigation — triggers the wxt:locationchange handler
+    window.dispatchEvent(new Event('wxt:locationchange'));
+
+    // After one navigation: teardownListeners() calls removeListener once,
+    // then initListeners() calls addListener once
     expect(removeListenerSpy).toHaveBeenCalledTimes(1);
     expect(addListenerSpy).toHaveBeenCalledTimes(1);
   });
 
   it('stops reconnect loop when ctx.isInvalid is true', async () => {
     const mod = await import('../entrypoints/ea-webapp.content');
-    const cs = mod.default;
-
-    // Create a ctx that starts as invalid
     const ctx = createMockCtx({ isInvalid: true });
 
-    // Mock sendMessage to track if it's called
     const sendMessageSpy = vi.spyOn(fakeBrowser.runtime, 'sendMessage');
 
-    cs.main(ctx as any);
+    mod.default.main(ctx as any);
 
-    // Allow any microtasks to settle
+    // Allow microtasks to settle
     await new Promise((r) => setTimeout(r, 10));
 
     // sendMessage should NOT be called when ctx.isInvalid === true
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
-  it('schedules retry when sendMessage fails and ctx is still valid', async () => {
+  it('schedules retry via ctx.setTimeout when sendMessage fails and ctx is valid', async () => {
     const mod = await import('../entrypoints/ea-webapp.content');
-    const cs = mod.default;
-
     const ctx = createMockCtx({ isInvalid: false });
     const setTimeoutSpy = vi.spyOn(ctx, 'setTimeout');
 
@@ -154,13 +157,13 @@ describe('content script message handling', () => {
       new Error('Could not establish connection'),
     );
 
-    cs.main(ctx as any);
+    mod.default.main(ctx as any);
 
     // Allow the rejected promise to settle
     await new Promise((r) => setTimeout(r, 50));
 
-    // ctx.setTimeout should have been called to schedule a retry
-    expect(setTimeoutSpy).toHaveBeenCalled();
+    // ctx.setTimeout should have been called to schedule a 2s retry
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
     const [retryFn, retryDelay] = setTimeoutSpy.mock.calls[0];
     expect(typeof retryFn).toBe('function');
     expect(retryDelay).toBe(2000);
