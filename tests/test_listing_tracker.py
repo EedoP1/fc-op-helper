@@ -398,3 +398,128 @@ async def test_record_listings_op_classification(db):
     # 15000 >= 10000 * 1.40 = 14000 -> OP at 40%
     assert row.buy_now_price == 15000
     assert row.market_price_at_obs == 10000
+
+
+async def test_resolve_outcomes_no_double_counting(db):
+    """Consecutive resolution batches with the same completedAuctions must NOT
+    double-count sales. Batch 2 should only count sales that occurred AFTER
+    batch 1's resolved_at timestamp."""
+    from src.server.listing_tracker import record_listings, resolve_outcomes
+
+    _, session_factory = db
+    ea_id = 66666
+    now = _utcnow()
+
+    # Batch 1: 5 listings at 160k disappear
+    batch1_auctions = [
+        _make_live_auction(buy_now_price=160000, trade_id=7001 + i, remaining_seconds=-60)
+        for i in range(5)
+    ]
+
+    async with session_factory() as session:
+        await record_listings(
+            ea_id=ea_id,
+            live_auctions_raw=batch1_auctions,
+            current_lowest_bin=100000,
+            completed_sales=[],
+            session=session,
+        )
+        await session.commit()
+
+    # 10 completed sales at 160k (the sliding window from fut.gg)
+    sales = [
+        _make_sale(sold_price=160000, sold_at=now, resource_id=ea_id)
+        for _ in range(10)
+    ]
+
+    # Resolve batch 1: all 5 disappeared listings should be matched as sold
+    async with session_factory() as session:
+        counts1 = await resolve_outcomes(
+            ea_id=ea_id,
+            current_fingerprints=[],
+            completed_sales=sales,
+            session=session,
+        )
+        await session.commit()
+
+    assert counts1["sold"] == 5
+    assert counts1["expired"] == 0
+
+    # Batch 2: 3 NEW listings at 160k disappear
+    batch2_auctions = [
+        _make_live_auction(buy_now_price=160000, trade_id=7006 + i, remaining_seconds=-60)
+        for i in range(3)
+    ]
+
+    async with session_factory() as session:
+        await record_listings(
+            ea_id=ea_id,
+            live_auctions_raw=batch2_auctions,
+            current_lowest_bin=100000,
+            completed_sales=[],
+            session=session,
+        )
+        await session.commit()
+
+    # Resolve batch 2 with the SAME 10 sales (no new sales occurred)
+    # Bug: without timestamp filtering, all 10 sales count again -> 3 sold
+    # Fixed: only sales with sold_at > batch 1's resolved_at count -> 0 sold, 3 expired
+    async with session_factory() as session:
+        counts2 = await resolve_outcomes(
+            ea_id=ea_id,
+            current_fingerprints=[],
+            completed_sales=sales,
+            session=session,
+        )
+        await session.commit()
+
+    assert counts2["sold"] == 0, (
+        f"Expected 0 sold (no new sales after first resolution) but got {counts2['sold']}. "
+        "Double-counting bug: same completedAuctions re-counted across batches."
+    )
+    assert counts2["expired"] == 3
+
+
+async def test_resolve_outcomes_first_resolution_counts_all(db):
+    """First-ever resolution for a player (no prior resolved_at) should count
+    all available completedAuctions -- bootstrap correctness."""
+    from src.server.listing_tracker import record_listings, resolve_outcomes
+
+    _, session_factory = db
+    ea_id = 77777
+    now = _utcnow()
+
+    # 2 listings at 100k, already expired
+    auctions = [
+        _make_live_auction(buy_now_price=100000, trade_id=8001 + i, remaining_seconds=-60)
+        for i in range(2)
+    ]
+
+    async with session_factory() as session:
+        await record_listings(
+            ea_id=ea_id,
+            live_auctions_raw=auctions,
+            current_lowest_bin=80000,
+            completed_sales=[],
+            session=session,
+        )
+        await session.commit()
+
+    # 5 completed sales at 100k
+    sales = [
+        _make_sale(sold_price=100000, sold_at=now, resource_id=ea_id)
+        for _ in range(5)
+    ]
+
+    # First resolution: no prior resolved_at, all sales available
+    async with session_factory() as session:
+        counts = await resolve_outcomes(
+            ea_id=ea_id,
+            current_fingerprints=[],
+            completed_sales=sales,
+            session=session,
+        )
+        await session.commit()
+
+    assert counts["sold"] == 2
+    assert counts["expired"] == 0
