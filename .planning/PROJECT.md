@@ -32,8 +32,8 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - [ ] Price guard skips players whose current BIN exceeds expected buy price
 - [ ] Auto-list purchased players at backend-recommended OP price
 - [ ] Auto-relist expired cards at fresh OP price from backend
-- [ ] Extension reports all activity (buys, sales, relists) back to backend DB
-- [ ] Profit tracking and performance analytics queryable via API/CLI
+- ✓ Extension reports all activity (buys, sales, relists) back to backend DB — v1.1 Phase 5
+- ✓ Profit tracking and performance analytics queryable via API/CLI — v1.1 Phase 5
 
 ### Future
 
@@ -74,8 +74,12 @@ Shipped v1.0 with ~18k LOC Python across 115 files, 127 commits over 2 days.
 - Backend scans ~1800 players every 5 minutes with circuit breaker protection
 - Listing-tracking scorer (v2) computes expected_profit_per_hour from D-10 observation window
 - CLI displays portfolio ranked by expected_profit_per_hour
-- REST API serves portfolio, player detail, top players, health endpoints
-- 10 quick tasks completed post-phase-4 for scoring formula refinement and cleanup
+- REST API serves portfolio, player detail, top players, health, actions, profit endpoints
+- Action queue (GET /pending, POST /complete) ready for extension automation
+- Portfolio slot seeding and player swap with optimizer replacement
+- Profit summary with realized totals + per-player breakdown
+- CORS configured for chrome-extension:// origins
+- 113 tests passing across all modules
 
 **Known issues:**
 - fut.gg has no published rate limits; 24/7 scanning behavior is empirically tuned
@@ -120,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after v1.1 milestone start*
+*Last updated: 2026-03-26 after Phase 5 (Backend Infrastructure) complete*
