@@ -42,7 +42,7 @@
 Plans:
 - [x] 05-01-PLAN.md — DB models (TradeAction, TradeRecord, PortfolioSlot) + CORS middleware
 - [x] 05-02-PLAN.md — Action queue endpoints (GET /pending, POST /complete) + tests
-- [ ] 05-03-PLAN.md — Profit summary endpoint + player swap DELETE endpoint + tests
+- [x] 05-03-PLAN.md — Profit summary endpoint + player swap DELETE endpoint + tests
 
 ### Phase 6: Extension Architecture Foundation
 **Goal**: Extension scaffolding is proven — service worker communicates with backend, survives termination, and relays typed commands to the content script

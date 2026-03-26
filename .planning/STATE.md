@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to execute
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-03-26T06:57:09.113Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-03-26T07:02:21.071Z"
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -48,6 +48,7 @@ Plan: 3 of 3
 *Updated after each plan completion*
 | Phase 05-backend-infrastructure P01 | 3 | 3 tasks | 4 files |
 | Phase 05-backend-infrastructure P02 | 18 | 1 tasks | 3 files |
+| Phase 05-backend-infrastructure P03 | 3 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,9 @@ Plan: 3 of 3
 - [Phase 05-backend-infrastructure]: PortfolioSlot.ea_id uses unique=True on column only — no __table_args__ Index (avoids duplicate index creation)
 - [Phase 05-backend-infrastructure]: Idempotent GET /pending checks for existing IN_PROGRESS action before PENDING query to prevent duplicate action creation
 - [Phase 05-backend-infrastructure]: player_name on derived TradeActions uses 'Player {ea_id}' placeholder — PortfolioSlot stores no name; extension provides real names via POST /portfolio/slots
+- [Phase 05-backend-infrastructure]: Profit EA tax applied in Python after SQL group-by — avoids float precision in case() expressions
+- [Phase 05-backend-infrastructure]: DELETE /portfolio/{ea_id} preserves TradeRecords — only removes active PortfolioSlot and cancels pending actions
+- [Phase 05-backend-infrastructure]: Replacements via optimize_portfolio() on freed_budget — reuses existing optimizer with fresh _build_scored_entry dicts
 
 ### Pending Todos
 
@@ -75,6 +79,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T06:57:09.107Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-03-26T07:02:21.065Z
+Stopped at: Completed 05-03-PLAN.md
 Resume file: None
