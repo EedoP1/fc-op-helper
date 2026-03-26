@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-26T06:52:08.426Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-26T06:57:09.113Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 05 (backend-infrastructure) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Plan: 2 of 3
 
 *Updated after each plan completion*
 | Phase 05-backend-infrastructure P01 | 3 | 3 tasks | 4 files |
+| Phase 05-backend-infrastructure P02 | 18 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -60,6 +61,8 @@ Plan: 2 of 3
 - [v1.1 research]: Relist price is locked at original margin — does not refresh on relist
 - [Phase 05-backend-infrastructure]: Use allow_origin_regex for CORS — allow_origins wildcard does not cover chrome-extension:// scheme
 - [Phase 05-backend-infrastructure]: PortfolioSlot.ea_id uses unique=True on column only — no __table_args__ Index (avoids duplicate index creation)
+- [Phase 05-backend-infrastructure]: Idempotent GET /pending checks for existing IN_PROGRESS action before PENDING query to prevent duplicate action creation
+- [Phase 05-backend-infrastructure]: player_name on derived TradeActions uses 'Player {ea_id}' placeholder — PortfolioSlot stores no name; extension provides real names via POST /portfolio/slots
 
 ### Pending Todos
 
@@ -72,6 +75,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T06:52:08.421Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-03-26T06:57:09.107Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
