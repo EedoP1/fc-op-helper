@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to plan
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-26T22:14:51.613Z"
-last_activity: "2026-03-26 - Completed quick task 260326-wac: Build FUTBIN health monitor CLI"
+status: Ready to execute
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-26T22:45:27.270Z"
+last_activity: 2026-03-26
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 5
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 05 — backend-infrastructure
+**Current focus:** Phase 06 — extension-architecture-foundation
 
 ## Current Position
 
-Phase: 6
-Plan: Not started
+Phase: 06 (extension-architecture-foundation) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Plan: Not started
 | Phase 05-backend-infrastructure P01 | 3 | 3 tasks | 4 files |
 | Phase 05-backend-infrastructure P02 | 18 | 1 tasks | 3 files |
 | Phase 05-backend-infrastructure P03 | 3 | 2 tasks | 5 files |
+| Phase 06-extension-architecture-foundation P01 | 8 | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,9 @@ Plan: Not started
 - [Phase 05-backend-infrastructure]: Profit EA tax applied in Python after SQL group-by — avoids float precision in case() expressions
 - [Phase 05-backend-infrastructure]: DELETE /portfolio/{ea_id} preserves TradeRecords — only removes active PortfolioSlot and cancels pending actions
 - [Phase 05-backend-infrastructure]: Replacements via optimize_portfolio() on freed_budget — reuses existing optimizer with fresh _build_scored_entry dicts
+- [Phase 06-extension-architecture-foundation]: Use Promise-based chrome.alarms.get() — fake-browser returns Promise, callback form receives undefined in tests
+- [Phase 06-extension-architecture-foundation]: WXT defineBackground() returns config object, does not auto-execute main() — tests must call bg.main() directly
+- [Phase 06-extension-architecture-foundation]: Add types: ['chrome'] to extension/tsconfig.json — WXT auto-generated tsconfig omits @types/chrome
 
 ### Pending Todos
 
@@ -88,6 +92,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-26 - Completed quick task 260326-wac: Build FUTBIN health monitor CLI
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-extension-architecture-foundation/06-CONTEXT.md
+Last activity: 2026-03-26
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None
