@@ -69,7 +69,13 @@ Plans:
   3. An expired card is auto-relisted at the same locked OP price it was originally listed at (price does not update)
   4. All DOM interactions have randomized jitter (800-2500ms); no two consecutive action intervals are identical
   5. When automation encounters a CAPTCHA, it stops immediately and alerts the user; when any DOM element is missing, it fails loudly with the selector name rather than silently continuing
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 07-01-PLAN.md — Foundation: selectors.ts, dom-utils.ts, message protocol extension, PendingAction extension
+- [ ] 07-02-PLAN.md — Backend schema extension: card_version and position on PortfolioSlot, TradeAction, API
+- [ ] 07-03-PLAN.md — BUY flow: adaptive price sweep, price guard, Buy Now execution
+- [ ] 07-04-PLAN.md — LIST + RELIST flows: unassigned items listing, transfer list Relist All
+- [ ] 07-05-PLAN.md — Integration: service worker dispatch, content script wiring, CAPTCHA detection
 **UI hint**: yes
 
 ### Phase 8: Extension UI + Validation
@@ -98,5 +104,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
-| 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
+| 7. DOM Automation Layer | v1.1 | 0/5 | Not started | - |
 | 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
