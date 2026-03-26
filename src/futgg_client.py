@@ -262,19 +262,6 @@ class FutGGClient:
                 continue
         return sales
 
-    @staticmethod
-    def log_live_auction_fields(raw_auctions: list[dict]) -> list[str]:
-        """Log available fields in liveAuctions entries for fingerprint strategy selection.
-
-        Called once during first scan to discover available fields.
-        Returns list of field names found.
-        """
-        if not raw_auctions:
-            return []
-        fields = sorted(raw_auctions[0].keys())
-        logger.info(f"liveAuctions fields discovered: {fields}")
-        return fields
-
     def _build_player(self, defn: dict) -> Player:
         """Build a Player model from a card definition response."""
         position_str = POSITION_MAP.get(defn.get("position", 0), "?")

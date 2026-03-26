@@ -140,7 +140,6 @@ async def get_portfolio(
             "op_ratio": round(entry["op_ratio"], 3),
             "expected_profit": round(entry["expected_profit"], 1),
             "efficiency": round(entry["efficiency"], 4),
-            "scan_tier": entry["scan_tier"],
             "is_stale": is_stale,
             "last_scanned": (
                 last_scanned_at.isoformat() if last_scanned_at else None

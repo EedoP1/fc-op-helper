@@ -91,11 +91,9 @@ async def get_top_players(
                     if player.last_scanned_at else None
                 ),                                              # D-04
                 "is_stale": is_stale,                           # D-11, D-13
-                "scan_tier": player.scan_tier,
                 "rating": player.rating,
                 "position": player.position,
                 "expected_profit_per_hour": round(score.expected_profit_per_hour, 2) if score.expected_profit_per_hour else None,
-                "scorer_version": score.scorer_version or "v1",
             }
         )
 
@@ -191,7 +189,6 @@ async def get_player(request: Request, ea_id: int):
         "league": record.league,
         "club": record.club,
         "card_type": record.card_type,
-        "scan_tier": record.scan_tier,
         "last_scanned": record.last_scanned_at.isoformat() if record.last_scanned_at else None,
         "is_stale": is_stale,
         "current_score": {
@@ -207,7 +204,6 @@ async def get_player(request: Request, ea_id: int):
             "sales_per_hour": latest.sales_per_hour,
             "scored_at": latest.scored_at.isoformat(),
             "expected_profit_per_hour": round(latest.expected_profit_per_hour, 2) if latest.expected_profit_per_hour else None,
-            "scorer_version": latest.scorer_version or "v1",
         } if latest else None,
         "score_history": [
             {
