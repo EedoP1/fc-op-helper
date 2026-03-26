@@ -362,7 +362,12 @@ class ScannerService:
                 session.add(snapshot)
                 await session.flush()  # get snapshot.id for FK references
 
+                seen_sales = set()
                 for sale in market_data.sales:
+                    key = (sale.sold_at, sale.sold_price)
+                    if key in seen_sales:
+                        continue
+                    seen_sales.add(key)
                     session.add(SnapshotSale(
                         snapshot_id=snapshot.id,
                         sold_at=sale.sold_at,
