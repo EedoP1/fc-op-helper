@@ -83,9 +83,10 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260326-ufn | Fix all FUTBIN findings: deduplicate snapshot_sales, populate player names, set scorer_version | 2026-03-26 | ed8adc8 | [260326-ufn-fix-all-futbin-findings-deduplicate-snap](./quick/260326-ufn-fix-all-futbin-findings-deduplicate-snap/) |
 | 260326-vkj | Fix resolve_outcomes double-counting: timestamp-filter completedAuctions by last_resolved_at | 2026-03-26 | 0af76c8 | [260326-vkj-fix-listing-tracker-resolve-outcomes-dou](./quick/260326-vkj-fix-listing-tracker-resolve-outcomes-dou/) |
+| 260326-wac | Build FUTBIN health monitor CLI with audit report | 2026-03-26 | f45f78d | [260326-wac-build-futbin-health-monitor-hourly-sched](./quick/260326-wac-build-futbin-health-monitor-hourly-sched/) |
 
 ## Session Continuity
 
-Last activity: 2026-03-26 - Completed quick task 260326-vkj: Fix resolve_outcomes double-counting
-Stopped at: Completed quick task 260326-vkj
+Last activity: 2026-03-26 - Completed quick task 260326-wac: Build FUTBIN health monitor CLI
+Stopped at: Completed quick task 260326-wac
 Resume file: None
