@@ -259,6 +259,7 @@ def _parse_futbin_date(text: str) -> datetime | None:
         Parsed datetime or None if unparseable.
     """
     formats = [
+        "%b %d, %Y %I:%M %p",
         "%b %d, %Y %H:%M",
         "%b %d, %Y",
         "%Y-%m-%d %H:%M:%S",
@@ -267,9 +268,19 @@ def _parse_futbin_date(text: str) -> datetime | None:
         "%d/%m/%Y %H:%M",
         "%d/%m/%Y",
     ]
+    cleaned = text.strip()
     for fmt in formats:
         try:
-            return datetime.strptime(text.strip(), fmt)
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+
+    # FUTBIN often omits the year: "Mar 26, 9:38 PM" — inject current year
+    current_year = datetime.now().year
+    for fmt in ["%b %d, %I:%M %p", "%b %d, %H:%M"]:
+        try:
+            parsed = datetime.strptime(cleaned, fmt)
+            return parsed.replace(year=current_year)
         except ValueError:
             continue
     logger.debug("Could not parse FUTBIN date: '%s'", text)

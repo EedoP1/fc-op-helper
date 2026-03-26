@@ -110,18 +110,22 @@ def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
     ]
 
 
-def _get_our_data(conn: sqlite3.Connection, ea_id: int) -> dict:
-    """Query our DB for comparison data over the last 48 hours.
+def _get_our_data(conn: sqlite3.Connection, ea_id: int, cutoff_iso: str | None = None) -> dict:
+    """Query our DB for comparison data within a time window.
 
     Args:
         conn: SQLite connection.
         ea_id: Player EA ID.
+        cutoff_iso: ISO timestamp cutoff. Only data after this time is included.
+            If None, defaults to 48 hours ago.
 
     Returns:
         Dict with our_sold, our_expired, our_sell_rate, our_median_price,
         our_listing_count, our_min_price, our_max_price.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    if cutoff_iso is None:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    cutoff = cutoff_iso
 
     # Listing observations: sold vs expired
     sold_count = conn.execute(
@@ -188,7 +192,8 @@ def _get_futbin_data(sales: list[dict]) -> dict:
 
     Returns:
         Dict with futbin_sold, futbin_expired, futbin_sell_rate,
-        futbin_median_price, futbin_total, futbin_min_listed, futbin_max_listed.
+        futbin_median_price, futbin_total, futbin_min_listed, futbin_max_listed,
+        futbin_earliest, futbin_latest (datetime or None).
     """
     if not sales:
         return {
@@ -199,6 +204,8 @@ def _get_futbin_data(sales: list[dict]) -> dict:
             "futbin_total": 0,
             "futbin_min_listed": 0,
             "futbin_max_listed": 0,
+            "futbin_earliest": None,
+            "futbin_latest": None,
         }
 
     sold = [s for s in sales if s["sold_for"] > 0]
@@ -211,6 +218,11 @@ def _get_futbin_data(sales: list[dict]) -> dict:
 
     listed_prices = [s["listed_for"] for s in sales if s["listed_for"] > 0]
 
+    # Extract time range from FUTBIN data
+    dates = [s["date"] for s in sales if s.get("date") is not None]
+    futbin_earliest = min(dates) if dates else None
+    futbin_latest = max(dates) if dates else None
+
     return {
         "futbin_sold": len(sold),
         "futbin_expired": len(expired),
@@ -219,6 +231,8 @@ def _get_futbin_data(sales: list[dict]) -> dict:
         "futbin_total": total,
         "futbin_min_listed": min(listed_prices) if listed_prices else 0,
         "futbin_max_listed": max(listed_prices) if listed_prices else 0,
+        "futbin_earliest": futbin_earliest,
+        "futbin_latest": futbin_latest,
     }
 
 
@@ -301,6 +315,9 @@ def main(count: int, verbose: bool) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+    import sys, io
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     console = Console()
 
     # Check DB exists
@@ -312,7 +329,7 @@ def main(count: int, verbose: bool) -> None:
         )
         return
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
         _ensure_schema(conn)
         players = _select_players(conn, count)
@@ -340,8 +357,9 @@ def main(count: int, verbose: bool) -> None:
                     )
                     continue
 
+                safe_name = name.encode("ascii", errors="replace").decode("ascii")
                 console.print(
-                    f"  [{i}/{len(players)}] {name} (EA {ea_id})...",
+                    f"  [{i}/{len(players)}] {safe_name} (EA {ea_id})...",
                     end=" ",
                 )
 
@@ -361,9 +379,46 @@ def main(count: int, verbose: bool) -> None:
                 # Fetch FUTBIN sales
                 sales = client.fetch_sales_page(futbin_id, name)
 
-                # Get our data
-                our = _get_our_data(conn, ea_id)
-                futbin = _get_futbin_data(sales)
+                # Find overlapping time window between FUTBIN and our DB
+                futbin_all = _get_futbin_data(sales)
+
+                # Get our DB's earliest observation for this player
+                our_earliest_row = conn.execute(
+                    "SELECT MIN(first_seen_at) FROM listing_observations "
+                    "WHERE ea_id = ? AND outcome IS NOT NULL",
+                    (ea_id,),
+                ).fetchone()
+                our_earliest = our_earliest_row[0] if our_earliest_row and our_earliest_row[0] else None
+
+                # Determine overlap cutoff: whichever started later
+                overlap_cutoff = None
+                if futbin_all["futbin_earliest"] and our_earliest:
+                    fb_iso = futbin_all["futbin_earliest"].isoformat()
+                    overlap_cutoff = max(fb_iso, our_earliest)
+                elif futbin_all["futbin_earliest"]:
+                    overlap_cutoff = futbin_all["futbin_earliest"].isoformat()
+                elif our_earliest:
+                    overlap_cutoff = our_earliest
+
+                # Filter FUTBIN sales to overlap window
+                if overlap_cutoff and futbin_all["futbin_earliest"]:
+                    from datetime import datetime as dt
+                    try:
+                        cutoff_dt = dt.fromisoformat(overlap_cutoff)
+                    except (ValueError, TypeError):
+                        cutoff_dt = None
+                    if cutoff_dt:
+                        filtered_sales = [
+                            s for s in sales
+                            if s.get("date") is not None and s["date"] >= cutoff_dt
+                        ]
+                        futbin = _get_futbin_data(filtered_sales)
+                    else:
+                        futbin = futbin_all
+                else:
+                    futbin = futbin_all
+
+                our = _get_our_data(conn, ea_id, cutoff_iso=overlap_cutoff)
 
                 # Compute health score
                 score = compute_health_score(our, futbin)
