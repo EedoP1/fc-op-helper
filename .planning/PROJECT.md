@@ -27,10 +27,19 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 
 ### Active
 
-- [ ] Chrome extension for EA Web App automation (buy, list, relist)
-- [ ] Profit tracking and performance analytics
+- [ ] Chrome extension overlays on EA Web App with recommended OP sell list from backend
+- [ ] User confirms buy list, then extension autonomously executes buy → list → relist cycle
+- [ ] Price guard skips players whose current BIN exceeds expected buy price
+- [ ] Auto-list purchased players at backend-recommended OP price
+- [ ] Auto-relist expired cards at fresh OP price from backend
+- [ ] Extension reports all activity (buys, sales, relists) back to backend DB
+- [ ] Profit tracking and performance analytics queryable via API/CLI
+
+### Future
+
 - [ ] Separate web dashboard for analytics and monitoring
 - [ ] User accounts and paid tiers
+- [ ] Configurable backend URL for remote/cloud deployment
 
 ### Out of Scope
 
@@ -42,21 +51,34 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Mass bidding automation — high EA detection surface
 - SBC solver — zero relation to OP sell profitability
 
+## Current Milestone: v1.1 Chrome Extension — Automated OP Sell Cycle
+
+**Goal:** Chrome extension that automates the full buy/list/relist cycle on the EA Web App, powered by the backend's OP sell recommendations, with profit tracking.
+
+**Target features:**
+- Extension pulls portfolio from backend and displays recommended OP sell list
+- User confirms the list, then extension executes autonomously (buy → list → relist)
+- Price guard: skip players whose BIN exceeds expected buy price
+- Auto-list at backend-recommended OP price, auto-relist expired cards
+- All activity reported to backend DB for profit tracking
+- Profit performance visible via API/CLI
+- Localhost-only (extension → localhost:8000)
+
 ## Context
 
 Shipped v1.0 with ~18k LOC Python across 115 files, 127 commits over 2 days.
 
-**Tech stack:** Python 3.12, FastAPI, SQLAlchemy 2.0 async, aiosqlite, APScheduler, httpx, Pydantic, Rich, Click
+**Tech stack:** Python 3.12, FastAPI, SQLAlchemy 2.0 async, aiosqlite, APScheduler, httpx, Pydantic, Rich, Click. Chrome extension will use TypeScript.
 
 **Current state:**
 - Backend scans ~1800 players every 5 minutes with circuit breaker protection
 - Listing-tracking scorer (v2) computes expected_profit_per_hour from D-10 observation window
 - CLI displays portfolio ranked by expected_profit_per_hour
+- REST API serves portfolio, player detail, top players, health endpoints
 - 10 quick tasks completed post-phase-4 for scoring formula refinement and cleanup
 
 **Known issues:**
 - fut.gg has no published rate limits; 24/7 scanning behavior is empirically tuned
-- Phase 2 ROADMAP showed 0/2 plans but execution was complete on disk (tracking inconsistency)
 
 ## Constraints
 
@@ -98,4 +120,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after v1.0 milestone*
+*Last updated: 2026-03-26 after v1.1 milestone start*
