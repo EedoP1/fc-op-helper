@@ -114,10 +114,11 @@ None yet.
 | 260326-12g | Update CLI labels for v2 metrics (EP/hr, Sell%, OP Sales) and purge stale v1 scores at startup | 2026-03-26 | e857c19 | [260326-12g-update-cli-labels-for-v2-metrics-and-pur](./quick/260326-12g-update-cli-labels-for-v2-metrics-and-pur/) |
 | 260326-1r2 | Fix scorer_v2 formula to net_profit * sell_rate, remove op_sales_per_hour | 2026-03-26 | 416bc9d | [260326-1r2-fix-scorer-v2-formula-to-net-profit-sell](./quick/260326-1r2-fix-scorer-v2-formula-to-net-profit-sell/) |
 | 260326-2aw | Fix listing outcome resolution with expiry gating + fixed 5-min scan interval | 2026-03-26 | 2a25124 | [260326-2aw-fix-listing-outcome-resolution-with-expi](./quick/260326-2aw-fix-listing-outcome-resolution-with-expi/) |
+| 260326-2oj | Review codebase, remove dead code: delete v1 scorer, relocate MARGINS to config, strip vestigial API fields | 2026-03-26 | 1314cca | [260326-2oj-review-codebase-remove-dead-code-improve](./quick/260326-2oj-review-codebase-remove-dead-code-improve/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-26
 Last session: 2026-03-26T00:00:00.000Z
-Stopped at: Completed quick task 260326-2aw
+Stopped at: Completed quick task 260326-2oj
 Resume file: None
