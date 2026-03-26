@@ -16,7 +16,7 @@ CB_RECOVERY_TIMEOUT = 60.0        # seconds before HALF_OPEN
 CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 
 # Scanner concurrency
-SCAN_CONCURRENCY = 5              # lower than CLI's 10 for 24/7 safety
+SCAN_CONCURRENCY = 40             # high concurrency to scan all ~1800 players every 5 min
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
 
 # Initial scoring (one-time after bootstrap)
