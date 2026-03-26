@@ -145,10 +145,6 @@ class PortfolioSlot(Base):
     sell_price: Mapped[int] = mapped_column(Integer)
     added_at: Mapped[datetime] = mapped_column(DateTime)
 
-    __table_args__ = (
-        Index("ix_portfolio_slots_ea_id", "ea_id"),
-    )
-
 
 class TradeAction(Base):
     """Pending/active action queue entry. One row per queued work item."""
