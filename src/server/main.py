@@ -13,6 +13,7 @@ from src.server.api.players import router as players_router
 from src.server.api.health import router as health_router
 from src.server.api.portfolio import router as portfolio_router
 from src.server.api.actions import router as actions_router
+from src.server.api.profit import router as profit_router
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +94,4 @@ app.include_router(players_router)
 app.include_router(health_router)
 app.include_router(portfolio_router)
 app.include_router(actions_router)
+app.include_router(profit_router)
