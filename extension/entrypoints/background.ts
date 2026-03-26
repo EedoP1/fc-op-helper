@@ -11,6 +11,7 @@
  *   - D-04: Backend URL hardcoded to localhost:8000 (v1.1 is localhost-only)
  */
 import { enabledItem, lastActionItem } from '../src/storage';
+import { ExtensionMessage } from '../src/messages';
 
 const BACKEND_URL = 'http://localhost:8000';
 const POLL_ALARM = 'poll';
@@ -41,8 +42,28 @@ export default defineBackground({
 });
 
 /**
+ * Send a PING to the active EA Web App tab to confirm the content script is alive.
+ * Returns the PONG response, or null if the content script is not ready (expected during navigation).
+ * Wraps tabs.sendMessage in try/catch — rejects with "Could not establish connection" when
+ * no content script listener is registered (Pitfall 4 from research).
+ */
+async function pingActiveTab(): Promise<ExtensionMessage | null> {
+  try {
+    const [tab] = await chrome.tabs.query({
+      url: 'https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*',
+      active: true,
+    });
+    if (!tab?.id) return null;
+    return await chrome.tabs.sendMessage(tab.id, { type: 'PING' } satisfies ExtensionMessage);
+  } catch {
+    return null; // content script not ready — expected during navigation
+  }
+}
+
+/**
  * Poll the backend for a pending action if the enabled flag is set.
  * Stores the fetched action in lastActionItem for Phase 7 DOM automation to consume.
+ * After storing an action, pings the active EA tab to confirm content script is alive.
  * Handles all errors gracefully — never throws (worker errors are silent to the user).
  */
 async function maybePoll(): Promise<void> {
@@ -55,6 +76,10 @@ async function maybePoll(): Promise<void> {
     const data = await res.json();
     if (data.action) {
       await lastActionItem.setValue(data.action);
+      const pong = await pingActiveTab();
+      if (pong) {
+        console.log('[OP Seller] Content script alive');
+      }
     }
   } catch (e) {
     console.error('[OP Seller] poll failed:', e);
