@@ -2,16 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: planning
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-26T06:26:27.770Z"
-last_activity: 2026-03-26 — v1.1 roadmap created, phases 5-8 defined
+status: Ready to execute
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-26T06:52:08.426Z"
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 40
+  total_plans: 3
+  completed_plans: 1
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 5 — Backend Infrastructure (v1.1 start)
+**Current focus:** Phase 05 — backend-infrastructure
 
 ## Current Position
 
-Phase: 5 of 8 (Backend Infrastructure)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-26 — v1.1 roadmap created, phases 5-8 defined
-
-Progress: [████░░░░░░] 40% (v1.0 phases 1-4 complete, v1.1 phases 5-8 not started)
+Phase: 05 (backend-infrastructure) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -52,6 +46,7 @@ Progress: [████░░░░░░] 40% (v1.0 phases 1-4 complete, v1.1 p
 - Trend: Strong velocity on backend Python work
 
 *Updated after each plan completion*
+| Phase 05-backend-infrastructure P01 | 3 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -63,6 +58,8 @@ Progress: [████░░░░░░] 40% (v1.0 phases 1-4 complete, v1.1 p
 - [v1.1 research]: WXT over Plasmo/CRXJS for extension build (Plasmo maintenance lag; CRXJS archival risk)
 - [v1.1 research]: All backend calls route through service worker — content scripts never call backend directly (Chrome CORS constraint)
 - [v1.1 research]: Relist price is locked at original margin — does not refresh on relist
+- [Phase 05-backend-infrastructure]: Use allow_origin_regex for CORS — allow_origins wildcard does not cover chrome-extension:// scheme
+- [Phase 05-backend-infrastructure]: PortfolioSlot.ea_id uses unique=True on column only — no __table_args__ Index (avoids duplicate index creation)
 
 ### Pending Todos
 
@@ -75,6 +72,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T06:26:27.765Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-backend-infrastructure/05-CONTEXT.md
+Last session: 2026-03-26T06:52:08.421Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None
