@@ -41,7 +41,7 @@
 **Plans**: 3 plans
 Plans:
 - [x] 05-01-PLAN.md — DB models (TradeAction, TradeRecord, PortfolioSlot) + CORS middleware
-- [ ] 05-02-PLAN.md — Action queue endpoints (GET /pending, POST /complete) + tests
+- [x] 05-02-PLAN.md — Action queue endpoints (GET /pending, POST /complete) + tests
 - [ ] 05-03-PLAN.md — Profit summary endpoint + player swap DELETE endpoint + tests
 
 ### Phase 6: Extension Architecture Foundation
