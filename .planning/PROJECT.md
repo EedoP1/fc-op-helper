@@ -79,7 +79,8 @@ Shipped v1.0 with ~18k LOC Python across 115 files, 127 commits over 2 days.
 - Portfolio slot seeding and player swap with optimizer replacement
 - Profit summary with realized totals + per-player breakdown
 - CORS configured for chrome-extension:// origins
-- 113 tests passing across all modules
+- Chrome extension scaffolded (WXT 0.20.20, MV3) with service worker alarm polling, typed message protocol, and content script SPA detection
+- 118 Python tests + 12 extension tests passing
 
 **Known issues:**
 - fut.gg has no published rate limits; 24/7 scanning behavior is empirically tuned
@@ -124,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after Phase 5 (Backend Infrastructure) complete*
+*Last updated: 2026-03-27 after Phase 6 (Extension Architecture Foundation) complete*
