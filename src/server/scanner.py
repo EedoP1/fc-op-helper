@@ -382,8 +382,6 @@ class ScannerService:
                 record.last_scanned_at = now
                 if market_data is not None:
                     record.listing_count = market_data.listing_count
-                    if v2_result is not None:
-                        record.sales_per_hour = 0.0
 
             # Schedule next scan at fixed 5-minute interval
             if record is not None:

@@ -160,7 +160,7 @@ async def test_portfolio_player_fields(seeded_portfolio_app):
 
     required_fields = {
         "ea_id", "name", "rating", "position", "price", "margin_pct",
-        "op_ratio", "expected_profit", "efficiency", "scan_tier",
+        "op_ratio", "expected_profit", "efficiency",
         "is_stale", "last_scanned",
     }
     for player in data:

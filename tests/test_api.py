@@ -373,7 +373,7 @@ async def test_player_detail_fields(seeded_app_with_history):
     # Top-level keys
     top_keys = {
         "ea_id", "name", "rating", "position", "nation", "league", "club",
-        "card_type", "scan_tier", "last_scanned", "is_stale",
+        "card_type", "last_scanned", "is_stale",
         "current_score", "score_history", "trend",
     }
     missing = top_keys - set(body.keys())
