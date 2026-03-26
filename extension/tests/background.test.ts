@@ -3,6 +3,9 @@
  * Uses WxtVitest + fakeBrowser for in-memory chrome.* API mocks.
  * Tests cover: alarm creation, alarm idempotency, polling gate, immediate wake poll,
  * action storage, and error handling.
+ *
+ * Note: WXT's defineBackground() returns an object with a main() function —
+ * it does not auto-call main(). Tests must call main() directly.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
@@ -16,12 +19,15 @@ const MOCK_ACTION = {
   player_name: 'Player 12345',
 };
 
-async function loadBackground() {
-  // Reset module cache so each test gets a fresh background execution
+async function runBackground() {
+  // Reset module cache so each test gets fresh imports
   vi.resetModules();
-  await import('../entrypoints/background');
-  // Flush any microtasks / callbacks (alarm.get callback is async)
-  await new Promise((r) => setTimeout(r, 10));
+  const mod = await import('../entrypoints/background');
+  const bg = mod.default;
+  // Call main() — WXT defineBackground returns { main, type } but doesn't auto-execute
+  bg.main();
+  // Allow the alarm.get callback and immediate maybePoll() to complete
+  await new Promise((r) => setTimeout(r, 50));
 }
 
 describe('poll alarm', () => {
@@ -35,7 +41,7 @@ describe('poll alarm', () => {
   });
 
   it('creates poll alarm on startup with periodInMinutes=1 when no alarm exists', async () => {
-    await loadBackground();
+    await runBackground();
     const alarm = await fakeBrowser.alarms.get('poll');
     expect(alarm).toBeDefined();
     expect(alarm?.periodInMinutes).toBe(1);
@@ -46,7 +52,7 @@ describe('poll alarm', () => {
     await fakeBrowser.alarms.create('poll', { periodInMinutes: 1 });
     const createSpy = vi.spyOn(fakeBrowser.alarms, 'create');
 
-    await loadBackground();
+    await runBackground();
 
     // create should not have been called since alarm already exists
     expect(createSpy).not.toHaveBeenCalled();
@@ -75,10 +81,7 @@ describe('maybePoll', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await loadBackground();
-
-    // Allow the async maybePoll to complete
-    await new Promise((r) => setTimeout(r, 50));
+    await runBackground();
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:8000/api/v1/actions/pending',
@@ -94,8 +97,7 @@ describe('maybePoll', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await loadBackground();
-    await new Promise((r) => setTimeout(r, 50));
+    await runBackground();
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -108,8 +110,7 @@ describe('maybePoll', () => {
       json: async () => ({ action: MOCK_ACTION }),
     }));
 
-    await loadBackground();
-    await new Promise((r) => setTimeout(r, 50));
+    await runBackground();
 
     const stored = await lastActionItem.getValue();
     expect(stored).not.toBeNull();
@@ -125,8 +126,7 @@ describe('maybePoll', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
 
     // Should NOT throw
-    await expect(loadBackground()).resolves.not.toThrow();
-    await new Promise((r) => setTimeout(r, 50));
+    await expect(runBackground()).resolves.not.toThrow();
 
     expect(errorSpy).toHaveBeenCalled();
   });
@@ -139,8 +139,7 @@ describe('maybePoll', () => {
       status: 503,
     }));
 
-    await loadBackground();
-    await new Promise((r) => setTimeout(r, 50));
+    await runBackground();
 
     const stored = await lastActionItem.getValue();
     expect(stored).toBeNull();
