@@ -1,371 +1,641 @@
-# Architecture Patterns
+# Architecture Research
 
-**Domain:** Trading bot platform — Python backend + Chrome extension + web dashboard
-**Researched:** 2026-03-25
-**Overall confidence:** HIGH (core patterns), MEDIUM (EA Web App-specific DOM automation)
-
----
-
-## Recommended Architecture
-
-The target system is a three-tier platform with a persistent Python backend at the center. All intelligence lives in the backend; the Chrome extension and dashboard are thin clients that consume it.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      fut.gg API                             │
-│               (external data source)                        │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP (hourly polling, rate-limited)
-┌──────────────────────▼──────────────────────────────────────┐
-│                 Python Backend (FastAPI)                     │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐ │
-│  │  Scheduler   │  │  Scorer /    │  │   REST API        │ │
-│  │ (APScheduler)│  │  Optimizer   │  │  /api/v1/...      │ │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬──────────┘ │
-│         │                 │                   │             │
-│  ┌──────▼─────────────────▼───────────────────▼──────────┐ │
-│  │               SQLite Database                          │ │
-│  │   players | scores | trades | profit_records          │ │
-│  └────────────────────────────────────────────────────────┘ │
-└───────────────────────┬───────────────────────┬─────────────┘
-                        │ HTTP/REST             │ HTTP/REST
-           ┌────────────▼──────────┐  ┌─────────▼──────────────┐
-           │   Chrome Extension    │  │   Web Dashboard        │
-           │                       │  │   (analytics / monitor)│
-           │  service worker       │  │                        │
-           │  (background.js)      │  │  Fetch top players,    │
-           │    ↕ messages         │  │  profit history,       │
-           │  content script       │  │  score trends          │
-           │  (ea-webapp.js)       │  └────────────────────────┘
-           │    ↕ DOM automation   │
-           │  EA Web App           │
-           │  (webapp.ea.com)      │
-           └───────────────────────┘
-```
+**Domain:** Chrome extension for EA Web App automation — buy/list/relist cycle + profit tracking
+**Researched:** 2026-03-26
+**Confidence:** HIGH (Chrome extension MV3 patterns), HIGH (FastAPI integration), MEDIUM (EA Web App DOM specifics)
 
 ---
 
-## Component Boundaries
+## Context: What Already Exists
 
-### 1. Python Backend (FastAPI + APScheduler + SQLite)
+The v1.0 backend is production-ready and must not be structurally changed. This research is scoped to what the Chrome extension milestone adds.
 
-**Responsibility:** All business logic, all data, all intelligence.
+**Existing backend (unchanged):**
+- FastAPI app at `src/server/main.py` — single process, lifespan-managed
+- APScheduler scanning ~1800 players every 5 minutes
+- REST API at `/api/v1/` — portfolio, players/top, players/{id}, health
+- SQLite WAL mode via SQLAlchemy async, `aiosqlite`
+- DB tables: `players`, `player_scores`, `market_snapshots`, `snapshot_sales`, `snapshot_price_points`, `listing_observations`, `daily_listing_summaries`
 
-| Sub-component | Responsibility | Communicates With |
-|---------------|---------------|-------------------|
-| `Scheduler` (APScheduler) | Fires hourly scan jobs per player in 11k–200k range | Scorer, fut.gg API |
-| `FutGGClient` | Fetches player data from fut.gg API with rate-limit throttling | fut.gg API (external) |
-| `Scorer` / `Optimizer` | Existing OP detection + portfolio ranking logic (unchanged) | SQLite (reads/writes scores) |
-| `REST API` (FastAPI routes) | Exposes player recommendations, trade commands, profit records | Chrome extension, Dashboard |
-| `SQLite` | Stores players, scores, score history, trade records, profit records | All internal components |
-
-The backend owns the scheduler. The extension never initiates a scan — it only reads recommendations already computed.
-
-**Key constraint:** The scorer and optimizer are existing Python code. They stay Python. The backend is not a microservices split — one process runs the API + scheduler together using FastAPI's lifespan context manager.
-
----
-
-### 2. Chrome Extension (Manifest V3, TypeScript)
-
-**Responsibility:** Automate buy/list/relist actions on the EA Web App. Bridge between backend recommendations and EA's UI.
-
-The extension has three distinct script contexts, each with different capabilities:
-
-| Script | Runs In | Capabilities | Responsibility |
-|--------|---------|-------------|----------------|
-| `background.js` (service worker) | Extension context | `fetch()` to localhost (CORS bypassed via `host_permissions`), persistent state across tabs | Polls backend REST API for pending trade actions, stores action queue, orchestrates content scripts |
-| `content-script.js` | EA Web App page context | Full DOM read/write on webapp.ea.com | Clicks buttons, reads player listings, fills price fields, triggers buy/sell/relist sequences |
-| `popup.html` (optional) | Extension popup | Limited, ephemeral | Status display only — shows current action queue / last sync |
-
-**Message flow within the extension:**
-
-```
-Backend REST API
-      │
-      │ HTTP fetch (every N seconds, in service worker)
-      ▼
-background.js (service worker)
-      │
-      │ chrome.tabs.sendMessage({ action: "BUY_PLAYER", ... })
-      ▼
-content-script.js
-      │
-      │ DOM manipulation (querySelector, click, dispatchEvent)
-      ▼
-EA Web App DOM
-      │
-      │ chrome.runtime.sendMessage({ result: "BOUGHT", price: 15000 })
-      ▼
-background.js (service worker)
-      │
-      │ HTTP POST to backend /api/v1/trades (record outcome)
-      ▼
-Backend REST API
-```
-
-**Critical Manifest V3 constraint:** Service workers are ephemeral — they can be terminated by Chrome when idle. For an automation loop, the background service worker must either:
-1. Use `chrome.alarms` API (fires alarms that wake the service worker) for periodic polling, OR
-2. Keep a WebSocket connection alive by exchanging messages within every 30-second window (supported from Chrome 116+)
-
-Recommendation: Use `chrome.alarms` for polling cadence (simpler, more reliable than fighting the 30-second keepalive). The alarm fires every 30–60 seconds, wakes the service worker, fetches pending actions, and dispatches them to the content script.
-
-**CORS bypass for localhost:** Declare `"http://localhost:8000/*"` in `host_permissions` in `manifest.json`. The service worker can then `fetch()` the local backend without CORS errors. Content scripts cannot make cross-origin requests on their own — all backend communication routes through the service worker.
+**What the milestone adds:**
+- Chrome extension (new project in `extension/`)
+- 3 new backend API endpoints (pending actions, report outcome, profit summary)
+- 3 new DB tables (trade_actions, trade_records, profit_snapshots)
+- CORS configuration on the backend
+- Activity reporting pipeline from extension to backend
 
 ---
 
-### 3. Web Dashboard (static or served by FastAPI)
+## System Overview
 
-**Responsibility:** Analytics, monitoring, historical performance. Read-only consumer of the backend REST API.
-
-| Section | Data Source | Update Cadence |
-|---------|-------------|---------------|
-| Top OP sell list | `GET /api/v1/players/top` | Polling every 60s or manual refresh |
-| Player score history | `GET /api/v1/players/{id}/history` | On demand |
-| Trade log | `GET /api/v1/trades` | Polling every 30s |
-| Profit summary | `GET /api/v1/profit/summary` | Polling every 60s |
-| Scheduler status | `GET /api/v1/health` | Polling every 10s |
-
-**Technology:** React (Vite) or plain HTML + Alpine.js for a simple personal tool. For personal use, the dashboard can be a static file served directly by FastAPI's `StaticFiles` mount — no separate deployment.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         fut.gg API                                  │
+│                    (external, rate-limited)                          │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ HTTP (5-min scanner, unchanged)
+┌────────────────────────────▼────────────────────────────────────────┐
+│                  Python Backend (FastAPI — UNCHANGED CORE)           │
+│                                                                      │
+│  ┌───────────────┐  ┌──────────────────┐  ┌────────────────────┐    │
+│  │  APScheduler  │  │  Scorer V2 /     │  │  REST API          │    │
+│  │  (scanner)    │  │  Optimizer       │  │  /api/v1/          │    │
+│  └──────┬────────┘  └────────┬─────────┘  └─────────┬──────────┘    │
+│         │                   │                       │                │
+│  ┌──────▼───────────────────▼───────────────────────▼────────────┐  │
+│  │                     SQLite (WAL mode)                          │  │
+│  │  [existing] players | player_scores | listing_observations     │  │
+│  │  [NEW]      trade_actions | trade_records | profit_snapshots   │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ HTTP/REST (localhost:8000)
+                                 │ CORS: chrome-extension://
+                    ┌────────────▼────────────────────┐
+                    │      Chrome Extension (NEW)      │
+                    │                                  │
+                    │  ┌──────────────────────────┐    │
+                    │  │  Service Worker          │    │
+                    │  │  (background.ts)         │    │
+                    │  │  - chrome.alarms polling │    │
+                    │  │  - fetch() to backend    │    │
+                    │  │  - action queue mgmt     │    │
+                    │  └────────────┬─────────────┘    │
+                    │               │ chrome.tabs       │
+                    │               │ .sendMessage()    │
+                    │  ┌────────────▼─────────────┐    │
+                    │  │  Content Script          │    │
+                    │  │  (content.ts)            │    │
+                    │  │  - DOM automation        │    │
+                    │  │  - MutationObserver      │    │
+                    │  │  - click/input dispatch  │    │
+                    │  └────────────┬─────────────┘    │
+                    │               │ DOM events        │
+                    │  ┌────────────▼─────────────┐    │
+                    │  │  EA Web App              │    │
+                    │  │  (webapp.ea.com)         │    │
+                    │  └──────────────────────────┘    │
+                    │                                  │
+                    │  ┌──────────────────────────┐    │
+                    │  │  Popup (popup.html)       │    │
+                    │  │  - status display only   │    │
+                    │  │  - start/stop controls   │    │
+                    │  └──────────────────────────┘    │
+                    └──────────────────────────────────┘
+```
 
 ---
 
-## Data Flow
+## New Components
 
-### Scan Flow (backend, runs hourly)
+### 1. Chrome Extension — Service Worker (`background.ts`)
+
+**What it is:** Manifest V3 background service worker. The brain of the extension.
+
+**Responsibilities:**
+- Wake on `chrome.alarms` (every 30 seconds) to poll backend for pending actions
+- `fetch()` the backend REST API — only the service worker can do cross-origin requests to localhost
+- Maintain a local action queue in `chrome.storage.local` (survives service worker restarts)
+- Send action commands to content script via `chrome.tabs.sendMessage()`
+- Receive outcome reports from content script
+- POST outcomes to backend `/api/v1/actions/{id}/complete`
+
+**Why service worker, not persistent background page:** Manifest V3 requires service workers. Persistent background pages are MV2 and Chrome is deprecating them. Service workers are ephemeral — use `chrome.alarms` for periodic work, `chrome.storage` for state.
+
+**Critical MV3 constraint:** Service workers terminate after 30 seconds of inactivity. Using `chrome.alarms` is the reliable keepalive pattern — the alarm fires, wakes the service worker, completes its task, then the worker sleeps again. This is correct behavior, not a bug to work around.
+
+---
+
+### 2. Chrome Extension — Content Script (`content.ts`)
+
+**What it is:** JavaScript injected into the EA Web App page context. The hands of the extension.
+
+**Responsibilities:**
+- Execute DOM operations on `webapp.ea.com`
+- Use `MutationObserver` to detect when EA's SPA has rendered target UI elements
+- Simulate user interactions (click, input value change with `dispatchEvent`)
+- Navigate between EA Web App screens (search → buy → list → transfer list)
+- Report action outcomes back to service worker via `chrome.runtime.sendMessage()`
+
+**Key EA Web App DOM patterns (MEDIUM confidence — requires validation during Phase 1 of extension build):**
+- EA's webapp is a single-page Angular-style app with async rendering
+- DOM elements appear/disappear as the user navigates — cannot query immediately after navigation
+- MutationObserver on `document.body` (subtree: true) detects element insertion
+- Buttons have class-based selectors that are more stable than ID-based (EA uses generated IDs)
+- Price input fields require both `.value = X` and `dispatchEvent(new Event('input', {bubbles: true}))` to register in the framework's change detection
+
+**Timing discipline:** All DOM interactions must be sequenced with human-paced delays (300–800ms between steps). EA's rate detection is behavioral — too-fast programmatic clicks trigger detection. Use `setTimeout`-based sequential steps, not `Promise.all` parallel execution.
+
+---
+
+### 3. Chrome Extension — Popup (`popup.html` + `popup.ts`)
+
+**What it is:** The small panel that opens when the user clicks the extension icon.
+
+**Responsibilities (minimal):**
+- Show current automation status (running / paused / stopped)
+- Show last sync time with backend
+- Show count of pending actions
+- Start / stop automation toggle
+- NOT a full dashboard — just status and control
+
+---
+
+### 4. New Backend DB Tables
+
+**`trade_actions` — the pending actions queue:**
+```
+id           INTEGER PK autoincrement
+ea_id        INTEGER (FK to players.ea_id)
+action_type  TEXT    -- "BUY" | "LIST" | "RELIST"
+target_price INTEGER -- price extension should use
+status       TEXT    -- "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED" | "SKIPPED"
+created_at   DATETIME
+claimed_at   DATETIME nullable  -- when extension claimed it
+completed_at DATETIME nullable
+actual_price INTEGER nullable   -- what extension actually paid/listed at
+error_msg    TEXT nullable
+```
+
+**`trade_records` — completed trade history:**
+```
+id              INTEGER PK autoincrement
+ea_id           INTEGER
+action_type     TEXT       -- "BUY" | "LIST" | "RELIST" | "SOLD"
+price           INTEGER    -- actual price at execution
+recommended_price INTEGER  -- what backend recommended
+executed_at     DATETIME
+session_id      TEXT nullable  -- group trades in one extension session
+trade_action_id INTEGER nullable  -- FK to trade_actions
+```
+
+**`profit_snapshots` — periodically calculated P&L:**
+```
+id             INTEGER PK autoincrement
+snapshot_at    DATETIME
+total_invested INTEGER  -- sum of BUY prices for open positions
+total_returned INTEGER  -- sum of SOLD prices (after EA 5% tax)
+realized_pnl   INTEGER  -- returned - invested for closed positions
+open_positions INTEGER  -- count of BUY without matching SOLD
+```
+
+---
+
+### 5. New Backend API Endpoints
+
+Three new routes are needed. All added to `src/server/api/` as a new `actions.py` router.
+
+**`GET /api/v1/actions/pending`**
+Returns the next batch of actions the extension should execute. The extension calls this on every alarm tick.
+
+Response:
+```json
+{
+  "actions": [
+    {
+      "id": 42,
+      "ea_id": 12345678,
+      "action_type": "BUY",
+      "target_price": 15000,
+      "name": "Bukayo Saka",
+      "margin_pct": 12
+    }
+  ]
+}
+```
+
+Design decisions:
+- Returns max 1 action at a time (sequential execution enforced server-side)
+- Marks returned action as `IN_PROGRESS` atomically
+- Detects stale `IN_PROGRESS` records (> 5 minutes) and resets them to `PENDING` before querying
+
+**`POST /api/v1/actions/{action_id}/complete`**
+Extension reports the outcome of an action.
+
+Request body:
+```json
+{
+  "status": "DONE",
+  "actual_price": 14800,
+  "error_msg": null
+}
+```
+
+Side effects:
+- Updates `trade_actions.status`
+- Inserts into `trade_records`
+- Triggers profit snapshot recalculation if action was a `SOLD`
+
+**`GET /api/v1/profit/summary`**
+Returns aggregate profit metrics for the CLI and dashboard.
+
+Response:
+```json
+{
+  "total_buys": 23,
+  "total_listed": 19,
+  "total_sold": 11,
+  "realized_pnl": 145000,
+  "open_positions": 8,
+  "avg_margin_achieved_pct": 9.2,
+  "last_updated": "2026-03-26T14:30:00"
+}
+```
+
+**`POST /api/v1/actions/queue`**
+Backend-internal: generates pending actions from the latest portfolio recommendation. Called by the scheduler or manually by the user when they confirm the extension's buy list.
+
+---
+
+### 6. Backend CORS Configuration
+
+The FastAPI app needs CORS middleware to accept requests from the Chrome extension. Chrome extensions make requests from the `chrome-extension://` origin.
+
+Add to `src/server/main.py`:
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["chrome-extension://*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+```
+
+The extension manifest also declares `host_permissions` for `http://localhost:8000/*` to allow the service worker to fetch the local backend without CORS blocking.
+
+---
+
+## Recommended Extension Project Structure
 
 ```
-APScheduler fires hourly job
-    → FutGGClient.discover_players(11k–200k range)
-    → FutGGClient.get_batch_market_data(ea_ids)     [concurrency=10, 0.15s delay/req]
-    → score_player(market_data)                      [existing scorer, unchanged]
-    → SQLite: upsert players, insert score records
-    → optimize_portfolio(scored_players, budget)
-    → SQLite: upsert recommendation set
+extension/
+├── manifest.json          — MV3 manifest: permissions, content_scripts, background
+├── package.json           — TypeScript + Vite + CRXJS dependencies
+├── vite.config.ts         — CRXJS Vite plugin configuration
+├── tsconfig.json          — TypeScript config
+├── src/
+│   ├── background.ts      — Service worker: polling, queue, backend communication
+│   ├── content.ts         — Content script: DOM automation on EA webapp
+│   ├── popup/
+│   │   ├── popup.html     — Extension popup page
+│   │   └── popup.ts       — Popup logic: status display, start/stop
+│   ├── types/
+│   │   ├── messages.ts    — Discriminated union types for all chrome messages
+│   │   ├── api.ts         — Types matching backend API response shapes
+│   │   └── actions.ts     — TradeAction type, ActionStatus enum
+│   └── lib/
+│       ├── backend.ts     — fetch() wrappers for all backend API calls
+│       ├── dom-utils.ts   — waitForElement(), clickElement(), setInputValue()
+│       └── ea-navigator.ts — EA Web App navigation sequences (buy flow, list flow)
 ```
 
-### Read Flow (on-demand, extension + dashboard)
+**Build toolchain:** Vite + CRXJS plugin. CRXJS reads `manifest.json` and bundles service worker, content scripts, and popup as separate entry points with proper MV3 compliance. Output goes to `extension/dist/` which is loaded as an unpacked extension in Chrome.
+
+**No React in the popup.** The popup is minimal status text + a toggle — plain HTML + TypeScript is sufficient. Adding React brings complexity without benefit for a personal tool.
+
+---
+
+## Data Flow: Full Buy/List/Relist Cycle
+
+### Step 1 — User Confirms Buy List
 
 ```
-Extension / Dashboard: GET /api/v1/players/top?budget=1000000
-    → FastAPI route handler
-    → SQLite: SELECT latest recommendation set
-    → Return ranked player list (JSON)
+User opens popup → clicks "Start Session"
+    → popup.ts POSTs to service worker: { action: "START_SESSION", budget: 500000 }
+    → service worker: GET /api/v1/portfolio?budget=500000
+    → service worker: POST /api/v1/actions/queue  (generates pending BUY actions from portfolio)
+    → backend: inserts N trade_actions rows with status=PENDING
+    → service worker: stores session state in chrome.storage.local
 ```
 
-### Trade Flow (extension-driven)
+### Step 2 — Buy Loop
 
 ```
-Extension polls: GET /api/v1/trades/pending
-    → If pending actions exist:
-        → service worker sends message to content script
-        → content script performs DOM automation on EA Web App
-        → Result sent back to service worker
-    → POST /api/v1/trades (record actual buy price, outcome)
-    → SQLite: insert trade record
+chrome.alarms fires every 30 seconds
+    → service worker wakes
+    → GET /api/v1/actions/pending
+    → backend: finds next PENDING action, marks IN_PROGRESS, returns it
+    → service worker: sendMessage to content script { type: "EXECUTE_BUY", ea_id, target_price }
+    → content script: MutationObserver navigates to transfer market search
+    → content script: searches for player by ea_id
+    → content script: checks lowest BIN against target_price (price guard)
+        → if BIN > target_price × 1.02: skip, report SKIPPED
+        → if BIN <= target_price: click Buy Now → confirm
+    → content script: sendMessage back { type: "BUY_RESULT", status: "DONE"|"SKIPPED"|"FAILED", actual_price }
+    → service worker: POST /api/v1/actions/{id}/complete
 ```
 
-### Profit Flow (scheduled reconciliation)
+### Step 3 — List Loop
 
 ```
-APScheduler fires daily reconciliation job
-    → Read all open trade records from SQLite
-    → FutGGClient.get_current_price(ea_id) for each open trade
-    → Calculate realized/unrealized P&L
-    → SQLite: update profit_records
+After BUY succeeds:
+    → backend creates matching LIST action with target_price = buy_price × (1 + margin_pct)
+    → Next alarm tick picks up LIST action
+    → service worker: sendMessage { type: "EXECUTE_LIST", ea_id, list_price }
+    → content script: navigates to Transfer List in EA webapp
+    → content script: finds the just-purchased card (by ea_id)
+    → content script: sets list price, duration 1hr, submits
+    → content script: reports { type: "LIST_RESULT", status: "DONE" }
+    → service worker: POST /api/v1/actions/{id}/complete
 ```
+
+### Step 4 — Relist Loop (periodic check)
+
+```
+On every alarm tick (every 30s), in addition to pending actions:
+    → service worker: GET /api/v1/actions/pending (type=RELIST)
+    → If any RELIST actions exist:
+        → content script: navigates to Transfer List
+        → content script: scans for expired listings
+        → For each expired listing matching an ea_id in RELIST queue:
+            → GET fresh price from backend (via service worker)
+            → Relist at updated OP price, duration 1hr
+        → service worker: POST /api/v1/actions/{id}/complete for each relisted
+```
+
+### Step 5 — Sale Detection + Profit Recording
+
+```
+On every alarm tick:
+    → service worker: GET /api/v1/actions/pending (type=CHECK_SALES)
+    (OR: content script periodically scans Transfer List for sold items)
+    → content script: checks Transfer List for cards marked as "SOLD"
+    → For each sold card: sendMessage { type: "SALE_DETECTED", ea_id, sold_price }
+    → service worker: POST /api/v1/actions/sales { ea_id, sold_price }
+    → backend: inserts trade_record (type=SOLD), updates profit_snapshots
+```
+
+---
+
+## Message Protocol (Service Worker ↔ Content Script)
+
+All messages use TypeScript discriminated unions for type safety.
+
+**Service worker → content script (commands):**
+```typescript
+type ExtensionCommand =
+  | { type: "EXECUTE_BUY"; ea_id: number; target_price: number; player_name: string }
+  | { type: "EXECUTE_LIST"; ea_id: number; list_price: number }
+  | { type: "EXECUTE_RELIST"; ea_id: number; new_price: number }
+  | { type: "CHECK_SOLD_ITEMS" }
+  | { type: "PING" }
+```
+
+**Content script → service worker (results):**
+```typescript
+type ExtensionResult =
+  | { type: "BUY_RESULT"; status: "DONE" | "SKIPPED" | "FAILED"; actual_price?: number; error?: string }
+  | { type: "LIST_RESULT"; status: "DONE" | "FAILED"; error?: string }
+  | { type: "RELIST_RESULT"; status: "DONE" | "FAILED"; count: number }
+  | { type: "SOLD_ITEMS"; items: Array<{ ea_id: number; sold_price: number }> }
+  | { type: "PONG" }
+```
+
+---
+
+## Integration Points: New vs Modified
+
+### New (does not touch existing code)
+
+| Component | Location | What |
+|-----------|----------|------|
+| Chrome extension | `extension/` (new directory) | Entire extension codebase |
+| Actions router | `src/server/api/actions.py` | 3 new endpoints |
+| DB tables | `src/server/models_db.py` | 3 new ORM classes appended |
+| DB migration | `src/server/db.py` (minor) | Tables created at startup via SQLAlchemy metadata |
+
+### Modified (minimal changes to existing code)
+
+| File | Change | Risk |
+|------|--------|------|
+| `src/server/main.py` | Add `CORSMiddleware`, include `actions_router` | Low — additive only |
+| `src/server/models_db.py` | Append 3 new table classes | Low — existing tables untouched |
+| `src/server/api/portfolio.py` | No change needed | None |
+| `src/server/api/players.py` | No change needed | None |
+| `src/config.py` | Add `STALE_ACTION_MINUTES = 5`, `EA_WEBAPP_URL` constant | Low — additive |
+
+**Zero changes to:** scorer_v2.py, optimizer.py, scanner.py, scheduler.py, listing_tracker.py, futgg_client.py, circuit_breaker.py.
 
 ---
 
 ## Patterns to Follow
 
-### Pattern 1: Backend as Single Source of Truth
+### Pattern 1: Backend-Driven Action Queue
 
-**What:** All state lives in SQLite. The extension and dashboard are stateless renderers.
+**What:** The backend owns the action queue. The extension is a consumer, not a scheduler.
 
-**Why:** Avoids state synchronization bugs. If the extension crashes mid-trade, the backend still has the correct trade record. The extension re-polls and resumes.
+**When to use:** Always. Extension never decides what to buy/list/relist — it only executes what the backend says.
 
-**Implementation:** Extension stores NO persistent state (no `chrome.storage` for business data). It polls the backend REST API for what to do next, and reports results back. `chrome.storage` is used only for UI preferences (theme, polling interval).
+**Trade-offs:** Slightly more round-trips (extension polls instead of working from cached state), but eliminates split-brain scenarios where extension and backend disagree on state.
 
----
-
-### Pattern 2: Command Queue Pattern for Extension Actions
-
-**What:** Backend maintains a `pending_actions` queue in SQLite. Extension polls and consumes actions one at a time.
-
-**Why:** EA Web App automation requires sequential, human-paced interactions. Concurrent DOM operations cause UI state corruption. A queue enforces order and allows retry.
-
+**Implementation:**
+```typescript
+// Service worker alarm handler
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "poll-actions") return;
+  const action = await backend.getPendingAction();
+  if (!action) return;
+  const [tab] = await chrome.tabs.query({ url: "*://webapp.ea.com/*" });
+  if (!tab?.id) return;
+  const result = await chrome.tabs.sendMessage(tab.id, toCommand(action));
+  await backend.completeAction(action.id, result);
+});
 ```
-pending_actions table:
-  id, action_type (BUY|LIST|RELIST), ea_player_id,
-  target_price, status (PENDING|IN_PROGRESS|DONE|FAILED),
-  created_at, attempted_at, completed_at, error_msg
+
+### Pattern 2: Sequential DOM Automation with MutationObserver
+
+**What:** Content script never queries DOM immediately. Always waits for target element via MutationObserver before acting.
+
+**When to use:** All DOM interactions on EA's SPA.
+
+**Trade-offs:** Adds ~50-200ms per step for element detection, but eliminates "element not found" failures from race conditions with EA's async rendering.
+
+**Implementation:**
+```typescript
+function waitForElement(selector: string, timeout = 5000): Promise<Element> {
+  return new Promise((resolve, reject) => {
+    const el = document.querySelector(selector);
+    if (el) return resolve(el);
+    const observer = new MutationObserver(() => {
+      const el = document.querySelector(selector);
+      if (el) { observer.disconnect(); resolve(el); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => { observer.disconnect(); reject(new Error(`Timeout: ${selector}`)); }, timeout);
+  });
+}
 ```
 
-The extension claims an action (sets `IN_PROGRESS`), executes it, then reports `DONE` or `FAILED`. If the extension crashes, the backend can detect stale `IN_PROGRESS` records (older than N minutes) and reset them to `PENDING`.
+### Pattern 3: Price Guard in Content Script
 
----
+**What:** Before executing a BUY, content script reads the actual current BIN from the EA Web App search result and compares against backend's `target_price`.
 
-### Pattern 3: Rate-Limited Scan with Adaptive Backoff
+**When to use:** Every buy action.
 
-**What:** The hourly scanner respects a 0.15s delay per request and a concurrency limit of 10. If fut.gg returns 429 (rate limit), the scheduler backs off before retrying.
+**Trade-offs:** Adds one extra DOM read per buy, but prevents paying above market if the price moved between backend scoring and extension execution.
 
-**Why:** fut.gg has no published rate limits. The existing 0.15s delay has worked at one-shot scale. 24/7 operation multiplies request volume dramatically — conservative throttling is required.
+**Rule:** If actual BIN > `target_price × 1.02`, report `SKIPPED` (not `FAILED`). Backend marks as skipped, not a retry candidate. The scanner will re-score the player on the next pass.
 
-**Implementation:** APScheduler's `misfire_grace_time` prevents job pile-up if a scan runs long. If a scan takes more than 1 hour, the next run is skipped (not queued).
+### Pattern 4: Human-Paced Timing
 
----
+**What:** All sequential steps in the buy/list flow use `await sleep(randomBetween(300, 800))` between DOM interactions.
 
-### Pattern 4: Stateless Scorer in Persistent Context
+**When to use:** Every click sequence in the content script.
 
-**What:** The existing scorer and optimizer functions are pure (stateless). They can run inside the scheduler without modification.
+**Trade-offs:** Slows automation cycle (each buy takes ~3-5 seconds instead of 0.5 seconds), but reduces EA behavioral detection surface.
 
-**Why:** The existing architecture already separates data fetching from scoring logic. The persistence layer (SQLite) wraps around the existing functions — the functions themselves don't change.
-
-**Implementation:** The scheduler calls the same `score_player()` and `optimize_portfolio()` functions, then writes results to SQLite. The REST API then reads from SQLite. No scoring logic moves into the API layer.
-
----
-
-### Pattern 5: DOM Automation via MutationObserver + Event Dispatch
-
-**What:** The content script uses `MutationObserver` to detect when the EA Web App has rendered the UI element it needs, then dispatches synthetic events (click, input change) to trigger transitions.
-
-**Why:** EA's web app is a single-page app with async rendering. Querying the DOM immediately after navigation will often find elements not yet rendered. MutationObserver fires precisely when the target element appears.
-
-**EA Web App automation pattern** (based on existing community implementations like EasyFUT, futbot):
-1. Navigate to the transfer market search page (via `window.location`)
-2. Wait for the search form to render (MutationObserver)
-3. Fill player name / price range fields (dispatchEvent on input)
-4. Submit search, wait for results
-5. Click BIN button on target listing
-6. Confirm purchase dialog
-7. Navigate to transfer list (relist or manage)
+**Implementation:**
+```typescript
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const humanDelay = () => sleep(300 + Math.random() * 500);
+```
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Scoring in the API Layer
+### Anti-Pattern 1: Content Script Making Backend Requests
 
-**What:** Running `score_player()` on-demand when the extension requests `/api/v1/players/top`.
+**What people do:** Call `fetch("http://localhost:8000/...")` directly from the content script.
 
-**Why bad:** Scoring requires 100+ API calls to fut.gg per player. Running this on-demand would violate rate limits immediately, make the API unresponsive for 30+ seconds, and prevent the 24/7 background scanning from working correctly.
+**Why it's wrong:** Content scripts run in the page's CORS context. Requests to localhost from `webapp.ea.com` are cross-origin and will be blocked unless the backend adds `webapp.ea.com` to CORS allow_origins — which is wrong because then ANY page at that domain could talk to your personal backend.
 
-**Instead:** Scores are always pre-computed by the scheduler and stored in SQLite. The REST API is read-only for scoring data.
+**Do this instead:** All backend HTTP calls go through the service worker. Content script sends results to service worker via `chrome.runtime.sendMessage`. Service worker makes the backend call.
 
----
+### Anti-Pattern 2: Storing Action State Only in chrome.storage
 
-### Anti-Pattern 2: Extension-Initiated fut.gg Calls
+**What people do:** Keep the pending action queue only in `chrome.storage.local`, never syncing back to backend.
 
-**What:** The extension fetching player data directly from fut.gg on its own.
+**Why it's wrong:** If the user disables the extension, reinstalls Chrome, or clears extension storage, all pending actions are lost. Backend never knows what happened.
 
-**Why bad:** Duplicates rate limit consumption, splits the scoring logic across Python and TypeScript, creates state inconsistency between what the backend knows and what the extension acts on.
+**Do this instead:** Backend is the source of truth. `chrome.storage.local` holds only the currently-claimed action (the one `IN_PROGRESS`). If the service worker restarts mid-action, it checks backend for stale `IN_PROGRESS` records on startup.
 
-**Instead:** The extension only talks to the local backend. The backend is the sole fut.gg client.
+### Anti-Pattern 3: Parallel DOM Operations
 
----
+**What people do:** Process multiple buy/list actions concurrently from one content script.
 
-### Anti-Pattern 3: Persistent Background Page (Manifest V2 Pattern)
+**Why it's wrong:** EA's Web App is a single-view SPA. Attempting to navigate to the transfer market and the transfer list simultaneously causes DOM state corruption. The SPA can only be in one view at a time.
 
-**What:** Using a persistent background page instead of a service worker for the extension.
+**Do this instead:** The backend returns maximum 1 pending action per poll. All actions execute sequentially.
 
-**Why bad:** Manifest V2 is end-of-life. Chrome is removing MV2 support. New extensions must use Manifest V3 service workers.
+### Anti-Pattern 4: Polling from Content Script
 
-**Instead:** Use `chrome.alarms` for periodic polling (wakes the service worker on schedule). Use the service worker's `install`/`activate` events for initialization.
+**What people do:** Content script runs a `setInterval` loop to poll the backend or check for new actions.
 
----
+**Why it's wrong:** Content scripts only run while the EA Web App tab is open and the page is rendered. If the user navigates away, the interval stops. The service worker is the correct place for polling because it has an independent lifecycle from any tab.
 
-### Anti-Pattern 4: Storing Credentials in Extension
+**Do this instead:** Service worker uses `chrome.alarms` for polling. Service worker activates the content script only when an action needs execution.
 
-**What:** Storing EA session cookies or backend auth tokens in `chrome.storage`.
+### Anti-Pattern 5: Hardcoded EA Web App Selectors
 
-**Why bad:** Extension storage is accessible to the page context if misconfigured. Session theft is a known attack against trading extensions.
+**What people do:** Hardcode CSS selectors like `.ut-transfer-list-view .btn-buy` throughout the content script.
 
-**Instead:** For personal use, no auth is required (backend is localhost-only). When adding user accounts, backend tokens should be short-lived and the extension should use the service worker (not content script) for all credential handling.
+**Why it's wrong:** EA updates the Web App regularly. Hardcoded selectors break silently — the action appears to execute but nothing happens.
 
----
-
-### Anti-Pattern 5: One Monolithic Scan Job
-
-**What:** A single APScheduler job that scans all players in the 11k–200k range in one pass.
-
-**Why bad:** With thousands of players and 2–3 API calls per player, a single pass could take hours. This blocks the scheduler, creates uneven freshness (first players scored at t=0, last at t=2h), and risks rate-limit bans from sustained high request volume.
-
-**Instead:** Stagger the scans. Divide the player pool into batches and schedule overlapping jobs across the hour. Use `coalesce=False` in APScheduler to allow concurrent job runs with different player subsets.
+**Do this instead:** Centralize all selectors in `lib/ea-selectors.ts` as a named constants object. When EA updates the app, only one file needs updating. Add logging when `waitForElement` times out so failures are visible.
 
 ---
 
-## Build Order (Phase Dependency Graph)
+## Scaling Considerations
 
-The components have hard dependencies that dictate build order:
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| Personal (1 user, localhost) | Current architecture — localhost:8000, no auth, SQLite |
+| Small product (10-100 users) | Deploy backend, add auth token to extension, PostgreSQL, HTTPS |
+| Large product (1k+ users) | Separate extension backend from scanner, multi-tenant DB, subscription billing |
+
+### Scaling Priorities
+
+1. **First bottleneck at multi-user:** SQLite single-writer cannot handle concurrent extension polling from multiple users. Migrate to PostgreSQL (schema is compatible — no SQLite-specific constructs used). This is the only hard architectural change required.
+
+2. **Second bottleneck at multi-user:** fut.gg rate limits. Each user currently runs their own scanning client. At 10+ users sharing a server, need a shared scanning pool with per-user rate limit budgets.
+
+---
+
+## Build Order for This Milestone
+
+Dependencies within the extension milestone:
 
 ```
-Phase 1: Backend Foundation
-  → FastAPI app skeleton + SQLite schema
-  → APScheduler integrated via lifespan context manager
-  → Existing scorer/optimizer wrapped in scheduler job
-  → REST API: GET /players/top, GET /players/{id}, GET /health
-  [No extension, no dashboard needed — CLI can test the API]
+Step 1: New DB tables + migrations
+  → trade_actions, trade_records, profit_snapshots
+  → Add ORM models to models_db.py (append only — no existing table changes)
+  [Tests: create tables, verify schema]
 
-Phase 2: CLI becomes API client
-  → CLI refactored to query Phase 1 REST API
-  → Validates API contract before extension depends on it
-  [Extension not started yet — avoids building against a moving API]
+Step 2: New backend API endpoints
+  → GET /api/v1/actions/pending (with stale-reset logic)
+  → POST /api/v1/actions/{id}/complete
+  → GET /api/v1/profit/summary
+  → POST /api/v1/actions/queue (portfolio → pending actions)
+  → Add CORS middleware
+  [Tests: API contract tests, stale reset behavior]
 
-Phase 3: Chrome Extension (automation core)
-  → Manifest V3 scaffolding (service worker + content script)
-  → Background service worker polls Phase 1 REST API
-  → Content script DOM automation for EA Web App
-  → Pending actions queue (POST /trades, GET /trades/pending)
-  [Depends on: Phase 1 API stable]
+Step 3: Extension scaffolding
+  → Vite + CRXJS + TypeScript setup in extension/
+  → manifest.json (MV3, permissions, content_scripts, host_permissions)
+  → Typed message protocol (types/)
+  → Backend API client wrappers (lib/backend.ts)
+  [Tests: load unpacked extension in Chrome, verify service worker starts]
 
-Phase 4: Profit Tracking
-  → Trade records table in SQLite
-  → Profit reconciliation scheduler job
-  → REST API: GET /trades, GET /profit/summary
-  [Depends on: Phase 3 reporting trade outcomes]
+Step 4: Service worker (background.ts)
+  → chrome.alarms setup (every 30 seconds)
+  → Poll GET /api/v1/actions/pending
+  → Dispatch command to content script
+  → Receive result, POST to complete endpoint
+  [Tests: mock content script responses, verify backend posts]
 
-Phase 5: Web Dashboard
-  → Static dashboard consuming Phase 1 + Phase 4 REST API
-  → Served as StaticFiles from FastAPI (no separate deployment)
-  [Depends on: Phase 1 + Phase 4 APIs stable]
+Step 5: Content script (content.ts) — EA Web App DOM automation
+  → waitForElement() utility
+  → humanDelay() utility
+  → ea-selectors.ts (all CSS selectors centralized)
+  → Buy flow: search → find listing → price check → buy → confirm
+  → List flow: navigate to transfer list → find card → set price → submit
+  → Relist flow: find expired → relist at new price
+  → Sold detection: scan transfer list for sold items
+  [Tests: manual testing on EA Web App — no unit tests possible for DOM]
 
-Phase 6: Multi-user / Cloud
-  → PostgreSQL migration (SQLite schema designed to be compatible)
-  → Auth layer (JWT, paid tiers)
-  → Separate dashboard deployment
-  [Optional — only if personal tool becomes a product]
+Step 6: Popup (popup.html + popup.ts)
+  → Status display (last sync, pending count, session state)
+  → Start/stop toggle
+  [Tests: manual]
+
+Step 7: Profit reporting integration
+  → CLI: add profit summary to existing display
+  → API: verify /api/v1/profit/summary is queryable
+  [Tests: integration test with seeded trade_records]
 ```
 
-**Critical dependency:** The REST API contract (Phase 1) must be stable before the extension (Phase 3) and dashboard (Phase 5) are built. Build Phase 1 first, stabilize the API, then build consumers.
+**Critical path:** Steps 1 and 2 (backend) must complete before Step 4 (service worker) can be tested end-to-end. Steps 3-4 can be scaffolded in parallel with Step 2.
 
 ---
 
-## Scalability Considerations
+## Integration Points Summary
 
-| Concern | Personal Use (1 user) | Product (10–100 users) | Scale (1k+ users) |
-|---------|----------------------|----------------------|-------------------|
-| Database | SQLite (single writer) | PostgreSQL (concurrent writes) | PostgreSQL + read replicas |
-| Scheduler | APScheduler in-process | Dedicated worker process (Celery + Redis) | Multiple worker nodes |
-| Rate limiting | Single fut.gg client, 0.15s delay | Per-user scan isolation, request queues | Distributed rate-limit coordination |
-| Extension backend | localhost:8000 | Deployed FastAPI (HTTPS) | Load-balanced API |
-| Dashboard | Static files, FastAPI | Same | CDN-fronted |
-
-The SQLite → PostgreSQL migration is the only hard architectural constraint. Design the schema without SQLite-specific features (no AUTOINCREMENT quirks, use standard INTEGER PRIMARY KEY). The rest scales by adding infrastructure, not rewriting application code.
+| Boundary | Communication | Notes |
+|----------|--------------|-------|
+| Extension service worker ↔ Backend | HTTP REST (localhost:8000) | Service worker only — content script never talks to backend directly |
+| Extension service worker ↔ Content script | `chrome.tabs.sendMessage` / `chrome.runtime.sendMessage` | Typed discriminated union protocol |
+| Content script ↔ EA Web App | DOM events, MutationObserver | Centralized selectors, human-paced timing |
+| Backend scanner ↔ Backend API | Shared SQLite session_factory | Already wired via `app.state.session_factory` |
+| Backend actions API ↔ Backend scorer | Read-only: actions API reads player scores from SQLite | No coupling to scorer logic |
+| CLI ↔ Backend | HTTP (existing — unchanged) | Add profit summary command to existing CLI |
 
 ---
 
 ## Sources
 
-- [Chrome Extension Message Passing (Official Docs)](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) — HIGH confidence
-- [Building Chrome Extensions in 2026: Manifest V3 Guide](https://dev.to/ryu0705/building-chrome-extensions-in-2026-a-practical-guide-with-manifest-v3-12h2) — MEDIUM confidence
-- [Cross-origin Network Requests in Extensions](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests) — HIGH confidence (official)
-- [Use WebSockets in Service Workers](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets) — HIGH confidence (official)
-- [Implementing Background Job Scheduling in FastAPI with APScheduler](https://rajansahu713.medium.com/implementing-background-job-scheduling-in-fastapi-with-apscheduler-6f5fdabf3186) — MEDIUM confidence
-- [futbot (FIFA 20 Chrome extension + Node server architecture)](https://github.com/dogancana/futbot) — MEDIUM confidence (reference implementation, older)
-- [EasyFUT (EA FC automation Chrome extension)](https://github.com/Kava4/EasyFUT) — MEDIUM confidence (reference implementation)
-- [CORS in Chrome Extensions (Reintech)](https://reintech.io/blog/cors-chrome-extensions) — MEDIUM confidence
+- [Chrome Extension Service Worker Lifecycle (Official Docs)](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle) — HIGH confidence
+- [Cross-Origin Network Requests in Chrome Extensions (Official Docs)](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests) — HIGH confidence
+- [Migrate to Service Workers — MV3 (Official Docs)](https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers) — HIGH confidence
+- [Building Chrome Extensions with MV3 and TypeScript (hemaks.org)](https://hemaks.org/posts/building-chrome-extensions-with-manifest-v3-and-typescript-a-modern-developers-guide/) — MEDIUM confidence
+- [CRXJS Vite Plugin for Chrome Extensions (2026)](https://optymized.net/blog/building-chrome-extensions) — MEDIUM confidence
+- [MutationObserver for DOM change detection (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver) — HIGH confidence
+- [FastAPI CORS Middleware (Official Docs)](https://fastapi.tiangolo.com/tutorial/cors/) — HIGH confidence
+- [EasyFUT — EA FC automation extension (GitHub reference)](https://github.com/Kava4/EasyFUT) — MEDIUM confidence (reference implementation, architecture patterns)
+- [Chrome Extension CORS Behavior (Reintech)](https://reintech.io/blog/cors-chrome-extensions) — MEDIUM confidence
 
 ---
 
-*Architecture analysis: 2026-03-25*
+*Architecture research: Chrome extension integration for EA Web App automation*
+*Researched: 2026-03-26*

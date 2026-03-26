@@ -1,17 +1,17 @@
 # Project Research Summary
 
-**Project:** FC26 OP Sell Platform — Backend + API + Chrome Extension + Web Dashboard
-**Domain:** FUT Ultimate Team trading automation platform
-**Researched:** 2026-03-25
-**Confidence:** HIGH (stack + architecture), MEDIUM (EA automation specifics)
+**Project:** FC26 OP Sell Platform — Chrome Extension Milestone (v1.1)
+**Domain:** Chrome Extension + FastAPI backend for EA Web App automation (buy/list/relist cycle)
+**Researched:** 2026-03-26
+**Confidence:** MEDIUM-HIGH
 
 ## Executive Summary
 
-The FC26 OP Sell Platform evolves an existing Python CLI scoring tool into a persistent, always-on trading platform with three new tiers: a FastAPI backend with hourly scheduled scanning, a Chrome extension that automates buy/relist actions on the EA Web App, and an optional web dashboard for profit analytics. The established pattern for this class of tool is to centralize all intelligence in a Python backend and treat the extension and dashboard as thin clients — the backend is the sole fut.gg consumer, sole scorer, and single source of truth. This architecture avoids the rate-limit fragmentation and state-sync bugs that plague tools which distribute intelligence across multiple components.
+This milestone adds a Chrome extension on top of an already-production-ready Python backend (v1.0). The v1.0 backend runs 24/7, scans ~1800 players every 5 minutes, scores them for OP sell opportunity, and exposes a REST API. The extension's sole job is to read backend-ranked recommendations and execute the buy/list/relist cycle on the EA Web App. All intelligence stays in the backend — the extension is a thin executor. This architecture is the right call: it avoids the dead-ends other FUT automation tools hit by coupling pricing logic to the extension itself and bypasses the rate-limit fragmentation that comes from having the extension call fut.gg directly.
 
-The recommended approach builds in a strict dependency order: backend API first, then CLI adapts to consume it, then extension automation on top of a stable API contract, then profit tracking, then dashboard. The most valuable differentiator — price-at-time OP verification — is already implemented and carries over unchanged. The core scorer and optimizer are pure Python functions that plug directly into the scheduler without modification. The principal technical bets are FastAPI 0.135 + APScheduler 3.x (not 4.x pre-release) + SQLAlchemy 2.0 async on SQLite, with a WXT-based Manifest V3 extension in TypeScript/React.
+The dominant technical challenge is not the extension's UI or API communication — those patterns are well-documented with official Chrome sources. The challenge is navigating two hard constraints simultaneously: Chrome Manifest V3's ephemeral service worker lifecycle, and EA's bot detection that bans accounts for inhuman timing patterns. These two constraints are in tension: keeping automation running long enough to matter requires careful service worker keepalive, while keeping it safe requires deliberate human-paced slowness. Both must be designed in from the first commit — they cannot be retrofitted. The recommended approach (service worker polling via `chrome.alarms`, action state persisted to `chrome.storage.local` and backend DB, human-paced delays with jitter) solves both simultaneously.
 
-The two highest-risk areas are EA account banning from machine-speed automation and fut.gg API fragility at 24/7 scanning scale. Both must be addressed architecturally in Phase 1 — they cannot be retrofitted. Randomized delays and daily transaction caps prevent account bans; exponential backoff with a circuit breaker and scan-health metrics in the DB prevent silent scoring failures. The DOM automation layer of the Chrome extension carries medium-confidence because EA actively deploys Web App updates to break third-party tools; the extension must fail loudly on missing selectors and support a dry-run mode.
+The extension build sequence has a clear critical path: backend additions first (3 new DB tables, 4 new endpoints, CORS config), then extension scaffolding with service worker architecture, then DOM automation. The EA Web App DOM interaction layer carries the highest ongoing risk — EA deploys silent updates that break CSS selectors without notice. Centralizing all selectors in one file and implementing loud failures (stop automation, notify user) rather than silent no-ops is the mitigation. Expect maintenance work after every EA Web App deploy; a dry-run mode is essential for post-deploy verification.
 
 ---
 
@@ -19,185 +19,148 @@ The two highest-risk areas are EA account banning from machine-speed automation 
 
 ### Recommended Stack
 
-The existing Python stack (3.12, httpx, pydantic, click, rich) is unchanged. The new backend layer adds FastAPI 0.135 + uvicorn 0.34 for the HTTP API, APScheduler 3.11 (pinned to `<4.0` — v4 is a breaking pre-release rewrite) for hourly scanning, and SQLAlchemy 2.0 + aiosqlite 0.22 + Alembic 1.18 for async SQLite persistence with a clean PostgreSQL migration path.
+The existing Python stack (FastAPI 0.135, APScheduler 3.11, SQLAlchemy 2.0 + aiosqlite 0.22, Alembic 1.18) is already deployed and unchanged for this milestone. The new work is the Chrome extension and its supporting backend additions only.
 
-The Chrome extension uses WXT 0.20 (Vite-based, MV3-native, actively maintained) with TypeScript and React 19. Plasmo is explicitly avoided due to community-reported maintenance lag. The web dashboard uses React 19 + Vite 6 + Recharts 3.8 + TanStack Query 5.95 + Tailwind 4. All versions are confirmed from PyPI/npm as of 2026-03-25.
+For the extension, WXT (~0.20.20) is the clear choice over Plasmo (maintenance lag, 2x larger bundles, Parcel bundler) and CRXJS (posted archival notice if no new maintainer by June 2025; status uncertain March 2026). WXT provides Manifest V3 native scaffolding, correct service worker lifecycle handling, and HMR — the things that are hardest to get right building raw MV3. The content script stays vanilla TypeScript with no React to keep it lightweight; React is used only in the extension popup. All backend communication goes through the service worker, never content scripts.
 
 **Core technologies:**
-- FastAPI 0.135 + uvicorn 0.34: HTTP API layer — native Pydantic v2 integration means existing models plug in directly; lifespan context manager owns scheduler lifecycle
-- APScheduler 3.11 (`<4.0`): Hourly scan jobs — `AsyncIOScheduler` shares FastAPI's event loop; do not upgrade to 4.x (no stable release, breaking API rewrite)
-- SQLAlchemy 2.0 + aiosqlite 0.22 + Alembic 1.18: Async SQLite persistence — industry standard; swap to PostgreSQL by changing one connection URL; use `render_as_batch=True` for Alembic on SQLite
-- WXT 0.20 + TypeScript + React 19: Chrome extension — MV3-native, Vite-based; pin to `~0.20.x` until v1.0 stabilizes
-- Recharts 3.8 + TanStack Query 5.95: Dashboard charts + server state — React-native component API; handles polling with built-in caching
+- WXT ~0.20.20: Extension build framework — MV3 native, Vite-based, actively maintained; replaces Plasmo and CRXJS which both have viability concerns
+- TypeScript ^5.0.0: Extension language — type safety for DOM selectors and chrome.* APIs; catches shape mismatches against backend response types at compile time
+- React 19.x: Popup UI only — not loaded in content scripts; consistent with broader extension ecosystem
+- zod ^3.23.0: Runtime validation of backend API responses in service worker — prevents crashes from API shape changes
+- FastAPI 0.135 (existing, unchanged): Backend API — 4 new routes added as an `actions.py` router; existing routes untouched
+- APScheduler 3.11 (existing, unchanged): Scanner jobs — do NOT upgrade to 4.x (pre-release, breaking API rewrite with no job store migration path)
+- SQLAlchemy 2.0 + aiosqlite 0.22 (existing, unchanged): ORM — 3 new tables appended; existing schema untouched
 
-See `.planning/research/STACK.md` for full dependency listings and alternatives considered.
+See `.planning/research/STACK.md` for full dependency listings, version compatibility notes, and monorepo structure.
 
 ---
 
 ### Expected Features
 
-The core value loop — buy player cards, list above market price, repeat — requires five features before it can run unattended: a persistent hourly scanner, a REST API serving scored players by budget, extension auto-relist, extension buy-from-list, and a transaction log with P&L display. Everything else is valuable but not blocking.
+The extension is scoped to v1.1. Research confirms every feature in the MVP list is table stakes for FUT automation tools — missing any one of them makes the extension unusable for real money operations. The key differentiator over generic FUT bots is that all prices are backend-driven and refreshed on every relist cycle, not user-set or FUTBIN-sourced.
 
-**Must have (table stakes):**
-- Fresh hourly player rankings — stale scores are the primary trust failure mode
-- Budget-aware portfolio output — users need an executable list, not a global leaderboard
-- Per-player score detail (margin, op_ratio, expected profit, efficiency) — users validate before committing coins
-- Auto-relist expired listings — lowest-risk automation; the most time-consuming manual step
-- Buy automation from recommendation list — closes the score-to-execution loop
-- Profit tracking per session — validates the strategy is working
-- Transfer list status visibility — is my list full, sold, expired?
-- Rate-limit-safe 24/7 scanning — if the scanner is blocked, nothing else works
+**Must have (table stakes for v1.1):**
+- Backend API connection (service worker → localhost:8000) — the critical path; everything else depends on it
+- Overlay panel in EA Web App showing ranked portfolio (player name, buy price, OP price, margin)
+- Start/stop automation toggle with status display
+- Price guard before every buy — compare live BIN against backend buy_price, skip if market moved up
+- Buy automation: search by ea_id, verify price, click Buy Now
+- Auto-list purchased cards at backend-recommended OP price
+- Auto-relist expired cards with fresh OP price fetched from backend on each relist cycle
+- Human-like delays with jitter (800ms–2500ms per action; never fixed intervals)
+- Error handling: CAPTCHA stops automation and alerts user; DOM mismatch fails loudly with specifics
+- Activity reporting: POST buy/list/relist events to new backend endpoint
 
-**Should have (competitive differentiators):**
-- Price-at-time OP verification display — already implemented; surface as visible proof of accuracy
-- Score confidence indicator (sale count backing each score)
-- Historical score tracking — reveals SBC/promo demand spikes over time
-- Market momentum alerts — early signal when a player's OP score jumps between cycles
-- Session profit dashboard — ROI %, coins gained, cards sold vs listed
-- Scan coverage indicator — what % of the 11k-200k pool scored in last N hours
+**Should have (add after v1.1 validation):**
+- Session profit summary in extension panel
+- Budget input in extension panel (change budget without restarting backend CLI)
+- Sound/visual notification on successful buy
+- Session stats display (buys, coins spent, estimated profit)
 
 **Defer (v2+):**
-- Web dashboard — CLI + extension popup covers personal use initially; dashboard is a paid-product-tier concern
-- Market momentum alerts — requires historical data to accumulate first
-- Player filter presets / saved configs — UX convenience, not blocking
-- Multi-user / cloud hosting — only if personal tool becomes a product
+- Separate web dashboard for analytics — needs multi-user infrastructure to justify the work
+- Cloud-hosted backend with configurable extension URL — requires user accounts and deployment work
+- Multi-account support — significantly increases ban surface and complexity
 
-**Anti-features (explicitly out of scope):** sniping, mass bidding, SBC solver, multi-account, FUTBIN re-integration, social/community signals, mobile app.
+**Anti-features (never build for this project):**
+- Headless/background tab operation — EA detects hidden tabs; ban risk is severe
+- Parallel buying — EA rate-limits transfer market API; triggers soft bans in minutes
+- CAPTCHA auto-solving — adds external dependency; robotic patterns still trigger detection after solve
+- Auto-bidding — introduces cost unpredictability incompatible with the OP sell strategy
+- FUTBIN price cross-reference — previously removed from codebase; adds rate limits and stale data risk
 
-See `.planning/research/FEATURES.md` for full dependency graph and rationale.
+See `.planning/research/FEATURES.md` for full dependency graph and competitor analysis.
 
 ---
 
 ### Architecture Approach
 
-The architecture is a three-tier hub-and-spoke: Python backend at center, Chrome extension and web dashboard as stateless consumers. All intelligence, all state, and the sole fut.gg connection live in the backend. The extension never calls fut.gg directly and stores no business state — it polls the backend for pending actions, executes DOM automation on the EA Web App, and reports outcomes back. SQLite is the single source of truth for players, scores, score history, trade records, and pending action queue.
+The architecture separates concerns cleanly: the backend owns the action queue and all intelligence; the extension service worker handles polling and backend communication; the content script handles DOM execution only. This backend-driven queue pattern eliminates split-brain state and makes the extension resumable across service worker restarts — if the service worker is killed mid-cycle, it checks the backend for stale `IN_PROGRESS` records on next startup.
 
 **Major components:**
-1. Python Backend (FastAPI + APScheduler + SQLite) — all business logic, scoring, scheduling, and data; exposes REST API at `/api/v1/`
-2. Chrome Extension (WXT, MV3, TypeScript) — service worker polls backend for pending actions; content script automates EA Web App DOM; popup for status display only
-3. Web Dashboard (React + Vite) — read-only analytics consumer of backend REST API; served as FastAPI StaticFiles, no separate deployment
 
-**Key patterns to follow:**
-- Backend as single source of truth — extension stores NO business state; all trade records live in SQLite
-- Command queue pattern — `pending_actions` table with `PENDING/IN_PROGRESS/DONE/FAILED` status; enforces sequential EA Web App automation and enables retry
-- Staggered scan batches — never one monolithic job; divide player pool into batches, use `coalesce=False`, set `max_instances=1`
-- MutationObserver for SPA navigation — EA Web App is an SPA; content scripts must re-initialize on route change, not rely on static DOM
-- chrome.alarms for service worker keepalive — MV3 service workers are ephemeral; alarms wake the worker reliably, setTimeout/setInterval do not survive termination
+1. **Service Worker (background.ts)** — Polls backend via `chrome.alarms` every 30s; fetches one pending action at a time; sends typed command to content script; receives result; POSTs outcome to backend. Keeps all state in `chrome.storage.local` and backend DB — zero global variables for state that must survive a restart.
 
-**Anti-patterns explicitly called out:** scoring in the API layer on-demand, extension calling fut.gg directly, persistent MV2 background page, storing credentials in extension storage, one monolithic scan job.
+2. **Content Script (content.ts)** — Executes DOM operations on webapp.ea.com. Uses `MutationObserver` to wait for EA's SPA to render target elements before acting. All DOM interactions sequential with human-paced delays. Reports outcomes back to service worker via `chrome.runtime.sendMessage`. Never communicates with backend directly.
 
-See `.planning/research/ARCHITECTURE.md` for full data flow diagrams and component boundaries.
+3. **Backend Actions Router (src/server/api/actions.py)** — 4 new endpoints: `GET /api/v1/actions/pending` (returns 1 action atomically, auto-resets stale `IN_PROGRESS` records >5 min), `POST /api/v1/actions/{id}/complete`, `GET /api/v1/profit/summary`, `POST /api/v1/actions/queue`. 3 new DB tables: `trade_actions`, `trade_records`, `profit_snapshots`.
+
+4. **Popup (popup.html + popup.ts)** — Minimal status display: running/stopped/error state, last sync time, pending action count, start/stop toggle. Plain TypeScript only — no React in the popup.
+
+5. **Backend CORS config** — `CORSMiddleware` allowing `chrome-extension://*` origin. Required for service worker-to-backend requests from the extension's origin.
+
+**Message protocol** uses TypeScript discriminated unions (`ExtensionCommand` / `ExtensionResult` types) for all service-worker ↔ content-script messages, preventing shape mismatches at compile time.
+
+**Zero changes to** scorer_v2.py, optimizer.py, scanner.py, scheduler.py, listing_tracker.py, futgg_client.py, or any existing API routes.
+
+See `.planning/research/ARCHITECTURE.md` for full data flow diagrams, all message types, and the 7-step build order.
 
 ---
 
 ### Critical Pitfalls
 
-1. **EA transaction-volume ban** — Machine-speed automation triggers EA's bot detection. Prevention: randomized 800ms–2500ms delays between all actions, daily transaction cap under 1,000 operations, 15–30 minute session breaks every 1–2 hours, and a dedicated throwaway test account during all development. Must be baked in from the first extension commit — not retrofittable.
+1. **EA ban from automation volume and uniform timing** — Fixed-interval timing, rapid buy sequences, and background-tab automation are the primary ban triggers. EA documents a daily bid/buy limit; exceeding it escalates to market bans and account suspension. Mitigation: randomized jitter (800ms–2500ms per action, not fixed), daily buy cap well below 1,000 operations, session breaks every 1–2 hours, automation only in foreground tab, dedicated throwaway test account for all development. Must be baked in from the first commit — retrofitting is error-prone and misses edge-case code paths.
 
-2. **fut.gg API breaking silently at 24/7 scale** — No published rate limits, no SLA. The existing code already has silent 429 failures and bare `except Exception` blocks (logged in CONCERNS.md). Prevention: fix exponential backoff with jitter before adding the scheduler; circuit breaker aborts the cycle if >20% of requests fail; `last_scan_at` / `scan_success_rate` / `parse_failure_count` tracked in DB and surfaced on the API.
+2. **MV3 service worker state loss** — Chrome terminates idle service workers after 30 seconds; all memory globals are wiped. The bug is masked during development because DevTools open prevents worker termination. Mitigation: store ALL task state in `chrome.storage.local` or backend DB; use `chrome.alarms` (not `setTimeout`) for recurring work; model every automation step as resumable — read state, execute one action, write updated state back. Verify by closing DevTools, idling 60 seconds, then confirming automation resumes.
 
-3. **MV3 service worker state loss** — Chrome kills idle service workers after 30 seconds; all global variables are wiped. Prevention: store all task state in `chrome.storage.local` or the backend; use `chrome.alarms` (not setTimeout) for polling cadence; design every task as a resumable job that reads state, executes one action, writes state back.
+3. **EA Web App SPA navigation orphaning content script** — EA's Angular SPA replaces DOM subtrees on route changes without a page reload; content script event listeners silently break. Mitigation: `MutationObserver` on `document.body` to detect route changes; re-initialize all listeners on navigation back to Transfer Market; delegate event listeners to `document.body` rather than leaf elements.
 
-4. **EA Web App SPA navigation breaking content scripts** — SPA route changes do not re-inject content scripts; DOM listeners become orphaned. Prevention: MutationObserver on document body for route-indicator changes; re-initialize listeners on route change; target stable ARIA roles / data attributes, not minified CSS class names.
+4. **EA Web App DOM changes breaking automation silently** — EA deploys updates mid-season; CSS class names are minified and rotate between deploys. Silent `null` querySelector results look like working automation. Mitigation: never target by CSS class; use ARIA roles, `data-*` attributes, or label text; implement loud failures (stop + notify user with specifics) when any `waitForElement` times out; centralize all selectors in `lib/ea-selectors.ts`; implement dry-run mode for post-deploy verification.
 
-5. **EA Web App DOM changes post-deploy** — EA actively patches the Web App to break automation. Prevention: never click by coordinate; build a selector registry that fails loudly when a selector is missing; implement dry-run mode for post-deploy validation before resuming automation.
+5. **CORS blocking content script backend requests** — Content scripts run in the host page's CORS context; `fetch()` to localhost from content script is blocked even with `host_permissions` declared. Mitigation: route ALL backend calls through service worker via `chrome.runtime.sendMessage`; content scripts never call backend directly. This is a constraint of Chrome's security model, not configurable.
 
-See `.planning/research/PITFALLS.md` for moderate and minor pitfalls (SQLite WAL concurrency, stale scores, APScheduler multi-instance on restart, price-at-time fallback inflation, localhost URL hardcoding).
+See `.planning/research/PITFALLS.md` for technical debt patterns, integration gotchas, performance traps, security mistakes, and a full "Looks Done But Isn't" checklist.
 
 ---
 
 ## Implications for Roadmap
 
-### Phase 1: Persistent Backend Foundation
+Based on the research dependency graph and pitfall-to-phase mapping, a 4-phase structure is recommended for the v1.1 milestone.
 
-**Rationale:** Everything downstream — extension, dashboard, CLI refactor — depends on a stable REST API backed by live data. The hourly scanner must exist before any freshness guarantee can be made. This is the highest-leverage phase: it converts a one-shot CLI into a continuous intelligence engine.
+### Phase 1: Backend Infrastructure
+**Rationale:** The extension cannot be tested end-to-end without the backend endpoints. Backend work has no external unknowns — it extends an existing codebase with well-understood patterns. Building it first means the service worker has a real API to test against, not mocks. The CORS configuration must also land here before any extension work begins.
+**Delivers:** 3 new DB tables (`trade_actions`, `trade_records`, `profit_snapshots`), 4 new API endpoints (pending actions with stale-reset logic, complete action, profit summary, queue generation), CORS middleware for `chrome-extension://*` origin, Alembic migration for new tables.
+**Addresses:** Activity reporting to backend, profit analytics via CLI.
+**Avoids:** CORS misconfiguration (locked in here), stale `IN_PROGRESS` records (stale-reset logic in pending-actions endpoint), split-brain state between extension and backend.
+**Research flag:** Standard patterns — FastAPI router addition, SQLAlchemy table append, Alembic migration with `render_as_batch=True`. No phase research needed; all HIGH confidence.
 
-**Delivers:** FastAPI app with SQLite schema; APScheduler running hourly scans using the existing scorer/optimizer unchanged; REST API endpoints: `GET /api/v1/players/top`, `GET /api/v1/players/{id}`, `GET /api/v1/health`; scan health metrics in DB; exponential backoff on all fut.gg requests.
+### Phase 2: Extension Architecture Foundation
+**Rationale:** The MV3 service worker lifecycle constraints and CORS routing pattern must be established before any automation logic is written. Adding these constraints as a retrofit to code designed around global variables requires a full rewrite. This phase builds the skeleton with no automation logic, proving the backend communication path and storage-backed state model work correctly.
+**Delivers:** WXT project scaffolded in `extension/`; manifest.json (MV3, permissions, host_permissions, content_scripts match pattern); typed message protocol (`types/messages.ts`, `types/api.ts`, `types/actions.ts`); service worker with `chrome.alarms` polling loop; backend API client wrappers (`lib/backend.ts`); `chrome.storage.local` state schema defined; PING/PONG health check between service worker and content script; service worker keepalive alarm registered.
+**Uses:** WXT ~0.20.20, TypeScript ^5.0.0, @types/chrome ^0.1.38, zod ^3.23.0.
+**Avoids:** Service worker state loss (storage-backed from the start), CORS content script requests (message routing established before any automation is added), duplicate alarms on restart (check `chrome.alarms.get(name)` before creating).
+**Research flag:** No additional research needed. Chrome MV3 patterns are HIGH confidence from official docs. WXT setup is documented. The communication architecture is fully specified in ARCHITECTURE.md.
 
-**Addresses (from FEATURES.md):** Fresh hourly rankings, budget-aware portfolio output, per-player score detail, rate-limit-safe 24/7 scanning.
+### Phase 3: DOM Automation Layer
+**Rationale:** This is the highest-risk phase due to EA Web App DOM instability. Building it last means backend and extension infrastructure are proven before tackling the hardest part. The `waitForElement()` / MutationObserver scaffold and centralized selector file must be the first work in this phase — all specific automation flows build on top of them.
+**Delivers:** `lib/dom-utils.ts` (`waitForElement`, `clickElement`, `setInputValue`, `humanDelay`); `lib/ea-selectors.ts` (all selectors centralized as named constants); `lib/ea-navigator.ts` (buy flow, list flow, relist flow as reusable sequences); buy automation with price guard; auto-list after purchase; auto-relist expired cards with fresh price; sold detection; dry-run mode; error handling (CAPTCHA detection, DOM mismatch loud failure); SPA navigation re-initialization via MutationObserver; full overlay panel injected into EA Web App.
+**Addresses:** All table-stakes v1.1 features (buy, list, relist, price guard, overlay, delays, error handling, activity reporting).
+**Avoids:** EA ban timing (jitter baked into `humanDelay` from start), DOM silent failures (loud failure in `waitForElement` timeout), SPA navigation orphaning (MutationObserver-based listener re-init), DOM selector changes (centralized `ea-selectors.ts` + dry-run mode), main-world injection security risk (use isolated world by default; main-world injection only if service-level API access is required and confirmed safe).
+**Research flag:** NEEDS DEEPER RESEARCH before implementation. The specific EA Web App service names (`window.services.Auction`, `window.repositories.Item`), current method signatures for buy-now and relist in FC26, and which DOM elements have stable ARIA attributes vs. minified class names must be verified by inspecting the live web app in browser DevTools before writing any selectors. This is explicitly LOW confidence in the research; allocate a dedicated exploration task at the start of this phase.
 
-**Avoids (from PITFALLS.md):** fut.gg silent failures (circuit breaker + health metrics), APScheduler multi-instance on restart (SQLite job store + `coalesce=True` + `max_instances=1`), SQLite write contention (WAL mode + small batch commits), price-at-time fallback inflation (`fallback_used_count` tracked in schema), magic number thresholds hardcoded (move to config + env vars).
-
----
-
-### Phase 2: CLI Becomes API Client
-
-**Rationale:** The CLI is the only consumer of the backend today. Refactoring it to query the Phase 1 REST API validates the API contract before the extension depends on it. Bugs caught here are cheap; bugs caught after the extension is built are expensive.
-
-**Delivers:** CLI queries `GET /api/v1/players/top?budget=X` instead of running scoring live; CSV output moved to `results/` subdirectory with cleanup; `--no-csv` flag; configures against a running backend instance.
-
-**Addresses (from FEATURES.md):** Configurable budget input, scan coverage indicator (surfaced from API health endpoint).
-
-**Avoids (from PITFALLS.md):** CSV file accumulation, regression in existing CLI UX.
-
----
-
-### Phase 3: Chrome Extension — Automation Core
-
-**Rationale:** With the API stable and contract validated by the CLI, the extension can be built against a known interface. The extension is the highest-risk component (EA bans, MV3 constraints, SPA DOM complexity) and needs the most careful architectural setup.
-
-**Delivers:** WXT + TypeScript scaffolding; `background.js` service worker polling `GET /api/v1/trades/pending` via `chrome.alarms`; `content-script.js` with MutationObserver for SPA navigation; auto-relist expired listings; buy from recommendation list with target-price enforcement; configurable backend URL in options page; dry-run mode.
-
-**Addresses (from FEATURES.md):** Auto-relist expired listings, buy automation from recommendation list, transfer list status visibility.
-
-**Avoids (from PITFALLS.md):** EA transaction-volume ban (randomized delays, daily cap, session breaks, test account), MV3 service worker state loss (alarms + storage-backed state), SPA navigation breaking content scripts (MutationObserver + listener re-init), DOM changes post-deploy (loud selector failures + dry-run), localhost URL hardcoded (configurable options from day one).
-
----
-
-### Phase 4: Profit Tracking
-
-**Rationale:** The extension can report trade outcomes only after the trade record schema exists. Profit tracking requires actual buy/sell price data accumulated by the extension — it cannot be back-filled.
-
-**Delivers:** `trades` and `profit_records` tables in SQLite; daily reconciliation scheduler job; REST API endpoints: `GET /api/v1/trades`, `GET /api/v1/profit/summary`; per-card P&L in CLI output.
-
-**Addresses (from FEATURES.md):** Profit tracking per session, session P&L display.
-
-**Avoids (from PITFALLS.md):** Stale scores presented as current (pre-buy live price check added in extension before executing buy action).
-
----
-
-### Phase 5: Web Dashboard
-
-**Rationale:** The dashboard is purely additive — it consumes stable Phase 1 + Phase 4 APIs and adds no new backend complexity. It is deferred because CLI + extension popup covers all personal-use needs first.
-
-**Delivers:** React + Vite + Recharts + TanStack Query dashboard served as FastAPI StaticFiles; top OP player list with score freshness indicators; trade log; profit summary charts; score history trends; scheduler health status.
-
-**Addresses (from FEATURES.md):** Session profit dashboard, historical score tracking, scan coverage indicator.
-
-**Avoids (from PITFALLS.md):** Not applicable — read-only consumer, no new risk surfaces.
-
----
-
-### Phase 6: Historical Analysis and Alerts (v2+)
-
-**Rationale:** Requires score history to have accumulated over multiple weeks. Market momentum alerts are only useful once there are multiple time-series data points per player — building this in Phase 1 would produce an empty, untestable feature.
-
-**Delivers:** Score history charts per player; momentum delta detection between scan cycles; notification delivery for high-delta players.
-
-**Addresses (from FEATURES.md):** Market momentum alerts, historical score tracking (full implementation).
-
----
+### Phase 4: Popup + End-to-End Validation
+**Rationale:** The popup is the simplest component and should be built last after the automation cycle is proven working. End-to-end validation with a real EA account (dedicated test account, never the main account) closes out the milestone.
+**Delivers:** Extension popup with status panel (running/stopped/error state, last sync, pending count, start/stop toggle); profit summary pulled from backend `/api/v1/profit/summary`; full buy/list/relist cycle test with real coins on dedicated test account; dry-run mode verification; timing distribution validation over 4-hour test session (no "limit reached" messages, action timing is non-uniform).
+**Avoids:** EA ban from volume (cap and jitter validated under real conditions), task resumability failure (crash-and-restart test), selector breakage (dry-run confirms all selectors resolve), configurable backend URL (options page verified to persist and propagate correctly).
+**Research flag:** No additional research. This phase is manual validation and integration, not new implementation.
 
 ### Phase Ordering Rationale
 
-- Phases 1 → 2 → 3 follow the hard dependency graph from ARCHITECTURE.md: API must be stable before extension is built; CLI validation of the API contract before extension depends on it is a cheap insurance step.
-- Phase 4 (profit tracking) follows Phase 3 because it requires the extension to be reporting trade outcomes — the schema can be created in Phase 1 but populated data does not exist until Phase 3 is running.
-- Phase 5 (dashboard) is last of the core phases because it is purely additive and personal use does not require it.
-- Phase 6 deferred because historical data must accumulate before the feature is testable or useful.
+- Backend must precede extension (Phase 1 before 2 and 3) — the service worker cannot be integration-tested without real endpoints responding.
+- Extension architecture must precede DOM automation (Phase 2 before 3) — the MV3 service worker constraints make retrofitting state management impossible without a full rewrite; the correct foundation must be the starting point.
+- DOM automation is isolated to Phase 3 because it is the only phase with a critical unknown (EA Web App DOM internals). Isolating it means all infrastructure risk is resolved before tackling the part that requires live exploration.
+- The popup is intentionally last (Phase 4): lowest complexity component, no blocking risk. Deferring it keeps Phase 3 focused on the hard work.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
+Needs deeper research before planning:
+- **Phase 3 (DOM Automation):** EA Web App DOM specifics — which selectors are stable, which service/repository names are current in FC26, which ARIA attributes are present on transfer market UI elements. Must be verified by live inspection before writing any automation code. FEATURES.md assigns LOW confidence to EA DOM stability explicitly.
 
-- **Phase 3 (Chrome extension):** EA Web App DOM structure for the transfer market, buy-now flow, and relist flow is undocumented and changes with EA deploys. Will need to inspect the live EA Web App and reference EasyFUT/futbot source to map current selectors before implementation. Dry-run mode is essential for ongoing discovery.
-- **Phase 3 (Chrome extension):** MV3 service worker + content script message passing for sequential automation is nuanced; the offscreen document API may be required for certain DOM interactions. Needs a spike to confirm the exact content-script injection approach works with the EA Web App's CSP headers.
-
-Phases with well-documented patterns (skip research-phase unless issues arise):
-
-- **Phase 1 (Backend):** FastAPI + APScheduler + SQLAlchemy 2.0 async patterns are well-documented with high-quality community examples. Standard setup.
-- **Phase 2 (CLI refactor):** Straightforward; no new technology.
-- **Phase 4 (Profit tracking):** Standard DB schema + scheduler job; no novel patterns.
-- **Phase 5 (Dashboard):** React + Vite + Recharts + TanStack Query are individually well-documented and commonly composed together.
+Standard patterns (skip research-phase):
+- **Phase 1 (Backend Infrastructure):** FastAPI router addition, SQLAlchemy table append, Alembic migration — all HIGH confidence from official docs with working examples already in this codebase.
+- **Phase 2 (Extension Architecture):** Chrome MV3 service worker patterns, WXT setup, `chrome.alarms`, `chrome.storage.local` — HIGH confidence from official Chrome docs. WXT documentation is complete.
+- **Phase 4 (Popup + Validation):** Plain TypeScript popup, manual validation — no unknowns.
 
 ---
 
@@ -205,51 +168,61 @@ Phases with well-documented patterns (skip research-phase unless issues arise):
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All versions confirmed from PyPI/npm. APScheduler 4.x instability confirmed from migration docs. WXT vs Plasmo confirmed from multiple community comparisons. |
-| Features | HIGH | Feature categories derived from competitive analysis of 10+ existing FUT tools plus domain-specific OP sell guides. Anti-feature rationale is principled and consistent with scope constraints. |
-| Architecture | HIGH (core), MEDIUM (EA DOM) | Three-tier pattern, command queue, MV3 constraints — all verified from official Chrome docs and established reference implementations. EA Web App DOM selectors are undocumented and subject to change. |
-| Pitfalls | MEDIUM | Ban risk patterns from community sources (non-deterministic EA enforcement); SQLite concurrency from official docs (HIGH); MV3 service worker lifecycle from official docs (HIGH); EA SPA navigation from community sources (MEDIUM). |
+| Stack | HIGH | All versions confirmed from PyPI and npm as of 2026-03-26. WXT is MEDIUM-HIGH (pre-1.0 semver but stable API). APScheduler 4.x avoidance well-evidenced from migration docs. CRXJS archival risk confirmed from GitHub discussions. |
+| Features | MEDIUM | Extension feature list well-researched from open-source FUT tools (EasyFUT, MagicBuyer-UT, FUT-Trader, Futinator). EA DOM internals are LOW confidence — no official documentation; must be validated against live web app before Phase 3 implementation begins. |
+| Architecture | HIGH (Chrome patterns), MEDIUM (EA DOM) | Chrome MV3 patterns from official docs are HIGH. FastAPI integration is HIGH. EA-specific service injection pattern (`window.services`) confirmed from FSU script source on GreasyFork — MEDIUM because FC26 method names are not individually confirmed. |
+| Pitfalls | MEDIUM-HIGH | Chrome MV3 pitfalls (service worker lifecycle, CORS) are HIGH from official docs. EA ban patterns are MEDIUM — community evidence is strong but EA does not publish detection thresholds. DOM change risk is HIGH (confirmed EA behavior) but mitigation effectiveness is MEDIUM (depends on implementation discipline). |
 
-**Overall confidence:** HIGH for the backend and dashboard. MEDIUM for the Chrome extension automation layer due to EA's opaque and changing Web App.
+**Overall confidence:** MEDIUM-HIGH
 
 ### Gaps to Address
 
-- **EA Web App DOM selectors:** No documented, stable selector list exists for the transfer market buy/relist flow. Must be discovered by inspecting the live EA Web App during Phase 3 planning. Build the selector registry with versioning from day one.
-- **fut.gg rate limits:** No published rate limits. The 0.15s delay + concurrency=10 approach has worked in one-shot mode; 24/7 behavior is untested. Monitor `scan_success_rate` in the first week of Phase 1 and adjust throttling empirically.
-- **EA CSP headers on Web App:** The EA Web App may have Content Security Policy headers that restrict what the content script can do. This needs a spike test during Phase 3 to confirm `fetch()` from content scripts to localhost works as expected (it likely routes through the service worker, but verify).
-- **`async_sessionmaker(expire_on_commit=False)` requirement:** Must be applied to all SQLAlchemy session factories in Phase 1. Lazy-loading after commit in async context causes `MissingGreenlet` errors that are subtle and hard to debug at scale.
+- **EA Web App selector strategy for FC26:** FEATURES.md and ARCHITECTURE.md both flag that specific DOM selectors, ARIA roles, and the stability of `window.services` method names in FC26 cannot be confirmed without live inspection. Phase 3 planning must begin with an exploration task: open the EA Web App with DevTools, document stable attributes on all target elements (search form, buy now button, list price input, transfer list items), and verify `window.services` structure before any automation code is written.
+
+- **EA daily transaction cap thresholds:** PITFALLS.md documents a community-consensus ceiling of under 1,000 buy/bid operations per day, but EA does not publish the exact threshold. Set the automation config conservatively (500/day) during initial testing and adjust empirically based on test account behavior.
+
+- **Service worker keepalive strategy under real load:** Both alarm-based keepalive and WebSocket-based keepalive are documented. The alarm approach is the simpler starting point. The WebSocket approach (active connection resets the 30s timer per Chrome 116+) is an available fallback if alarm-based keepalive proves unreliable during Phase 4 testing.
+
+- **EA Web App CSP headers:** The EA Web App may have Content Security Policy headers that affect content script behavior. Verify during Phase 2 extension scaffolding that no CSP headers block the content script's ability to inject the overlay panel or dispatch DOM events.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [FastAPI Release Notes](https://fastapi.tiangolo.com/release-notes/) — version 0.135.2
+- [FastAPI Release Notes](https://fastapi.tiangolo.com/release-notes/) — version 0.135.2 confirmed
 - [APScheduler 3.x Docs](https://apscheduler.readthedocs.io/en/3.x/) — version 3.11.2.post1 stable
 - [APScheduler Migration Guide](https://apscheduler.readthedocs.io/en/master/migration.html) — 4.x instability confirmed
 - [SQLAlchemy PyPI](https://pypi.org/project/SQLAlchemy/) — version 2.0.48
 - [aiosqlite PyPI](https://pypi.org/project/aiosqlite/) — version 0.22.1
 - [Alembic Docs](https://alembic.sqlalchemy.org/en/latest/front.html) — version 1.18.4
-- [Chrome Extension Message Passing](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) — MV3 official docs
-- [Cross-origin Network Requests in Extensions](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests) — CORS bypass via host_permissions
-- [Use WebSockets in Service Workers](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets) — keepalive patterns
-- [Chrome MV3: migrate to service workers](https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers) — state loss constraints
-- [SQLite WAL official docs](https://sqlite.org/wal.html) — concurrency design
-
-### Secondary (MEDIUM confidence)
-- [WXT Framework](https://wxt.dev/) + [2025 Extension Framework Comparison](https://redreamality.com/blog/the-2025-state-of-browser-extension-frameworks-a-comparative-analysis-of-plasmo-wxt-and-crxjs/) — WXT vs Plasmo analysis
+- [Chrome MV3 Service Worker Lifecycle (official)](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle) — 30-second idle timer, keepalive patterns
+- [Cross-Origin Requests in Chrome Extensions (official)](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests) — content script CORS restriction confirmed
+- [Migrate to Service Workers — MV3 (official)](https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers) — state loss constraints
+- [FastAPI CORS Middleware (official)](https://fastapi.tiangolo.com/tutorial/cors/) — CORS configuration
+- [Chrome Message Passing (official)](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) — service worker ↔ content script protocol
+- [MutationObserver (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver) — SPA navigation detection
+- [@types/chrome npm](https://www.npmjs.com/package/@types/chrome) — version 0.1.38
 - [TanStack Query npm](https://www.npmjs.com/package/@tanstack/react-query) — version 5.95.0
 - [Recharts npm](https://www.npmjs.com/package/recharts) — version 3.8.0
-- [FastAPI + Async SQLAlchemy 2.0 Setup](https://medium.com/@tclaitken/setting-up-a-fastapi-app-with-async-sqlalchemy-2-0-pydantic-v2-e6c540be4308) — session patterns
-- [Alembic + SQLite batch mode](https://blog.greeden.me/en/2025/08/12/no-fail-guide-getting-started-with-database-migrations-fastapi-x-sqlalchemy-x-alembic/) — render_as_batch requirement
-- [EasyFUT (EA FC automation Chrome extension)](https://github.com/Kava4/EasyFUT) — reference implementation for DOM automation patterns
-- [FutBotManager EA ban wave guide](https://futbotmanager.com/ea-ban-wave-avoidance-futbotmanager/) — transaction volume thresholds
-- [Making Chrome Extension Smart for SPA websites](https://medium.com/@softvar/making-chrome-extension-smart-by-supporting-spa-websites-1f76593637e8) — SPA navigation handling
 
-### Tertiary (LOW confidence)
-- Community FUT trading guides — OP sell mechanics (consistent across multiple sources; HIGH confidence for strategy, LOW for exact thresholds)
-- EA enforcement non-determinism — ban triggers are inferred from community reports, not documented by EA
+### Secondary (MEDIUM confidence)
+- [WXT Framework](https://wxt.dev/) — version 0.20.18/0.20.20, MV3 native, actively maintained
+- [WXT vs Plasmo vs CRXJS comparison](https://redreamality.com/blog/the-2025-state-of-browser-extension-frameworks-a-comparative-analysis-of-plasmo-wxt-and-crxjs/) — community framework analysis
+- [CRXJS archival discussion](https://github.com/crxjs/chrome-extension-tools/discussions/872) — maintenance uncertainty confirmed
+- [FSU EAFC FUT Web Enhancer source (GreasyFork)](https://greasyfork.org/en/scripts/431044-fsu-eafc-fut-web-%E5%A2%9E%E5%BC%BA%E5%99%A8/code) — main-world service injection with `window.services`, `window.repositories` confirmed in real FUT script
+- [EasyFUT GitHub](https://github.com/Kava4/EasyFUT) — buy/list/relist architecture patterns
+- [MagicBuyer-UT GitHub](https://github.com/AMINE1921/MagicBuyer-UT) — price guard pattern, relist flow, human delay strategies
+- [EA Forums FC26 bid/buy limit](https://forums.ea.com/discussions/fc-26-general-discussion-en/limit-on-bidbuy-actions-after-finally-getting-access-to-the-transfer-market/12599137) — daily transaction cap evidence
+- [EA Forums FC26 transfer market ban](https://forums.ea.com/discussions/ea-forums-general-discussion-en/false-transfer-market-ban-fc-26/12655634) — ban pattern evidence
+- [FutBotManager ban wave avoidance](https://futbotmanager.com/ea-ban-wave-avoidance-futbotmanager/) — automation detection pattern analysis
+- [FastAPI + Async SQLAlchemy 2.0 Setup](https://medium.com/@tclaitken/setting-up-a-fastapi-app-with-async-sqlalchemy-2-0-pydantic-v2-e6c540be4308) — session patterns, `expire_on_commit=False`
+- [Alembic + SQLite batch mode](https://blog.greeden.me/en/2025/08/12/no-fail-guide-getting-started-with-database-migrations-fastapi-x-sqlalchemy-x-alembic/) — `render_as_batch=True` requirement
+
+### Tertiary (LOW confidence — requires live validation)
+- EA Web App DOM structure — no official documentation; must be verified by inspecting live webapp.ea.com with DevTools before Phase 3 implementation
+- EA bot detection thresholds — community-sourced ceiling of ~1,000 buy/bid/day; exact threshold unpublished by EA
 
 ---
-*Research completed: 2026-03-25*
+*Research completed: 2026-03-26*
 *Ready for roadmap: yes*

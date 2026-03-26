@@ -1,131 +1,221 @@
-# Feature Landscape
+# Feature Research
 
-**Domain:** FC/FUT Ultimate Team OP sell automation platform
-**Researched:** 2026-03-25
+**Domain:** Chrome Extension for EA Web App OP Sell Automation (buy/list/relist cycle)
+**Researched:** 2026-03-26
+**Confidence:** MEDIUM — ecosystem well-researched via open-source tools (EasyFUT, MagicBuyer-UT, FUT-Trader, Futinator); EA Web App internals not officially documented
 
----
+## Context
 
-## Context: What OP Selling Is
+This research covers ONLY the new Chrome extension milestone (v1.1). The Python backend with scoring, REST API, and CLI are already built (v1.0). The extension adds a UI layer on top of the EA Web App and automates the buy/list/relist cycle using backend-provided recommendations.
 
-OP (overpriced) selling is a coin-making strategy where you buy a large quantity of a single player card at market price and relist them above the current BIN. A fraction sell to lazy buyers or during SBC demand spikes. The cycle repeats: sold card gets repurchased and relisted. This project automates the discovery of which players are currently OP-sellable (via price-at-time scoring) and eventually the mechanical buy/relist cycle itself.
-
----
-
-## Table Stakes
-
-Features users expect. Missing = the platform feels broken or requires too much manual effort to be worth using.
-
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Fresh player rankings | Core value prop — stale scores are useless for a time-sensitive market | Med | Hourly scan cadence already decided; this is the API + scheduler work |
-| Score per player (margin, op_ratio, expected profit, efficiency) | Users need to understand *why* a player is ranked — raw rank without explanation loses trust | Low | Scoring logic already exists; just needs to be surfaced via API |
-| Budget-aware portfolio output | Users need a list they can actually execute with their coin balance, not a global leaderboard | Med | Portfolio optimizer already exists; needs to pull from DB |
-| Per-player detail: sales history, margin breakdown | Users validate recommendations before buying 100 cards; they need to inspect the evidence | Med | fut.gg already returns this; needs to be stored and queryable |
-| Auto-relist expired listings | The buy/relist cycle is manual today; every tool in the ecosystem automates this step | Med | Chrome extension DOM automation on EA Web App transfer list |
-| Buy automation from recommendation list | Extension must be able to buy players from the server's list, not require manual copying | High | Extension must receive target players + prices from backend API |
-| Profit tracking per session | Users need to know if the strategy is working; P&L per card, per session is the minimum | Med | Requires recording buy price, sell price per transaction |
-| Transfer list status visibility | Is my list full? How many sold? How many expired? Critical for managing the cycle | Low | Extension reads DOM state and surfaces it in popup |
-| Configurable budget input | Different users run different budgets; the scorer must adapt filters accordingly | Low | Already exists in CLI; needs to move to API parameter |
-| Rate-limit-safe 24/7 scanning | If the scanner gets blocked by fut.gg, all scores go stale — reliability is non-negotiable | High | Requires throttling, backoff, scheduling logic |
+The key constraint: all intelligence (scoring, OP prices, portfolio selection) lives in the Python backend. The extension is a thin executor that reads from the backend and drives the EA Web App DOM.
 
 ---
 
-## Differentiators
+## Feature Landscape
 
-Features that set this platform apart from generic sniper bots. Not expected, but high value for an OP sell specialist tool.
+### Table Stakes (Users Expect These)
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Price-at-time OP verification | Generic tools detect OP using current BIN — they produce false positives when price dropped after sale. This platform verifies each sale against the market price *at sale time*. | Med | Already implemented in scorer; key accuracy differentiator |
-| Minimum 3 OP sales threshold | Filters out one-off lucky sells; users get high-confidence candidates only | Low | Already implemented; needs to be surfaced as visible filter in UI |
-| Efficiency-sorted ranking (profit/buy_price) | Competes better than naive "biggest expected profit" ranking — favors cheap cards with good ratios, fills 60-70 slots instead of 14 | Low | Already implemented; just needs to be explained in UI |
-| Historical score tracking | Did this player OP-sell well last week? Score trends reveal seasonal/SBC demand spikes before they're obvious | High | Requires storing per-player scores over time in DB |
-| Market momentum alerts | Notify when a player's OP score jumps significantly — early signal of SBC demand or supply crash | High | Requires delta detection between scan cycles + notification delivery |
-| Automated buy-from-list with target price enforcement | Extension buys only at or below the scorer's recommended buy price, not just any BIN | Med | Prevents overpaying when market moves between recommendation and execution |
-| Session profit dashboard | Running total of coins gained this session, ROI %, cards sold vs listed — makes performance tangible | Med | Web dashboard backed by transaction log in DB |
-| Score confidence indicator | Show users how many data points back the score (more sales = more confidence) | Low | Derived from existing sale count; requires display logic only |
-| Player filter presets | Save a filter config ("only gold rares 15k-50k") for quick session starts | Low | UI convenience; server-side saved preferences |
-| Scan coverage indicator | Show what % of the 11k-200k pool has been scored in the last N hours — transparency builds trust | Low | Derived from DB scan timestamps |
+Features every FUT automation extension has. Missing these means the extension is a toy, not a tool.
 
----
+| Feature | Why Expected | Complexity | Dependencies on Existing |
+|---------|--------------|------------|--------------------------|
+| Overlay panel injected into EA Web App | Extension must be visible without leaving the web app. All tools (EasyFUT, Futinator, MagicBuyer-UT) inject a sidebar or bottom toolbar | MEDIUM | None — pure extension work |
+| Display recommended OP sell list | Core value: show the backend-ranked portfolio with buy price, OP price, margin, expected_profit_per_hour | MEDIUM | Requires /portfolio API endpoint (already built in v1.0) |
+| Start/stop automation toggle | User must be able to pause without refreshing the page. Industry standard across all FUT tools | LOW | None |
+| Price guard before buy | Before clicking Buy Now, compare live BIN on page against backend buy_price. Skip if market moved up | LOW | Requires buy_price field from /portfolio (already in response) |
+| Buy automation (Buy Now at BIN) | Search the transfer market for a target player and click Buy Now when BIN <= buy_price | HIGH | Requires player ea_id and buy_price from backend |
+| Auto-list purchased cards at OP price | After buy, navigate to Transfer Targets, set backend-recommended OP price, list | HIGH | Requires sell_price from /portfolio (already in response) |
+| Auto-relist expired cards at fresh OP price | All tools (EasyFUT, UT Web Helper, MagicBuyer-UT) offer this. Users with large lists need it daily | MEDIUM | Requires GET /portfolio or /players/{ea_id} for fresh OP price |
+| Human-like delays with jitter | EA detects robotic fixed-interval timing. All open-source tools document 300ms–1500ms randomised delays | LOW | None |
+| Status display in panel | User needs to know current action (buying / listing / idle / error) and last event | LOW | None |
+| Error handling and safe stop | CAPTCHA detection, unknown DOM state, or API failure must stop the automation gracefully | MEDIUM | None |
 
-## Anti-Features
+### Differentiators (Competitive Advantage)
 
-Features to explicitly NOT build. Each has a principled reason.
+Features that distinguish this tool from generic FUT bots because it is backend-powered.
 
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| Sniping / buying underpriced cards | Different strategy entirely (requires sub-second reaction), different risk profile, different user skill requirement. Scope creep. | Stay laser-focused on OP sell; sniping users have 10 other tools |
-| Mass bidding automation | High EA detection surface, fundamentally different strategy, not complementary to OP sell flow | If users want autobidding they use FUT Trade Buddy or UT Web Helper |
-| SBC solver | Useful feature but zero relation to OP sell profitability; adds a massive scope blob | Reference existing tools (Futrich, UT Web Helper) in docs if asked |
-| Multi-account management | Each EA account has its own transfer list; multi-account operation dramatically increases ban risk and complexity | Single-account focus; document this explicitly |
-| In-game console automation | EA Web App is accessible via browser; console overlays require platform-specific injection that breaks ToS more aggressively | Chrome extension on EA Web App only, as already decided |
-| FUTBIN integration | Already removed once; adds rate limiting fragility and a second data dependency for no accuracy gain | fut.gg provides all required data |
-| Price manipulation detection / prevention | Trying to detect if you're inflating a market is speculative and legally grey; not needed for personal tool | Scoring naturally avoids illiquid cards via 7 sales/hr minimum filter |
-| Social/community trading signals | Discord tip-sharing, community filters, etc. add moderation overhead and change the product from "data-driven" to "social trust" | Keep recommendations algorithmic; document methodology instead |
-| Mobile app | Not where EA Web App lives; adds platform split and maintenance overhead | Web dashboard accessible from mobile browser is sufficient |
-| "Guaranteed profit" framing | OP selling has a probabilistic success rate; claiming guarantees is misleading and creates support burden | Surface op_ratio and expected_profit so users understand it's probabilistic |
+| Feature | Value Proposition | Complexity | Dependencies on Existing |
+|---------|-------------------|------------|--------------------------|
+| Backend-driven OP price per player | All other tools use static user-set prices or FUTBIN lookups. This tool gets a live, per-player OP price based on listing-tracking outcome data | LOW (extension side) | Depends on sell_price from /portfolio (already returned) |
+| Fresh OP price on every relist cycle | Generic bots relist at the same price as before. This tool fetches a new OP price from backend on each relist — adapts to market drift | LOW (extension side) | Requires /players/{ea_id} or /portfolio endpoint — both already built |
+| Budget-aware portfolio from backend | Extension just passes budget to /portfolio. All slot allocation and efficiency sorting already done server-side | LOW (extension side) | Fully backed by existing optimizer and API |
+| Activity reporting to backend DB | All buys, lists, and relists written to backend for profit tracking. Generic bots have no profit ledger | MEDIUM | Requires new POST /activity endpoint in backend (new work) |
+| Profit analytics queryable via existing CLI | Trading history queryable via CLI and API without a separate dashboard — zero new infrastructure | LOW (extension side) | Requires backend to aggregate /activity records (new work) |
+
+### Anti-Features (Commonly Requested, Often Problematic)
+
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| Headless / background tab operation | "Run overnight without watching" | EA detects hidden and suspended tabs; ban risk spikes sharply. Requires Puppeteer/Selenium-class complexity outside Chrome extension model | Keep the tab visible; document this as an operational requirement |
+| Mass buying (many players in parallel) | Maximum coin efficiency | High detection surface — EA rate-limits transfer market API calls; triggers soft ban in minutes of rapid parallel buying | Serialise purchases with delays; quality of picks (OP margin) beats quantity |
+| Captcha auto-solving | Uninterrupted automation | External captcha services add dependency and infrastructure; robotic patterns still trigger even after solve | Surface CAPTCHA to user immediately, pause automation, prompt for manual solve |
+| Auto-bidding | Covers more cards per coin | Separate logic path, harder to test, lower margin control; bidding introduces cost unpredictability | Buy Now only — OP sell strategy is price-sensitive; known buy cost is essential |
+| FUTBIN price cross-reference | "Verify backend prices against market" | FUTBIN was previously removed from this project; adds rate limits, complexity, stale data risk | Backend listing-tracking scoring is the ground truth; no external price lookup needed |
+| Web dashboard (this milestone) | Central profit monitoring UI | Out of scope for v1.1; adds infrastructure work before the core automation is validated | API + CLI cover profit visibility for v1.1; dashboard deferred to v2+ |
+| Multi-account management | Scale across accounts | Dramatically increases EA ban detection surface and extension complexity | Single-account focus; document explicitly |
 
 ---
 
 ## Feature Dependencies
 
-The dependency graph determines build order.
-
 ```
-Persistent DB (scan results, player scores, transactions)
-    └── REST API (serve scores, receive transaction records)
-            ├── Updated CLI thin client (queries API instead of scoring live)
-            ├── Chrome extension backend calls (buy targets, relist triggers)
-            │       ├── Auto-buy from recommendation list
-            │       ├── Auto-relist expired listings
-            │       └── Transfer list status visibility
-            └── Web dashboard
-                    ├── Profit tracking per session
-                    ├── Session profit dashboard
-                    └── Historical score tracking
-                            └── Market momentum alerts
+[Backend API connection]                         (background worker → localhost:8000)
+    └──enables──> [Display recommended list]
+    └──enables──> [Activity reporting]
+
+[Display recommended list]
+    └──requires──> [Backend API connection]
+
+[Price guard]
+    └──requires──> [Backend API connection]      (need buy_price from /portfolio)
+
+[Buy automation]
+    └──requires──> [Display recommended list]    (need player targets)
+    └──requires──> [Price guard]                 (must check BIN before clicking)
+    └──requires──> [Human-like delays]
+    └──requires──> [Error handling / safe stop]
+
+[Auto-list purchased cards]
+    └──requires──> [Buy automation]              (cards must be in Transfer Targets)
+    └──requires──> [Backend API connection]      (need sell_price / OP price)
+
+[Auto-relist expired cards]
+    └──requires──> [Auto-list purchased cards]   (same DOM path, same price-setting flow)
+    └──enhances──> [Fresh OP price on relist]    (one extra API call per relist)
+
+[Activity reporting]
+    └──requires──> [Buy automation]              (buys to report)
+    └──requires──> [Auto-list purchased cards]   (listings to report)
+    └──enhances──> [Profit analytics via CLI]    (backend aggregates the reported data)
+
+[Start/stop toggle] ──controls──> [Buy automation, Auto-list, Auto-relist]
+[Error handling / safe stop] ──guards──> [Buy automation, Auto-list, Auto-relist]
 ```
 
-Additional dependency notes:
+### Dependency Notes
 
-- **Hourly scanner** must exist before any score freshness guarantee can be made to users.
-- **Transaction logging** (buy price + sell price per card) is a prerequisite for every profit tracking feature.
-- **Price-at-time verification** is already implemented — it is a dependency that's already satisfied.
-- **Market momentum alerts** require at least two time-series data points per player — score history must accumulate for some period before this feature can fire.
+- **Backend API connection is the critical path.** Everything the extension does depends on communicating with localhost:8000 from the background service worker. This must be proven first before any DOM automation work.
+- **Auto-list and auto-relist share the same DOM path.** Both navigate the Transfer List and set a Buy Now price on a player card. Implement as a shared helper to avoid duplication and inconsistency.
+- **Activity reporting is a side-effect, not a separate system.** Each buy/list/relist action fires a POST to the backend as a final step. Do not build a separate "reporting queue" for v1.1.
+- **Price guard is not optional.** Without it, the extension will overpay on players whose market price moved up between the portfolio refresh and the buy attempt. It is P1, not a nice-to-have.
 
 ---
 
-## MVP Recommendation
+## MVP Definition
 
-Prioritize for the first usable milestone (personal use):
+### Launch With (v1.1)
 
-1. **Persistent backend with hourly scanner** — Without this, nothing else runs continuously. Core of the platform.
-2. **REST API serving top OP players filtered by budget** — Replaces the CLI as the data access layer.
-3. **Chrome extension: auto-relist expired listings** — Lowest-risk automation. No buy logic, just relist. Immediate daily time saving.
-4. **Chrome extension: buy from recommendation list** — Closes the loop between scoring and execution.
-5. **Transaction log + simple P&L display** — Validates the strategy is working; motivates continued use.
+Minimum needed to run the buy/list/relist cycle end-to-end with real money on the line.
 
-Defer to subsequent milestones:
+- [ ] Backend API connection proven: background worker can reach localhost:8000 and deserialize /portfolio response
+- [ ] Overlay panel injected into EA Web App showing ranked player list (player name, buy price, OP price, margin)
+- [ ] Start/stop automation toggle in the panel
+- [ ] Buy automation: search for target player by name/ea_id, verify BIN <= buy_price (price guard), click Buy Now
+- [ ] Auto-list: after purchase, navigate to Transfer Targets, set OP price from backend, confirm listing
+- [ ] Auto-relist: on Transfer List page, detect expired cards matching the portfolio, fetch fresh OP price, relist
+- [ ] Human-like delays with jitter (300ms–1500ms) on every action
+- [ ] Error handling: CAPTCHA detection stops automation and shows alert to user; unrecognised DOM state stops cleanly
+- [ ] Activity reporting: POST buy/list/relist events to new backend endpoint (player ea_id, price, action, timestamp)
+- [ ] Status line in panel: current action, last event, running/stopped/error state
 
-- **Historical score tracking** — Valuable but requires data accumulation time; not useful day one.
-- **Market momentum alerts** — Depends on historical data; defer until score history exists.
-- **Web dashboard** — CLI + extension popup covers personal use initially; dashboard is a paid-product-tier concern.
-- **Player filter presets / saved configs** — Nice UX but not blocking core loop.
+### Add After Validation (v1.x)
+
+Add once the core cycle is confirmed working and tracking real profit data.
+
+- [ ] Session profit summary in extension panel (pull from new backend /profit endpoint) — only useful after enough activity data exists
+- [ ] Budget input in extension panel — enables quick budget changes without restarting the backend CLI
+- [ ] Sound/visual notification on successful buy — useful when running and glancing away
+- [ ] Session stats display (buys this session, coins spent, estimated profit) — add once activity reporting is proven reliable
+
+### Future Consideration (v2+)
+
+Defer until personal tool is validated and paid-product path is clearer.
+
+- [ ] Separate web dashboard for analytics — needs multi-user support and auth infrastructure to justify
+- [ ] Cloud-hosted backend with configurable extension URL — requires user accounts, deployment work
+- [ ] Multi-account support — significant detection risk and complexity increase
+
+---
+
+## Feature Prioritization Matrix
+
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Backend API connection (background worker) | HIGH | LOW | P1 |
+| Overlay panel + portfolio display | HIGH | MEDIUM | P1 |
+| Start/stop toggle + status display | HIGH | LOW | P1 |
+| Price guard | HIGH | LOW | P1 |
+| Buy automation | HIGH | HIGH | P1 |
+| Auto-list at OP price | HIGH | HIGH | P1 |
+| Auto-relist expired | HIGH | MEDIUM | P1 |
+| Human-like delays + error handling | HIGH | LOW | P1 |
+| Activity reporting to backend | MEDIUM | MEDIUM | P1 |
+| Session profit summary in panel | MEDIUM | LOW | P2 |
+| Budget input in panel | MEDIUM | LOW | P2 |
+| Sound/notification on buy | LOW | LOW | P3 |
+| Session stats display | LOW | LOW | P3 |
+
+**Priority key:** P1 = must have for v1.1 launch, P2 = add after validation, P3 = nice to have
+
+---
+
+## Competitor Feature Analysis
+
+| Feature | EasyFUT / MagicBuyer-UT | Futinator / UT Web Helper | This Tool |
+|---------|-------------------------|--------------------------|-----------|
+| Player target selection | User configures search filters (price, rating, card type) | User sets search params manually | Backend provides ranked portfolio; extension is a pure executor |
+| List price | User specifies a fixed price | User specifies a fixed price | Backend provides per-player OP price, refreshed on relist |
+| Profit tracking | None | FUT Alert (separate extension) | Backend DB records all activity; CLI queryable from day one |
+| Price guard | Implicit (buys only at or below configured price) | Not documented | Explicit: compare BIN against backend buy_price before every click |
+| Relist price | Same as original list price (stale) | Same as original | Fresh OP price fetched from backend on each relist cycle |
+| Data intelligence | FUTBIN for prices (MagicBuyer-UT), no outcome scoring | Real-time prices from fut.gg | Full listing-tracking outcome scoring; 10-day D-10 window |
+| Architecture | Tampermonkey userscript or unpacked extension | Chrome extension | TypeScript Manifest V3 Chrome extension + Python FastAPI backend |
+
+---
+
+## Technical Implementation Notes
+
+These constrain how features must be built — not design choices but hard requirements.
+
+**Cross-origin communication architecture** (HIGH confidence — Chrome MV3 docs):
+Content scripts on webapp.ea.com cannot directly fetch localhost:8000. Cross-origin requests from content scripts are blocked under Manifest V3. The required architecture is:
+```
+Content Script (webapp.ea.com DOM)
+    → chrome.runtime.sendMessage
+    → Background Service Worker
+    → fetch("http://localhost:8000/...")
+    → response passes back via message
+    → Content Script updates panel / drives DOM
+```
+`host_permissions: ["http://localhost:8000/*"]` must be declared in manifest.json.
+
+**DOM manipulation vs API interception** (MEDIUM confidence — observed in open-source tools):
+Two approaches exist: (1) click real buttons and read/write real input fields (DOM manipulation), or (2) intercept EA's internal XHR/Fetch calls. All open-source FUT tools use DOM manipulation. API interception requires reverse-engineering EA's undocumented, session-authenticated transfer market API. DOM manipulation is the pragmatic choice and the only one with community precedent.
+
+**EA DOM stability** (LOW confidence — no official docs):
+EA does not publish the web app's internal structure. The DOM changes annually with each FC title release. Write all CSS selectors defensively with fallbacks. Add DOM existence checks before every interaction. Expect maintenance work each year when EA updates the web app.
+
+**EA ban surface** (MEDIUM confidence — community consensus from forums and open-source tool docs):
+- Fixed-interval robotic timing is the primary soft-ban trigger
+- Rapid sequential BIN purchases trigger transfer market rate limits
+- CAPTCHA appears during high-volume sessions; failing or leaving it unsolved causes a transfer market ban (12–72 hours; escalates with repetition)
+- Mitigation: randomised delays per action, serialised (not parallel) execution, visible tab required, automated stop on CAPTCHA detection
 
 ---
 
 ## Sources
 
-- [FUT Simple Trader — Features & Pricing](https://futsimpletrader.com/services/ea-fc-sniping-bot-and-autobuyer)
-- [UT Web Helper — Auto Relist, Sniper, SBC](https://utwebhelper.com/)
-- [FutStarz — Profit Tracking Dashboard](https://www.futstarz.com/en)
-- [Levelled Up Gaming — Overpriced Selling Guide](https://www.levelledupgaming.com/overpriced-selling-guide/)
-- [Levelled Up Gaming — OP Selling Method](https://www.levelledupgaming.com/fifa-23-op-selling-easy-coins/)
-- [FUT Trade Buddy on Chrome Web Store](https://chromewebstore.google.com/detail/fut-trade-buddy-autobuyer/egcilaiennocopjhedfpacbmicepoopo)
-- [EasyFUT GitHub — Transfer Market Automation](https://github.com/Kava4/EasyFUT)
-- [FUTBotManager — EA Ban Wave Avoidance](https://futbotmanager.com/ea-ban-wave-avoidance-futbotmanager/)
-- [FutEarn — FC26 Autobuyer](https://futearn.com)
-- [FUTEarn Chrome Web Store listing](https://chromewebstore.google.com/detail/ea-fc-26-sniping-bot-auto/ekmgafjpdinnpmmpfdhhlpnkghahfpif)
+- [EasyFUT GitHub (Kava4)](https://github.com/Kava4/EasyFUT) — content.js, background.js, auto-relist architecture
+- [MagicBuyer-UT GitHub (AMINE1921)](https://github.com/AMINE1921/MagicBuyer-UT) — buy/list/relist flow, price guard pattern, periodic relist implementation
+- [FUT-Trader GitHub (ckalgos)](https://github.com/ckalgos/FUT-Auto-Buyer) — CAPTCHA handling, delay strategies, settings panel UX
+- [Chrome Manifest V3 content scripts](https://developer.chrome.com/docs/extensions/reference/manifest/content-scripts) — cross-origin restriction confirmed HIGH confidence
+- [Chrome message passing docs](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) — background worker pattern confirmed HIGH confidence
+- [EA soft ban forum thread (FC25)](https://forums.ea.com/discussions/fc-25-technical-issues-en/soft-ban-on-fc-web-app/12364687) — ban detection triggers
+- [Futinator Chrome Web Store](https://chrome.google.com/webstore/detail/futinator/ahfgcgcekjnnnacekibcangfooibmehc) — UX pattern: keyboard bindings, buy/bid/list automation
+- [FUT Alert Portfolio](https://portfolio.futalert.co.uk/) — profit tracking pattern in the FUT extension ecosystem
+- [EA FC rules](https://help.ea.com/en/articles/ea-sports-fc/fc-rules/) — confirms third-party automation violates ToS
 
-All claims marked LOW confidence unless backed by official product pages or multiple independent sources. OP sell strategy mechanics (HIGH confidence — multiple consistent community sources). Ban risk claims (MEDIUM confidence — industry consensus but EA enforcement is non-deterministic).
+---
+*Feature research for: Chrome Extension — EA Web App OP Sell Automation (v1.1 milestone)*
+*Researched: 2026-03-26*
