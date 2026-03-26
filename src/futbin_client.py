@@ -67,14 +67,19 @@ class FutbinClient:
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def search_player(self, name: str) -> int | None:
+    def search_player(self, name: str, ea_id: int | None = None) -> int | None:
         """Search FUTBIN for a player by name and return their futbin_id.
+
+        When ea_id is provided, verifies the match by checking if the player's
+        image URL on FUTBIN contains the EA resource ID. This prevents returning
+        the wrong card version (e.g., base vs Icon).
 
         Args:
             name: Player name to search for.
+            ea_id: Optional EA resource ID for verification.
 
         Returns:
-            The FUTBIN player ID (integer) or None if not found.
+            The FUTBIN player ID (integer) or None if not found/verified.
         """
         encoded_name = quote(name)
         url = f"{FUTBIN_BASE}/26/players?search={encoded_name}"
@@ -84,19 +89,94 @@ class FutbinClient:
 
         try:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Look for player links in format /26/player/{id}/{slug}
-            link = soup.find("a", href=re.compile(r"/26/player/\d+/"))
-            if link:
-                match = re.search(r"/26/player/(\d+)/", link["href"])
+            # Find all player links in format /26/player/{id}/{slug}
+            links = soup.find_all("a", href=re.compile(r"/26/player/\d+/"))
+
+            if not links:
+                logger.warning("Player '%s' not found on FUTBIN", name)
+                return None
+
+            if ea_id is None:
+                # No verification — return first result (legacy behavior)
+                match = re.search(r"/26/player/(\d+)/", links[0]["href"])
                 if match:
                     futbin_id = int(match.group(1))
-                    logger.info("Found FUTBIN ID %d for '%s'", futbin_id, name)
+                    logger.info("Found FUTBIN ID %d for '%s' (unverified)", futbin_id, name)
                     return futbin_id
+            else:
+                # Verify by matching EA ID in image URLs near each link
+                ea_id_str = str(ea_id)
+                seen_futbin_ids = set()
+
+                for link in links:
+                    href_match = re.search(r"/26/player/(\d+)/", link["href"])
+                    if not href_match:
+                        continue
+                    futbin_id = int(href_match.group(1))
+                    if futbin_id in seen_futbin_ids:
+                        continue
+                    seen_futbin_ids.add(futbin_id)
+
+                    # Check if EA ID appears in nearby image URLs
+                    # Look in the link itself and its parent container
+                    search_area = str(link) + str(link.parent)
+                    if re.search(rf"/players/p?{ea_id_str}\.png", search_area):
+                        logger.info(
+                            "Found FUTBIN ID %d for '%s' (verified ea_id=%d)",
+                            futbin_id, name, ea_id,
+                        )
+                        return futbin_id
+
+                # EA ID not found near any link — try the full page as fallback
+                # (some search pages have images in separate containers)
+                full_html = resp.text
+                if re.search(rf"/players/p?{ea_id_str}\.png", full_html):
+                    # EA ID exists on page — find which futbin_id it belongs to
+                    # by checking each player's detail page
+                    for futbin_id in list(seen_futbin_ids)[:3]:  # limit to 3 checks
+                        if self._verify_ea_id_on_page(futbin_id, name, ea_id):
+                            return futbin_id
+
+                logger.warning(
+                    "Player '%s' found on FUTBIN but ea_id=%d not verified",
+                    name, ea_id,
+                )
+                return None
+
         except Exception as e:
             logger.error("Error parsing FUTBIN search for '%s': %s", name, e)
 
         logger.warning("Player '%s' not found on FUTBIN", name)
         return None
+
+    def _verify_ea_id_on_page(self, futbin_id: int, name: str, ea_id: int) -> bool:
+        """Verify a FUTBIN player page contains the expected EA resource ID.
+
+        Fetches the sales page and checks if the EA ID appears in image URLs.
+
+        Args:
+            futbin_id: FUTBIN player ID to check.
+            name: Player name (for URL slug).
+            ea_id: Expected EA resource ID.
+
+        Returns:
+            True if verified, False otherwise.
+        """
+        slug = name.lower().replace(" ", "-")
+        slug = re.sub(r"[^a-z0-9-]", "", slug)
+        url = f"{FUTBIN_BASE}/26/sales/{futbin_id}/{slug}?platform=ps"
+        resp = self._get(url)
+        if resp is None:
+            return False
+
+        ea_id_str = str(ea_id)
+        if re.search(rf"/players/p?{ea_id_str}\.png", resp.text):
+            logger.info(
+                "Verified FUTBIN ID %d for '%s' (ea_id=%d found on page)",
+                futbin_id, name, ea_id,
+            )
+            return True
+        return False
 
     def fetch_sales_page(self, futbin_id: int, name: str) -> list[dict]:
         """Fetch and parse the FUTBIN sales page for a player.
