@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A platform that finds the best FC26 Ultimate Team players to OP sell (list above market price), automates the buy/list/relist cycle via a Chrome extension, and tracks profit performance — all powered by a persistent backend that monitors the market 24/7. Starting as a personal tool, evolving toward a paid product.
+A platform that finds the best FC26 Ultimate Team players to OP sell (list above market price), powered by a persistent backend that monitors the market 24/7, scores every player using listing-tracking-based outcome data, and serves recommendations via REST API and CLI. Starting as a personal tool, evolving toward a paid product with Chrome extension automation.
 
 ## Core Value
 
@@ -12,25 +12,25 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 
 ### Validated
 
-- ✓ OP sell scoring with price-at-time verification — existing
-- ✓ fut.gg API integration (player discovery, prices, sales, history) — existing
-- ✓ Portfolio optimization (efficiency sorting, swap loop, backfill) — existing
-- ✓ CLI output with Rich tables and CSV export — existing
-- ✓ Protocol-based data source abstraction (MarketDataClient) — existing
-- ✓ Pydantic data models (Player, SaleRecord, PricePoint) — existing
-- ✓ Persistent backend server (FastAPI + SQLite) running 24/7 — Validated in Phase 1: Persistent Scanner
-- ✓ Scheduled scanning per player with tier-based priority (11k–200k range) — Validated in Phase 1: Persistent Scanner
-- ✓ REST API top-players endpoint with scores, margins, ratios — Validated in Phase 1: Persistent Scanner
+- ✓ Persistent backend server (FastAPI + SQLite) running 24/7 — v1.0
+- ✓ Scheduled scanning of all players in 11k–200k range every 5 minutes — v1.0
+- ✓ REST API top-players endpoint with scores, margins, ratios — v1.0
+- ✓ REST API portfolio endpoint with budget-aware optimization — v1.0
+- ✓ REST API player detail endpoint with trend indicators and score history — v1.0
+- ✓ Adaptive scan scheduling based on listing activity — v1.0
+- ✓ Historical score accumulation per player for trend analysis — v1.0
+- ✓ CLI thin client querying the API (no direct fut.gg calls) — v1.0
+- ✓ Listing-tracking scoring with fingerprint-based observation and outcome resolution — v1.0
+- ✓ D-10 expected_profit_per_hour formula replacing snapshot-based scoring — v1.0
+- ✓ Circuit breaker and retry logic for fut.gg API resilience — v1.0
+- ✓ Protocol-based data source abstraction (MarketDataClient) — pre-v1.0
 
 ### Active
 
-- ✓ REST API exposing player details, score history, budget portfolio — Validated in Phase 2: Full API Surface
-- ✓ CLI thin client that queries the API (replaces direct scoring) — Validated in Phase 3: CLI as API Client
-- ✓ Listing-tracking-based scoring replacing snapshot-based scoring — Validated in Phase 4: Refactor Scoring DB
 - [ ] Chrome extension for EA Web App automation (buy, list, relist)
 - [ ] Profit tracking and performance analytics
 - [ ] Separate web dashboard for analytics and monitoring
-- [ ] User accounts and paid tiers (future)
+- [ ] User accounts and paid tiers
 
 ### Out of Scope
 
@@ -38,19 +38,25 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 - Mobile app — web-first approach
 - Console/in-game automation — Chrome extension on EA Web App only
 - Multi-game support — FC26 only
+- Sniping / buying underpriced cards — different strategy entirely
+- Mass bidding automation — high EA detection surface
+- SBC solver — zero relation to OP sell profitability
 
 ## Context
 
-- Existing Python 3.12 CLI tool with working OP scoring engine
-- Data source: fut.gg API (player discovery, prices, 100 recent sales, hourly price history)
-- Scoring approach: price-at-time verified OP detection across margin tiers (40% down to 3%), minimum 3 OP sales required
-- Phase 1 complete: persistent backend with FastAPI, SQLite WAL, APScheduler, circuit breaker, tier-based scanning
-- Phase 2 complete: full API surface — portfolio endpoint, player detail with trends, adaptive scan scheduling
-- Phase 3 complete: CLI rewritten as thin API client — queries backend for portfolio and player detail, no direct fut.gg calls
-- Phase 4 complete: listing-tracking scoring — fingerprint-based listing observation, outcome resolution, D-10 expected_profit_per_hour formula, v2 scorer with v1 bootstrap fallback
-- fut.gg updates hourly price history, so hourly scanning per player is the right cadence
-- Price range 11k–200k keeps the player pool manageable and focused on liquid cards
-- Architecture already has protocol-based abstraction — good foundation for adding persistence layer
+Shipped v1.0 with ~18k LOC Python across 115 files, 127 commits over 2 days.
+
+**Tech stack:** Python 3.12, FastAPI, SQLAlchemy 2.0 async, aiosqlite, APScheduler, httpx, Pydantic, Rich, Click
+
+**Current state:**
+- Backend scans ~1800 players every 5 minutes with circuit breaker protection
+- Listing-tracking scorer (v2) computes expected_profit_per_hour from D-10 observation window
+- CLI displays portfolio ranked by expected_profit_per_hour
+- 10 quick tasks completed post-phase-4 for scoring formula refinement and cleanup
+
+**Known issues:**
+- fut.gg has no published rate limits; 24/7 scanning behavior is empirically tuned
+- Phase 2 ROADMAP showed 0/2 plans but execution was complete on disk (tracking inconsistency)
 
 ## Constraints
 
@@ -64,12 +70,15 @@ Always-fresh, data-driven OP sell recommendations — the server continuously sc
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Chrome extension for automation | Overlays on EA Web App, avoids reverse-engineering EA APIs | — Pending |
-| Python backend with FastAPI | Keeps existing scoring logic, adds API + scheduler naturally | Validated Phase 1 |
-| SQLite initially | Simple, no infrastructure needed for personal use, migrateable later | Validated Phase 1 |
-| CLI becomes API client | All logic on server (needs DB for proper scoring), CLI just displays results | Validated Phase 3 |
-| Hourly scan cadence | Matches fut.gg price history granularity, respects rate limits | — Pending |
-| 11k–200k price range | Focused on liquid, profitable cards; avoids scanning entire market | — Pending |
+| Python backend with FastAPI | Keeps existing scoring logic, adds API + scheduler naturally | ✓ Good — v1.0 |
+| SQLite with WAL mode | Simple, no infrastructure needed, async via aiosqlite | ✓ Good — v1.0 |
+| CLI becomes API client | All logic on server, CLI just displays results | ✓ Good — v1.0 |
+| Listing-tracking replaces snapshot scoring | Fingerprint-based observation + outcome resolution gives true sell rates | ✓ Good — v1.0 |
+| D-10 expected_profit_per_hour formula | Uses 10-day observation window for scoring accuracy | ✓ Good — v1.0 |
+| Fixed 5-min scan interval | Replaced adaptive scheduling — simpler and ensures coverage | ✓ Good — v1.0 |
+| Proportional outcome resolution | min(matching_sales, n_listings) sold, rest expired — handles price ambiguity | ✓ Good — v1.0 |
+| Chrome extension for automation | Overlays on EA Web App, avoids reverse-engineering EA APIs | — Pending (v2) |
+| 11k–200k price range | Focused on liquid, profitable cards; avoids scanning entire market | ✓ Good — v1.0 |
 
 ## Evolution
 
@@ -89,4 +98,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after Phase 4 completion*
+*Last updated: 2026-03-26 after v1.0 milestone*
