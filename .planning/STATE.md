@@ -77,8 +77,14 @@ None yet.
 - [Phase 7]: EA Web App DOM internals are LOW confidence. Selectors, ARIA attributes, and window.services method names for FC26 must be verified by live DevTools inspection before any automation code is written. Phase 7 planning must open with an exploration task.
 - [Phase 7]: EA daily transaction cap threshold unpublished — set automation conservatively at 500/day initially, adjust empirically.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260326-ufn | Fix all FUTBIN findings: deduplicate snapshot_sales, populate player names, set scorer_version | 2026-03-26 | ed8adc8 | [260326-ufn-fix-all-futbin-findings-deduplicate-snap](./quick/260326-ufn-fix-all-futbin-findings-deduplicate-snap/) |
+
 ## Session Continuity
 
-Last session: 2026-03-26T07:02:21.065Z
-Stopped at: Completed 05-03-PLAN.md
+Last activity: 2026-03-26 - Completed quick task 260326-ufn: Fix all FUTBIN findings
+Stopped at: Completed quick task 260326-ufn
 Resume file: None
