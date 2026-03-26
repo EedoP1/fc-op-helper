@@ -408,7 +408,6 @@ class ScannerService:
                     PlayerRecord.next_scan_at <= now,
                 )
                 .order_by(PlayerRecord.next_scan_at.asc())
-                .limit(SCAN_CONCURRENCY * 2)
             )
             result = await session.execute(stmt)
             due_players = result.scalars().all()

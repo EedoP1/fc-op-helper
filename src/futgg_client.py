@@ -70,7 +70,7 @@ class FutGGClient:
         try:
             resp = await self.client.get(path)
             resp.raise_for_status()
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.05)
             return resp.json()
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP {e.response.status_code} for {path}")
