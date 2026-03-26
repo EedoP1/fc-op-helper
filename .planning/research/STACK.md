@@ -1,8 +1,9 @@
 # Technology Stack
 
 **Project:** FC26 OP Sell Platform — Backend + API + Chrome Extension + Web Dashboard
-**Researched:** 2026-03-25
+**Researched:** 2026-03-26
 **Scope:** New components only. Existing stack (Python 3.12, httpx, pydantic, click, rich) is not re-evaluated.
+**Focus update:** Chrome extension section expanded with EA Web App DOM interaction patterns, MV3 service worker lifecycle, and content script architecture.
 
 ---
 
@@ -53,21 +54,127 @@ PostgreSQL migration path: Change `sqlite+aiosqlite:///./app.db` to `postgresql+
 
 ---
 
-### Chrome Extension — WXT + TypeScript + React
+### Chrome Extension — WXT + TypeScript (no UI framework in content scripts)
 
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| WXT | 0.20.x | Extension framework | Vite-based, Manifest V3 native, hot reload for service workers, ~43% smaller bundles than Plasmo; actively maintained unlike Plasmo which has community-reported maintenance concerns |
-| TypeScript | 5.x | Extension language | Type safety when interacting with DOM elements on EA Web App; `chrome-types` package provides auto-complete for all `chrome.*` APIs |
-| React | 19.x | Popup/options UI | Familiar; WXT has first-class `@wxt-dev/module-react` support; consistent with dashboard stack |
+| WXT | ~0.20.20 | Extension build framework | Vite-based, Manifest V3 native, HMR for service workers, ~43% smaller bundles than Plasmo; actively maintained unlike CRXJS (archival risk) and Plasmo (maintenance lag) |
+| TypeScript | ^5.0.0 | Extension language | Type safety for DOM selectors and chrome.* APIs; catches structural mismatches against backend API response types at compile time |
+| @types/chrome | ^0.1.38 | Chrome API typings | Community-maintained DefinitelyTyped package; most up-to-date for autocomplete on `chrome.runtime`, `chrome.storage`, `chrome.tabs` |
+| React | 19.x | Popup UI only | Used in the extension popup for displaying the recommended sell list; NOT used inside content scripts (content script is vanilla TS only) |
 
-**Do not use Plasmo.** Despite strong initial DX, Plasmo is reported as under-maintained in 2025. WXT has taken clear community momentum and produces smaller, faster bundles.
+#### Why WXT over alternatives
 
-**Do not use raw Manifest V3 without a framework.** Service worker architecture in MV3 is significantly more complex than MV2 background pages; WXT abstracts the lifecycle correctly.
+- **vs Plasmo:** Plasmo is in maintenance mode as of 2025 — little active development, larger bundle size (Parcel vs Vite), unreliable HMR for background scripts. WXT is the clear successor with active development.
+- **vs CRXJS:** CRXJS posted a public notice that the repository would be archived if no new maintainer was established by June 2025. As of March 2026 the project status is uncertain. Do not take a new dependency on it.
+- **vs raw MV3:** Service worker lifecycle in MV3 is significantly more complex than MV2 background pages. WXT provides correct lifecycle abstractions, structured entry points, and dev-mode reload without manual chrome://extensions refreshing.
 
-WXT 0.20.x is a release candidate for v1.0 — the API is stable but semver pre-1.0. Pin to `~0.20.x` and do not auto-upgrade to avoid breaking changes before 1.0.
+WXT 0.20.x is pre-1.0 by semver but the API is stable. Pin to `~0.20.20` and do not auto-upgrade until 1.0 is tagged.
 
-**Confidence:** MEDIUM-HIGH — WXT 0.20.20 confirmed from npm. Plasmo maintenance concerns from multiple community sources (DevKit.best, redreamality.com comparisons). MV3 requirement confirmed from Chrome for Developers.
+**Confidence:** MEDIUM-HIGH — WXT 0.20.18 confirmed from npm (published ~19 days before research date). CRXJS archival risk confirmed from github.com/crxjs/chrome-extension-tools discussions. Plasmo maintenance concerns from multiple independent sources.
+
+---
+
+### EA Web App DOM Interaction — Architecture
+
+This is the highest-risk technical area. The EA FC 26 Web App is an Angular SPA. Existing community tools (EasyFUT, fut-trade-enhancer, shortfuts) reveal two distinct automation patterns:
+
+#### Pattern A: Main World Service Injection (preferred)
+
+The EA Web App exposes its internal Angular service tree on `window` globals (e.g., `services.Search`, `services.Item`, `services.Auction`, `repositories.Item`). Community scripts access these directly to construct search queries (`UTSearchCriteriaDTO`, `UTAuctionSearchCriteriaDTO`) and submit trades without simulating user clicks.
+
+**Why this is better than DOM clicking:** Angular SPAs re-render DOM elements frequently; CSS selectors for buttons will break on every EA Web App update. Service-level calls are more stable because they target the JavaScript API layer, not the rendered HTML.
+
+**How to implement from a Chrome extension:** Content scripts run in an isolated world and cannot access `window.services`. Use `chrome.scripting.executeScript` with `world: "MAIN"` to inject a script into the page's JavaScript context. The injected script reads `window.services` and passes data back to the content script via `window.postMessage` or `CustomEvent`.
+
+```
+Content script (isolated world)
+  → chrome.scripting.executeScript({ world: "MAIN" })
+    → Injected script reads window.services / window.repositories
+    → Dispatches CustomEvent with data
+  ← Content script receives event, relays to service worker via chrome.runtime.sendMessage
+Service worker
+  → Calls localhost:8000 backend for portfolio / prices
+  → Sends commands back to content script
+Content script
+  → Dispatches commands to injected main-world script
+    → Injected script calls window.services.Auction.placeBid() etc.
+```
+
+**MV3 manifest requirement:** The injected main-world script file must be listed in `web_accessible_resources`. WXT handles this automatically when you use `injectScript()`.
+
+#### Pattern B: Simulated DOM Clicks (fallback)
+
+Click `querySelector('[data-icon="transfer"]')`, fill input fields, click confirm buttons. This is how shortfuts implements keyboard shortcuts.
+
+Use this only as a fallback for flows where service-level access is unclear (e.g., confirming a buy-now dialog that has no direct service call). The selectors will require maintenance after EA Web App updates.
+
+#### URL match pattern for EA Web App
+
+```
+*://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
+```
+
+The WXT content script `matches` field should use this exact pattern.
+
+**Confidence:** MEDIUM — Main-world service access pattern confirmed by examining FSU script source code on GreasyFork (which uses this approach for FUT automation). The specific service/repository names (`services.Auction`, `repositories.Item`) are confirmed in that source. The exact current method names for buy-now and relist in FC26 are not confirmed — they must be verified by inspecting `window.services` in browser devtools on the live web app before implementation.
+
+---
+
+### Chrome Extension — Service Worker Lifecycle
+
+The MV3 service worker terminates after 30 seconds of inactivity. This is critical for the automated buy/list/relist cycle which may run for minutes.
+
+**Solution:** Use an alarm to keep the service worker alive during active automation runs.
+
+```typescript
+// In service worker: register a 1-minute repeating alarm when automation starts
+chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepAlive') {
+    // Receiving this event resets the 30-second idle timer
+  }
+});
+```
+
+`chrome.alarms` API calls are Chrome extension API calls, which reset the 30-second idle timer. A 24-second (0.4 minute) alarm gives a comfortable margin below the 30-second cutoff.
+
+**Alternative:** Maintain an open `chrome.runtime.connect` port from the content script to the service worker. An active port connection extends service worker lifetime for the duration of the connection. This is the approach WXT's content script channel uses internally.
+
+Clear the keepAlive alarm when automation is stopped to avoid draining resources when idle.
+
+**Confidence:** HIGH — Service worker 30-second idle timer confirmed from Chrome for Developers official docs. Alarm-based keepalive pattern confirmed as valid approach in multiple community sources.
+
+---
+
+### Extension-to-Backend Communication
+
+The extension calls `http://localhost:8000` (the FastAPI backend). This is a cross-origin request from the extension's context.
+
+**Background service worker (no CORS issue):** Extension service workers are not subject to CORS restrictions when the extension declares host permissions. Add `"http://localhost:8000/*"` to `host_permissions` in manifest.json. WXT handles this via the `wxt.config.ts` `manifest` option.
+
+**Content scripts (isolated world) cannot call localhost directly.** Cross-origin fetch from content scripts is blocked even with host permissions. The content script must relay requests to the service worker via `chrome.runtime.sendMessage`, which then makes the fetch call.
+
+```
+Content script → chrome.runtime.sendMessage({ type: "GET_PORTFOLIO" })
+Service worker → fetch("http://localhost:8000/portfolio")
+              ← response
+Service worker → chrome.tabs.sendMessage(tabId, { type: "PORTFOLIO_RESULT", data })
+Content script ← receives data, updates UI overlay
+```
+
+**Confidence:** HIGH — This cross-origin restriction is official Chrome extension behavior documented at developer.chrome.com. The service-worker-as-proxy pattern is the standard solution.
+
+---
+
+### Supporting Libraries — Chrome Extension
+
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| @wxt-dev/module-react | latest | React integration for WXT | Add for popup and options page UI only; do not load React in the content script |
+| zod | ^3.23.0 | Runtime schema validation | Validate backend API responses in the service worker before passing to content scripts; prevents crashes from API shape changes |
+
+**Do not add a state management library** (Zustand, Jotai, etc.) to the extension. The extension has no complex shared client state — the service worker fetches from the backend on demand, and the content script's UI overlay reads from service worker messages. `chrome.storage.local` is sufficient for persisting any automation state (current target list, progress) across service worker restarts.
 
 ---
 
@@ -116,11 +223,13 @@ Existing dependencies (httpx, pydantic, click, rich) are unchanged.
   "devDependencies": {
     "wxt": "~0.20.20",
     "@wxt-dev/module-react": "*",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@types/chrome": "^0.1.38"
   },
   "dependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^3.23.0"
   }
 }
 ```
@@ -157,10 +266,27 @@ Existing dependencies (httpx, pydantic, click, rich) are unchanged.
 | Database | SQLite + SQLAlchemy | SQLModel | SQLModel is a thin SQLAlchemy wrapper by FastAPI's author; fine choice but adds an abstraction layer with less documentation — SQLAlchemy 2.0 directly is better understood |
 | Migrations | Alembic | Manual `create_all()` | No history, no rollback, no PostgreSQL migration path |
 | Extension framework | WXT | Plasmo | Community reports of maintenance lag; larger bundle size; Parcel bundler vs Vite |
+| Extension framework | WXT | CRXJS | Archival risk — maintainer-wanted notice posted; uncertain future |
 | Extension framework | WXT | Raw MV3 | MV3 service worker lifecycle is complex; WXT handles it correctly |
+| EA automation | Main-world service injection | DOM click simulation | CSS selectors break on every web app update; service calls target the stable JavaScript API layer |
+| Extension state | chrome.storage.local | Zustand/Jotai | Extension has no complex client state graph; chrome.storage survives service worker restarts which in-memory stores do not |
 | Charts | Recharts | Chart.js | Canvas-based, needs manual React wrapper; no native React component API |
 | Charts | Recharts | Victory | Less active community in 2025; heavier API for simple line/bar charts |
 | Server state | TanStack Query | SWR | TanStack Query v5 has superior TypeScript support, devtools, and mutation API; both are valid but TanStack has more community momentum |
+
+---
+
+## What NOT to Use
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| Plasmo | Under-maintained in 2025; Parcel bundler 2–3x slower than Vite; ~800KB bundles vs ~400KB for WXT | WXT |
+| CRXJS @crxjs/vite-plugin | Posted public archival notice if no new maintainer by June 2025; status uncertain March 2026 | WXT |
+| APScheduler 4.x | No stable release; breaking API rewrite from 3.x; no migration for job stores | APScheduler 3.11 |
+| Direct DOM click simulation as primary automation | EA Web App re-renders DOM frequently; selectors break on updates | Main-world service injection via `chrome.scripting.executeScript({ world: "MAIN" })` |
+| `fetch()` from content script to localhost | Blocked by CORS restrictions even with host permissions in MV3 | Relay via `chrome.runtime.sendMessage` to service worker, which does the fetch |
+| Storing automation state in service worker memory globals | Service worker terminates after 30s idle; all state is lost | `chrome.storage.local` for persistence across restarts |
+| `chrome.action.setIcon` / DOM mutations during relist loop without keepalive | Service worker will die mid-loop | `chrome.alarms` keepalive during active automation |
 
 ---
 
@@ -171,14 +297,33 @@ Keep the Python backend and TypeScript frontends in the same repo with separate 
 ```
 op-seller/
 ├── src/                  — existing Python CLI + scoring engine
-├── api/                  — new FastAPI server (imports from src/)
+├── api/                  — FastAPI server (imports from src/)
 ├── extension/            — WXT Chrome extension
+│   ├── entrypoints/
+│   │   ├── popup/        — React UI showing recommended sell list
+│   │   ├── content.ts    — vanilla TS content script, injected on EA Web App
+│   │   └── background.ts — MV3 service worker, calls localhost:8000
+│   ├── lib/
+│   │   └── ea-services.ts — main-world injection script for EA service access
+│   └── wxt.config.ts
 ├── dashboard/            — React + Vite web dashboard
 ├── requirements.txt      — Python deps (updated)
 └── alembic/              — database migrations
 ```
 
-This avoids a multi-repo setup for what is still a personal tool. The Python `api/` directory imports the existing `src/` modules directly — no packaging step needed.
+The content script is kept as vanilla TypeScript (no React) because loading a UI framework into a content script that runs on every EA Web App page load is unnecessary and slow. React is only loaded in the popup (which opens on user click).
+
+---
+
+## Version Compatibility
+
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| WXT ~0.20.20 | TypeScript ^5.0.0 | WXT ships its own Vite internally; do not add Vite as a separate dep |
+| React 19.x | @wxt-dev/module-react (any) | React 19 concurrent features not needed; React 18 also acceptable if 19 causes issues |
+| @types/chrome ^0.1.38 | TypeScript ^5.0.0 | Use DefinitelyTyped version; `chrome-types` from Google is also valid but less stable versioning |
+| APScheduler 3.11 | FastAPI 0.135 / Python 3.12 | No known incompatibilities; tested combination |
+| SQLAlchemy 2.0.48 | aiosqlite 0.22.1 | Use `sqlite+aiosqlite://` driver string; `sqlite+aiosqlite+file://` for WAL mode |
 
 ---
 
@@ -190,11 +335,16 @@ This avoids a multi-repo setup for what is still a personal tool. The Python `ap
 - [SQLAlchemy PyPI](https://pypi.org/project/SQLAlchemy/) — version 2.0.48
 - [aiosqlite PyPI](https://pypi.org/project/aiosqlite/) — version 0.22.1
 - [Alembic Docs](https://alembic.sqlalchemy.org/en/latest/front.html) — version 1.18.4
-- [WXT Framework](https://wxt.dev/) — version 0.20.20, MV3 native
-- [2025 Extension Framework Comparison (redreamality.com)](https://redreamality.com/blog/the-2025-state-of-browser-extension-frameworks-a-comparative-analysis-of-plasmo-wxt-and-crxjs/) — WXT vs Plasmo analysis
-- [Chrome Extensions MV3](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3) — MV3 requirement
+- [WXT Framework](https://wxt.dev/) — version 0.20.18/0.20.20, MV3 native, actively maintained
+- [WXT Content Scripts Docs](https://wxt.dev/guide/essentials/content-scripts.html) — matches patterns, main-world injection, `injectScript()`
+- [WXT vs Plasmo vs CRXJS comparison (redreamality.com)](https://redreamality.com/blog/the-2025-state-of-browser-extension-frameworks-a-comparative-analysis-of-plasmo-wxt-and-crxjs/) — MEDIUM confidence, community analysis
+- [CRXJS archival discussion](https://github.com/crxjs/chrome-extension-tools/discussions/872) — confirms maintenance uncertainty
+- [Chrome MV3 Service Worker Lifecycle (official)](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle) — 30-second idle timer confirmed
+- [Longer Extension Service Worker Lifetimes (Chrome blog)](https://developer.chrome.com/blog/longer-esw-lifetimes) — Chrome 110+ behavior confirmed
+- [Cross-Origin Requests in Chrome Extensions (official)](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests) — content script CORS restriction confirmed
+- [FSU EAFC FUT Web Enhancer source code (GreasyFork)](https://greasyfork.org/en/scripts/431044-fsu-eafc-fut-web-%E5%A2%9E%E5%BC%BA%E5%99%A8/code) — main-world service injection pattern with `window.services`, `window.repositories` confirmed in real FUT automation script
+- [@types/chrome npm](https://www.npmjs.com/package/@types/chrome) — version 0.1.38, last updated March 2026
 - [TanStack Query npm](https://www.npmjs.com/package/@tanstack/react-query) — version 5.95.0
 - [Recharts npm](https://www.npmjs.com/package/recharts) — version 3.8.0
-- [Best React Chart Libraries 2025 (LogRocket)](https://blog.logrocket.com/best-react-chart-libraries-2025/) — Recharts recommendation
-- [FastAPI + Async SQLAlchemy 2.0 Setup (Medium)](https://medium.com/@tclaitken/setting-up-a-fastapi-app-with-async-sqlalchemy-2-0-pydantic-v2-e6c540be4308) — session patterns
-- [Alembic + SQLite batch mode (greeden.me)](https://blog.greeden.me/en/2025/08/12/no-fail-guide-getting-started-with-database-migrations-fastapi-x-sqlalchemy-x-alembic/) — render_as_batch requirement
+- [FastAPI + Async SQLAlchemy 2.0 Setup](https://medium.com/@tclaitken/setting-up-a-fastapi-app-with-async-sqlalchemy-2-0-pydantic-v2-e6c540be4308) — session patterns
+- [Alembic + SQLite batch mode](https://blog.greeden.me/en/2025/08/12/no-fail-guide-getting-started-with-database-migrations-fastapi-x-sqlalchemy-x-alembic/) — render_as_batch requirement
