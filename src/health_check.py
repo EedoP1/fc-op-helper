@@ -365,7 +365,7 @@ def main(count: int, verbose: bool) -> None:
 
                 # Resolve futbin_id if not cached
                 if futbin_id is None:
-                    futbin_id = client.search_player(name)
+                    futbin_id = client.search_player(name, ea_id=ea_id)
                     if futbin_id is not None:
                         conn.execute(
                             "UPDATE players SET futbin_id = ? WHERE ea_id = ?",
