@@ -53,7 +53,10 @@ Plans:
   2. Service worker fetches the pending action from the backend every 30 seconds and the result survives a DevTools-close + 60-second idle cycle
   3. A PING message from the service worker reaches the content script and a typed PONG response returns; shape mismatches are caught at compile time
   4. Navigating between EA Web App pages (SPA route change) does not orphan the content script — MutationObserver re-initializes listeners on navigation
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 06-01-PLAN.md — WXT scaffold, shared types/storage, service worker with alarm polling
+- [ ] 06-02-PLAN.md — Content script with typed message handling, SPA re-init, Chrome load verification
 **UI hint**: yes
 
 ### Phase 7: DOM Automation Layer
@@ -94,6 +97,6 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 3. CLI as API Client | v1.0 | 1/1 | Complete | 2026-03-25 |
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
-| 6. Extension Architecture Foundation | v1.1 | 0/TBD | Not started | - |
+| 6. Extension Architecture Foundation | v1.1 | 0/2 | Not started | - |
 | 7. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
 | 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
