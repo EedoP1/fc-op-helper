@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.server.db import create_engine_and_tables
 from src.server.scanner import ScannerService
@@ -80,6 +81,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OP Seller", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"chrome-extension://.*",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+)
 app.include_router(players_router)
 app.include_router(health_router)
 app.include_router(portfolio_router)
