@@ -18,8 +18,8 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 
 ### Extension Architecture
 
-- [ ] **ARCH-01**: Chrome extension built with Manifest V3, service worker handles all backend communication
-- [ ] **ARCH-02**: Service worker uses chrome.alarms for polling and chrome.storage.local for state (survives worker termination)
+- [x] **ARCH-01**: Chrome extension built with Manifest V3, service worker handles all backend communication
+- [x] **ARCH-02**: Service worker uses chrome.alarms for polling and chrome.storage.local for state (survives worker termination)
 - [ ] **ARCH-03**: Typed message protocol between service worker and content script (discriminated unions)
 - [ ] **ARCH-04**: Content script uses MutationObserver for SPA navigation detection and listener re-initialization
 
@@ -85,8 +85,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BACK-04 | Phase 5 | Complete |
 | BACK-05 | Phase 5 | Complete |
 | BACK-06 | Phase 5 | Complete |
-| ARCH-01 | Phase 6 | Pending |
-| ARCH-02 | Phase 6 | Pending |
+| ARCH-01 | Phase 6 | Complete |
+| ARCH-02 | Phase 6 | Complete |
 | ARCH-03 | Phase 6 | Pending |
 | ARCH-04 | Phase 6 | Pending |
 | AUTO-01 | Phase 7 | Pending |
