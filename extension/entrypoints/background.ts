@@ -57,6 +57,9 @@ export default defineBackground({
             sendResponse({ type: 'PORTFOLIO_LOAD_RESULT', portfolio } satisfies ExtensionMessage)
           );
           return true;
+        case 'TRADE_REPORT':
+          handleTradeReport(msg.ea_id, msg.price, msg.outcome).then(sendResponse);
+          return true; // async response
         default:
           // PING/PONG and other types not handled here — content script handles those
           return false;
@@ -181,6 +184,35 @@ async function handlePortfolioSwap(
     };
   } catch (e) {
     return { type: 'PORTFOLIO_SWAP_RESULT', replacements: [], error: String(e) };
+  }
+}
+
+/**
+ * Report a trade outcome to the backend via POST /trade-records/direct.
+ * Called by the content script trade observer when it detects a portfolio player
+ * on the Transfer List with a known outcome.
+ *
+ * Uses the direct endpoint (not /actions/{id}/complete) because the observer
+ * may detect outcomes before any TradeAction exists (bootstrap scenario per D-09).
+ */
+async function handleTradeReport(
+  ea_id: number,
+  price: number,
+  outcome: string,
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/trade-records/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ea_id, price, outcome }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => `${res.status}`);
+      return { type: 'TRADE_REPORT_RESULT', success: false, error: `Backend error: ${detail}` };
+    }
+    return { type: 'TRADE_REPORT_RESULT', success: true };
+  } catch (e) {
+    return { type: 'TRADE_REPORT_RESULT', success: false, error: String(e) };
   }
 }
 

@@ -306,3 +306,105 @@ describe('portfolio message handlers', () => {
     );
   });
 });
+
+// ── Trade report handler tests ─────────────────────────────────────────────
+
+describe('trade report handler', () => {
+  beforeEach(async () => {
+    fakeBrowser.reset();
+    vi.restoreAllMocks();
+    await enabledItem.setValue(false);
+    await lastActionItem.setValue(null);
+    await portfolioItem.setValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('TRADE_REPORT handler calls POST /trade-records/direct with correct body and returns TRADE_REPORT_RESULT success=true', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok', trade_record_id: 42 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+    expect(portfolioListener).toBeDefined();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener(
+      { type: 'TRADE_REPORT', ea_id: 12345, price: 15000, outcome: 'sold' },
+      {},
+      sendResponse,
+    );
+
+    // Handler must return true for async response
+    expect(returnVal).toBe(true);
+
+    // Allow the async promise to resolve
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/trade-records/direct',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ ea_id: 12345, price: 15000, outcome: 'sold' }),
+      }),
+    );
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'TRADE_REPORT_RESULT', success: true }),
+    );
+  });
+
+  it('TRADE_REPORT handler returns TRADE_REPORT_RESULT success=false when backend returns error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () => 'ea_id 99999 not in portfolio',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    portfolioListener(
+      { type: 'TRADE_REPORT', ea_id: 99999, price: 5000, outcome: 'expired' },
+      {},
+      sendResponse,
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'TRADE_REPORT_RESULT',
+        success: false,
+        error: expect.stringContaining('Backend error'),
+      }),
+    );
+  });
+
+  it('TRADE_REPORT handler returns TRADE_REPORT_RESULT success=false on network error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network failure')));
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    portfolioListener(
+      { type: 'TRADE_REPORT', ea_id: 12345, price: 15000, outcome: 'listed' },
+      {},
+      sendResponse,
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'TRADE_REPORT_RESULT',
+        success: false,
+        error: expect.stringContaining('Network failure'),
+      }),
+    );
+  });
+});
