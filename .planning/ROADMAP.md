@@ -23,7 +23,7 @@
 
 - [ ] **Phase 5: Backend Infrastructure** - New DB tables and API endpoints for action queue, trade tracking, and profit summary
 - [x] **Phase 6: Extension Architecture Foundation** - WXT scaffold, MV3 service worker with chrome.alarms polling, typed message protocol (completed 2026-03-26)
-- [ ] **Phase 7: Portfolio Management** - Portfolio generation endpoint, overlay panel showing portfolio, player swap UI
+- [x] **Phase 7: Portfolio Management** - Portfolio generation endpoint, overlay panel showing portfolio, player swap UI (completed 2026-03-27)
 - [ ] **Phase 8: DOM Automation Layer** - Buy/list/relist automation with price guard, human-paced delays, CAPTCHA detection, start/stop controls, status display
 
 ## Phase Details
@@ -70,9 +70,9 @@ Plans:
   4. Portfolio persists across browser sessions — reopening the EA Web App shows the same portfolio until the user regenerates
 **Plans**: 3 plans
 Plans:
-- [ ] 07-01-PLAN.md — Backend endpoints: POST /generate, POST /confirm, POST /swap-preview, GET /confirmed + tests
+- [x] 07-01-PLAN.md — Backend endpoints: POST /generate, POST /confirm, POST /swap-preview, GET /confirmed + tests
 - [x] 07-02-PLAN.md — Extension message types, storage types, service worker portfolio proxy handlers + tests
-- [ ] 07-03-PLAN.md — Overlay panel DOM injection, three-state UI, content script integration + visual verification
+- [x] 07-03-PLAN.md — Overlay panel DOM injection, three-state UI, content script integration + visual verification
 **UI hint**: yes
 
 ### Phase 8: DOM Automation Layer
@@ -103,5 +103,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
-| 7. Portfolio Management | v1.1 | 1/3 | In Progress|  |
+| 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
