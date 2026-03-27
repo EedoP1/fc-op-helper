@@ -100,18 +100,23 @@ export default defineContentScript({
       const items = readTransferList(document);
       if (items.length === 0) return;
 
-      // Build name -> ea_id lookup from portfolio
-      const nameToPlayer = new Map<string, { ea_id: number }>();
-      for (const p of portfolio.players) {
-        nameToPlayer.set(p.name.toLowerCase(), { ea_id: p.ea_id });
-      }
+      // Match DOM items to portfolio using composite key:
+      // name (endsWith) + rating + position + price
+      // DOM shows short names ("Lo Celso") while portfolio has full names ("Giovani Lo Celso"),
+      // so we use endsWith for name matching and rating+position to disambiguate.
 
       // Load dedup set
       const reported = new Set(await reportedOutcomesItem.getValue());
 
       for (const item of items) {
-        const player = nameToPlayer.get(item.playerName.toLowerCase());
-        if (!player) continue; // Not a portfolio player (D-03)
+        const domName = item.playerName.toLowerCase();
+        const match = portfolio.players.find(p =>
+          p.name.toLowerCase().endsWith(domName) &&
+          p.rating === item.rating &&
+          p.position === item.position,
+        );
+        if (!match) continue; // Not a portfolio player (D-03)
+        const player = { ea_id: match.ea_id };
 
         const dedupKey = `${player.ea_id}:${item.status}:${item.price}`;
         if (reported.has(dedupKey)) continue; // Already reported (D-07)

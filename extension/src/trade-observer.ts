@@ -16,6 +16,8 @@ import {
   ITEM_STATUS_LABEL,
   ITEM_PLAYER_NAME,
   ITEM_BIN_PRICE,
+  ITEM_RATING,
+  ITEM_POSITION,
 } from './selectors';
 
 /**
@@ -24,6 +26,8 @@ import {
  */
 export type DetectedItem = {
   playerName: string;
+  rating: number;
+  position: string;
   status: 'listed' | 'sold' | 'expired' | 'bought';
   price: number;
 };
@@ -80,6 +84,8 @@ export function readTransferList(root: Document | Element = document): DetectedI
     const nameEl = item.querySelector(ITEM_PLAYER_NAME);
     const statusEl = item.querySelector(ITEM_STATUS_LABEL);
     const priceEl = item.querySelector(ITEM_BIN_PRICE);
+    const ratingEl = item.querySelector(ITEM_RATING);
+    const positionEl = item.querySelector(ITEM_POSITION);
 
     if (!nameEl || !statusEl) continue; // skip malformed items
 
@@ -96,8 +102,10 @@ export function readTransferList(root: Document | Element = document): DetectedI
 
     const playerName = (nameEl.textContent ?? '').trim();
     const price = priceEl ? parsePrice(priceEl.textContent ?? '0') : 0;
+    const rating = ratingEl ? parseInt(ratingEl.textContent ?? '0', 10) || 0 : 0;
+    const position = (positionEl?.textContent ?? '').trim();
 
-    result.push({ playerName, status, price });
+    result.push({ playerName, rating, position, status, price });
   }
 
   return result;
