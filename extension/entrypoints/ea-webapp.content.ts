@@ -202,9 +202,12 @@ export default defineContentScript({
       const container = document.querySelector(TRANSFER_LIST_CONTAINER);
       if (!container) return;
 
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
       tradeObserver = new MutationObserver(() => {
-        // Re-scan on mutations (new items, status changes)
-        scanTransferList();
+        // Debounce re-scans — DOM mutations fire rapidly (item renders, status updates).
+        // Wait 500ms of quiet before re-scanning to avoid duplicate reports.
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => scanTransferList(), 500);
       });
 
       // Observe subtree for child and character data changes (item status updates)
