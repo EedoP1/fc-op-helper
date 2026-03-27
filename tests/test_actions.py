@@ -343,3 +343,164 @@ async def test_seed_portfolio_slots_empty(app):
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 0
+
+
+# ── Tests for POST /trade-records/direct ─────────────────────────────────────
+
+async def test_direct_trade_record_returns_201(app_with_slot):
+    """POST /api/v1/trade-records/direct with valid ea_id returns 201 with trade_record_id."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 50000, "outcome": "bought"},
+        )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "trade_record_id" in body
+    assert isinstance(body["trade_record_id"], int)
+
+
+async def test_direct_trade_record_unknown_ea_id_returns_404(app):
+    """POST /api/v1/trade-records/direct with unknown ea_id returns 404."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 9999, "price": 50000, "outcome": "bought"},
+        )
+
+    assert resp.status_code == 404
+
+
+async def test_direct_trade_record_inserts_row(app_with_slot):
+    """POST /api/v1/trade-records/direct inserts a TradeRecord row with correct fields."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 55000, "outcome": "bought"},
+        )
+
+    assert resp.status_code == 201
+    record_id = resp.json()["trade_record_id"]
+
+    async with session_factory() as session:
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(TradeRecord).where(TradeRecord.id == record_id)
+        )
+        record = result.scalar_one()
+        assert record.ea_id == 100
+        assert record.price == 55000
+        assert record.outcome == "bought"
+        assert record.action_type == "buy"
+        assert record.recorded_at is not None
+
+
+async def test_direct_trade_record_outcome_listed_maps_to_list(app_with_slot):
+    """POST /trade-records/direct with outcome 'listed' sets action_type to 'list'."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 70000, "outcome": "listed"},
+        )
+
+    assert resp.status_code == 201
+    record_id = resp.json()["trade_record_id"]
+
+    async with session_factory() as session:
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(TradeRecord).where(TradeRecord.id == record_id)
+        )
+        record = result.scalar_one()
+        assert record.action_type == "list"
+        assert record.outcome == "listed"
+
+
+async def test_direct_trade_record_outcome_sold_maps_to_list(app_with_slot):
+    """POST /trade-records/direct with outcome 'sold' sets action_type to 'list'."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 70000, "outcome": "sold"},
+        )
+
+    assert resp.status_code == 201
+    record_id = resp.json()["trade_record_id"]
+
+    async with session_factory() as session:
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(TradeRecord).where(TradeRecord.id == record_id)
+        )
+        record = result.scalar_one()
+        assert record.action_type == "list"
+        assert record.outcome == "sold"
+
+
+async def test_direct_trade_record_outcome_expired_maps_to_list(app_with_slot):
+    """POST /trade-records/direct with outcome 'expired' sets action_type to 'list'."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 70000, "outcome": "expired"},
+        )
+
+    assert resp.status_code == 201
+    record_id = resp.json()["trade_record_id"]
+
+    async with session_factory() as session:
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(TradeRecord).where(TradeRecord.id == record_id)
+        )
+        record = result.scalar_one()
+        assert record.action_type == "list"
+        assert record.outcome == "expired"
+
+
+async def test_direct_trade_record_outcome_bought_maps_to_buy(app_with_slot):
+    """POST /trade-records/direct with outcome 'bought' sets action_type to 'buy'."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 50000, "outcome": "bought"},
+        )
+
+    assert resp.status_code == 201
+    record_id = resp.json()["trade_record_id"]
+
+    async with session_factory() as session:
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(TradeRecord).where(TradeRecord.id == record_id)
+        )
+        record = result.scalar_one()
+        assert record.action_type == "buy"
+        assert record.outcome == "bought"
+
+
+async def test_direct_trade_record_invalid_outcome_returns_400(app_with_slot):
+    """POST /trade-records/direct with invalid outcome returns 400."""
+    app, session_factory = app_with_slot
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/trade-records/direct",
+            json={"ea_id": 100, "price": 50000, "outcome": "invalid_outcome"},
+        )
+
+    assert resp.status_code == 400
