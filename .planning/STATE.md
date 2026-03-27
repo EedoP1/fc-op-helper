@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed 07.1-02-PLAN.md
-last_updated: "2026-03-27T10:24:28.860Z"
+stopped_at: Completed 07.1-03-PLAN.md
+last_updated: "2026-03-27T10:45:02.918Z"
 last_activity: 2026-03-27
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 07.1 (trade-reporting) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Plan: 2 of 3
 | Phase 07-portfolio-management P03 | 20 | 1 tasks | 3 files |
 | Phase 07.1-trade-reporting P01 | 5 | 1 tasks | 1 files |
 | Phase 07.1-trade-reporting P02 | 2 | 1 tasks | 2 files |
+| Phase 07.1-trade-reporting P03 | 10 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Plan: 2 of 3
 - [Phase 07-portfolio-management]: PORTFOLIO_LOAD guarded by ctx.isInvalid check to preserve existing test contract (no sendMessage when ctx invalid)
 - [Phase 07.1-trade-reporting]: outcome-to-action_type mapping is static: bought->buy, listed/sold/expired->list — sold and expired both follow a list action
 - [Phase 07.1-trade-reporting]: direct trade record endpoint validates ea_id in portfolio_slots before insert — only portfolio players tracked (D-03)
+- [Phase 07.1-trade-reporting]: readTransferList() accepts Document|Element root parameter — enables unit testing with jsdom fixtures without patching globals
+- [Phase 07.1-trade-reporting]: isTimeRemaining() helper detects EA time strings (55 Minutes, 1 Hour) as active listings — EA FC26 does not use a simple Active keyword
+- [Phase 07.1-trade-reporting]: Composite dedup key {ea_id}:{outcome}:{price} in reportedOutcomesItem — uniquely identifies trade events without a backend round-trip
 
 ### Roadmap Evolution
 
@@ -116,5 +120,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-27
-Stopped at: Completed 07.1-02-PLAN.md
+Stopped at: Completed 07.1-03-PLAN.md
 Resume file: None
