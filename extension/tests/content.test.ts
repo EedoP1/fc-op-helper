@@ -214,4 +214,47 @@ describe('content script message handling', () => {
     expect(returnValue).toBe(false);
     expect(sendResponse).not.toHaveBeenCalled();
   });
+
+  it('returns false for TRADE_REPORT request type (sent to service worker)', async () => {
+    // TRADE_REPORT is a request type sent TO the service worker.
+    // Content script switch handles it with return false — no error thrown.
+    const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
+    const mod = await import('../entrypoints/ea-webapp.content');
+    const ctx = createMockCtx();
+    mod.default.main(ctx as any);
+
+    const registeredHandler = addListenerSpy.mock.calls[0]?.[0];
+    expect(registeredHandler).toBeDefined();
+
+    const sendResponse = vi.fn();
+    const returnValue = registeredHandler(
+      { type: 'TRADE_REPORT', ea_id: 12345, price: 15000, outcome: 'sold' },
+      {} as chrome.runtime.MessageSender,
+      sendResponse,
+    );
+
+    expect(returnValue).toBe(false);
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
+
+  it('returns false for TRADE_REPORT_RESULT response type', async () => {
+    // TRADE_REPORT_RESULT is a response type from service worker — not dispatched via onMessage.
+    const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
+    const mod = await import('../entrypoints/ea-webapp.content');
+    const ctx = createMockCtx();
+    mod.default.main(ctx as any);
+
+    const registeredHandler = addListenerSpy.mock.calls[0]?.[0];
+    const sendResponse = vi.fn();
+    const returnValue = registeredHandler(
+      { type: 'TRADE_REPORT_RESULT', success: true },
+      {} as chrome.runtime.MessageSender,
+      sendResponse,
+    );
+
+    expect(returnValue).toBe(false);
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
 });

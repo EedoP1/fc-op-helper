@@ -15,6 +15,9 @@
  */
 import { ExtensionMessage, assertNever } from '../src/messages';
 import { createOverlayPanel } from '../src/overlay/panel';
+import { readTransferList, isTransferListPage } from '../src/trade-observer';
+import { portfolioItem, reportedOutcomesItem } from '../src/storage';
+import { TRANSFER_LIST_CONTAINER } from '../src/selectors';
 
 export default defineContentScript({
   matches: ['https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*'],
@@ -81,6 +84,100 @@ export default defineContentScript({
     // Clean up on content script invalidation
     ctx.onInvalidated(() => panel.destroy());
 
+    // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────
+    let tradeObserver: MutationObserver | null = null;
+
+    /**
+     * Scan the Transfer List DOM for portfolio player outcomes.
+     * Matches detected items against the confirmed portfolio by player name (D-03).
+     * Reports new outcomes to the service worker for backend relay (D-06).
+     * Deduplicates using reportedOutcomesItem (D-07).
+     */
+    async function scanTransferList() {
+      const portfolio = await portfolioItem.getValue();
+      if (!portfolio || portfolio.players.length === 0) return;
+
+      const items = readTransferList(document);
+      if (items.length === 0) return;
+
+      // Build name -> ea_id lookup from portfolio
+      const nameToPlayer = new Map<string, { ea_id: number }>();
+      for (const p of portfolio.players) {
+        nameToPlayer.set(p.name.toLowerCase(), { ea_id: p.ea_id });
+      }
+
+      // Load dedup set
+      const reported = new Set(await reportedOutcomesItem.getValue());
+
+      for (const item of items) {
+        const player = nameToPlayer.get(item.playerName.toLowerCase());
+        if (!player) continue; // Not a portfolio player (D-03)
+
+        const dedupKey = `${player.ea_id}:${item.status}:${item.price}`;
+        if (reported.has(dedupKey)) continue; // Already reported (D-07)
+
+        // Report to service worker (D-06: silent auto-report)
+        try {
+          const response = await chrome.runtime.sendMessage({
+            type: 'TRADE_REPORT',
+            ea_id: player.ea_id,
+            price: item.price,
+            outcome: item.status,
+          } satisfies ExtensionMessage);
+
+          if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
+            reported.add(dedupKey);
+            console.log(`[OP Seller CS] Reported ${item.status} for ${item.playerName} (${player.ea_id})`);
+          }
+        } catch (e) {
+          console.error(`[OP Seller CS] Failed to report trade for ${item.playerName}:`, e);
+        }
+      }
+
+      // Persist updated dedup set
+      await reportedOutcomesItem.setValue([...reported]);
+    }
+
+    /**
+     * Activate the trade observer if the user is on the Transfer List page.
+     * Sets up a MutationObserver on the transfer list container to re-scan
+     * when items change (new cards appear, status changes).
+     * Per D-01: passive scan only when user is already on this page.
+     */
+    function maybeStartTradeObserver() {
+      // Clean up previous observer if any
+      if (tradeObserver) {
+        tradeObserver.disconnect();
+        tradeObserver = null;
+      }
+
+      if (!isTransferListPage(document)) return;
+
+      // Initial scan (D-09: bootstrap — detect current state)
+      scanTransferList();
+
+      // Observe the transfer list container for new/changed items
+      const container = document.querySelector(TRANSFER_LIST_CONTAINER);
+      if (!container) return;
+
+      tradeObserver = new MutationObserver(() => {
+        // Re-scan on mutations (new items, status changes)
+        scanTransferList();
+      });
+
+      // Observe subtree for child and character data changes (item status updates)
+      tradeObserver.observe(container, { childList: true, subtree: true, characterData: true });
+      console.log('[OP Seller CS] Trade observer activated on Transfer List');
+    }
+
+    // Clean up trade observer on invalidation
+    ctx.onInvalidated(() => {
+      if (tradeObserver) {
+        tradeObserver.disconnect();
+        tradeObserver = null;
+      }
+    });
+
     // Primary SPA detection: WXT locationchange fires on History API navigation (D-04/D-08)
     ctx.addEventListener(window, 'wxt:locationchange', () => {
       teardownListeners();
@@ -91,6 +188,8 @@ export default defineContentScript({
         document.body.appendChild(panel.container);
         document.body.appendChild(panel.toggle);
       }
+      // Check if we're now on the Transfer List page (Phase 07.1)
+      maybeStartTradeObserver();
     });
 
     // D-08 Fallback: MutationObserver on document.body for EA SPA container replacement
@@ -138,5 +237,8 @@ export default defineContentScript({
           // Service worker not ready — panel stays in EMPTY state
         });
     }
+
+    // Initial trade observer check (user may have loaded directly on Transfer List page)
+    maybeStartTradeObserver();
   },
 });
