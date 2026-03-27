@@ -51,6 +51,10 @@ function createMockCtx(overrides: { isInvalid?: boolean } = {}) {
       state.timeoutCalls.push({ fn, delay });
       // Do NOT auto-execute — tests verify timeout was scheduled
     },
+    setInterval(fn: () => void, _delay: number) {
+      // Return a fake interval ID — tests don't need real polling
+      return 0 as unknown as ReturnType<typeof setInterval>;
+    },
     _state: state,
     _invalidate() {
       state.isInvalid = true;
