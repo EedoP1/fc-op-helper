@@ -75,15 +75,25 @@ Plans:
 - [x] 07-03-PLAN.md — Overlay panel DOM injection, three-state UI, content script integration + visual verification
 **UI hint**: yes
 
-### Phase 07.1: Portfolio Dashboard & Trade Tracking (INSERTED)
+### Phase 07.1: Trade Reporting (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Extension passively reads EA Web App DOM (transfer list, trade pile) to detect and auto-report trade outcomes (bought/listed/sold/expired) for portfolio players. Includes DOM exploration to map selectors. Observation only — no automated clicking.
+**Requirements**: AUTO-08 (centralized selectors — shared with Phase 8)
 **Depends on:** Phase 7
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 07.1 to break down)
+
+### Phase 07.2: Portfolio Dashboard & Trade Tracking (INSERTED)
+
+**Goal:** Dashboard tab in extension overlay showing per-player trade status, cumulative stats (times sold, total profit), realized + unrealized P&L, and trade counts. Backend provides dedicated status endpoint.
+**Requirements**: TBD
+**Depends on:** Phase 07.1
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 07.2 to break down)
 
 ### Phase 8: DOM Automation Layer
 **Goal**: Extension autonomously executes the full buy/list/relist cycle on the EA Web App with price guard, human-paced timing, CAPTCHA detection, and user controls for start/stop and status
@@ -103,7 +113,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 5 → 6 → 7 → 8
+Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|

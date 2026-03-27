@@ -87,7 +87,8 @@ Plan: Not started
 
 ### Roadmap Evolution
 
-- Phase 07.1 inserted after Phase 07: Portfolio Dashboard & Trade Tracking (user request — manual visibility before automation)
+- Phase 07.1 inserted after Phase 07: Trade Reporting — extension passively reads EA Web App DOM to detect and auto-report trade outcomes (user request — data pipeline for dashboard)
+- Phase 07.2 inserted after Phase 07.1: Portfolio Dashboard & Trade Tracking — dashboard UI consuming trade data from 07.1 (split from original 07.1 — DOM reading and dashboard UI are different work)
 
 ### Pending Todos
 
