@@ -92,10 +92,10 @@ Plans:
 **Goal:** Dashboard tab in extension overlay showing per-player trade status, cumulative stats (times sold, total profit), realized + unrealized P&L, and trade counts. Backend provides dedicated status endpoint.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13
 **Depends on:** Phase 07.1
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 07.2-01-PLAN.md — Backend GET /portfolio/status endpoint with per-player status, cumulative stats, unrealized P&L + tests
+- [x] 07.2-01-PLAN.md — Backend GET /portfolio/status endpoint with per-player status, cumulative stats, unrealized P&L + tests
 - [ ] 07.2-02-PLAN.md — Extension message types, service worker handler, tab bar, dashboard panel rendering + tests + visual verification
 
 ### Phase 8: DOM Automation Layer
@@ -128,5 +128,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
 | 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
 | 07.1 Trade Reporting | v1.1 | 3/3 | Complete    | 2026-03-27 |
-| 07.2 Portfolio Dashboard | v1.1 | 0/2 | In Progress | - |
+| 07.2 Portfolio Dashboard | v1.1 | 1/2 | In Progress|  |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
