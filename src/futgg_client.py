@@ -124,6 +124,7 @@ class FutGGClient:
             sales=self._parse_sales(ea_id, prices),
             live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
             live_auctions_raw=raw_auctions,  # preserve all fields for fingerprinting (D-04)
+            futgg_url=defn.get("url"),
         )
 
     async def get_batch_market_data(

@@ -24,6 +24,7 @@ class PlayerRecord(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     listing_count: Mapped[int] = mapped_column(Integer, default=0)
     sales_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
+    futgg_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class PlayerScore(Base):

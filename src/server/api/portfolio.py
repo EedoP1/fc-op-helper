@@ -89,6 +89,7 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "scan_tier": record.scan_tier,
         "last_scanned_at": record.last_scanned_at,
         "expected_profit_per_hour": score.expected_profit_per_hour,
+        "futgg_url": record.futgg_url,
     }
 
 
@@ -184,6 +185,7 @@ async def get_portfolio(
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
             "expected_profit_per_hour": round(epph, 2) if epph else None,
+            "futgg_url": entry.get("futgg_url"),
         })
 
     return {
@@ -279,6 +281,7 @@ async def generate_portfolio(
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
             "expected_profit_per_hour": round(epph, 2) if epph else None,
+            "futgg_url": entry.get("futgg_url"),
         })
 
     return {
@@ -395,6 +398,7 @@ async def swap_preview(
             "op_ratio": round(entry["op_ratio"], 3),
             "expected_profit": round(entry["expected_profit"], 1),
             "efficiency": round(entry["efficiency"], 4),
+            "futgg_url": entry.get("futgg_url"),
         }
         for entry in replacements_raw
     ]
@@ -432,6 +436,7 @@ async def get_confirmed_portfolio(request: Request):
             "position": record.position,
             "buy_price": slot.buy_price,
             "sell_price": slot.sell_price,
+            "futgg_url": record.futgg_url,
         }
         for slot, record in rows
     ]

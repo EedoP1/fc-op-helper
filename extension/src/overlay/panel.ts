@@ -339,7 +339,9 @@ export function createOverlayPanel(): OverlayPanel {
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
         const nameLink = document.createElement('a');
-        nameLink.href = `https://www.fut.gg/players/26/${player.ea_id}/`;
+        nameLink.href = player.futgg_url
+          ? `https://www.fut.gg${player.futgg_url}`
+          : `https://www.fut.gg/players/?search=${encodeURIComponent(player.name)}`;
         nameLink.target = '_blank';
         nameLink.rel = 'noopener';
         nameLink.textContent = player.name;
@@ -498,7 +500,9 @@ export function createOverlayPanel(): OverlayPanel {
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
         const nameLink = document.createElement('a');
-        nameLink.href = `https://www.fut.gg/players/26/${player.ea_id}/`;
+        nameLink.href = player.futgg_url
+          ? `https://www.fut.gg${player.futgg_url}`
+          : `https://www.fut.gg/players/?search=${encodeURIComponent(player.name)}`;
         nameLink.target = '_blank';
         nameLink.rel = 'noopener';
         nameLink.textContent = player.name;

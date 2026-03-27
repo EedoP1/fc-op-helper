@@ -49,3 +49,4 @@ class PlayerMarketData(BaseModel):
     sales: list[SaleRecord]
     live_auction_prices: list[int] = []
     live_auctions_raw: list[dict] = []  # Full liveAuctions entries with all fields preserved
+    futgg_url: Optional[str] = None
