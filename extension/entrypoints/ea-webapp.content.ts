@@ -61,6 +61,12 @@ export default defineContentScript({
         case 'TRADE_REPORT_RESULT':
           // Response type — received as sendMessage return value, not via onMessage.
           return false;
+        case 'DASHBOARD_STATUS_REQUEST':
+          // Request type sent TO the service worker — content script should not receive it via onMessage.
+          return false;
+        case 'DASHBOARD_STATUS_RESULT':
+          // Response type — received as sendMessage return value, not via onMessage.
+          return false;
         default:
           assertNever(msg);
       }

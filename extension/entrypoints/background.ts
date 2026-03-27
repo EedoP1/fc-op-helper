@@ -58,6 +58,9 @@ export default defineBackground({
         case 'TRADE_REPORT':
           handleTradeReport(msg.ea_id, msg.price, msg.outcome).then(sendResponse);
           return true; // async response
+        case 'DASHBOARD_STATUS_REQUEST':
+          handleDashboardStatus().then(sendResponse);
+          return true; // async response
         default:
           // PING/PONG and other types not handled here — content script handles those
           return false;
@@ -250,6 +253,25 @@ async function handleTradeReport(
     return { type: 'TRADE_REPORT_RESULT', success: true };
   } catch (e) {
     return { type: 'TRADE_REPORT_RESULT', success: false, error: String(e) };
+  }
+}
+
+/**
+ * Fetch portfolio status from backend for the dashboard panel.
+ * Returns per-player trade status, cumulative stats, and profit summary.
+ * GET /api/v1/portfolio/status → DASHBOARD_STATUS_RESULT
+ */
+async function handleDashboardStatus(): Promise<ExtensionMessage> {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/v1/portfolio/status`);
+    if (!resp.ok) {
+      return { type: 'DASHBOARD_STATUS_RESULT', data: null, error: `Backend returned ${resp.status}` };
+    }
+    const data = await resp.json();
+    return { type: 'DASHBOARD_STATUS_RESULT', data, error: undefined };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return { type: 'DASHBOARD_STATUS_RESULT', data: null, error: message };
   }
 }
 
