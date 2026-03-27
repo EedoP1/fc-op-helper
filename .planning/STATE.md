@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to plan
-stopped_at: Completed 07.1-03-PLAN.md
-last_updated: "2026-03-27T10:51:42.938Z"
+status: Ready to execute
+stopped_at: Completed 07.2-01-PLAN.md
+last_updated: "2026-03-27T13:14:30.767Z"
 last_activity: 2026-03-27
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 13
+  completed_plans: 12
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 07.1 — trade-reporting
+**Current focus:** Phase 07.2 — portfolio-dashboard-trade-tracking
 
 ## Current Position
 
-Phase: 07.2
-Plan: Not started
+Phase: 07.2 (portfolio-dashboard-trade-tracking) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Plan: Not started
 | Phase 07.1-trade-reporting P01 | 5 | 1 tasks | 1 files |
 | Phase 07.1-trade-reporting P02 | 2 | 1 tasks | 2 files |
 | Phase 07.1-trade-reporting P03 | 10 | 2 tasks | 8 files |
+| Phase 07.2-portfolio-dashboard-trade-tracking P01 | 206 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,8 @@ Plan: Not started
 - [Phase 07.1-trade-reporting]: readTransferList() accepts Document|Element root parameter — enables unit testing with jsdom fixtures without patching globals
 - [Phase 07.1-trade-reporting]: isTimeRemaining() helper detects EA time strings (55 Minutes, 1 Hour) as active listings — EA FC26 does not use a simple Active keyword
 - [Phase 07.1-trade-reporting]: Composite dedup key {ea_id}:{outcome}:{price} in reportedOutcomesItem — uniquely identifies trade events without a backend round-trip
+- [Phase 07.2-portfolio-dashboard-trade-tracking]: Realized profit uses times_sold * slot.buy_price as cost basis — open positions show 0, not negative
+- [Phase 07.2-portfolio-dashboard-trade-tracking]: Unrealized P&L null for PENDING/SOLD/EXPIRED statuses — only BOUGHT/LISTED are held positions
 
 ### Roadmap Evolution
 
@@ -120,5 +123,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-27
-Stopped at: Completed 07.1-03-PLAN.md
+Stopped at: Completed 07.2-01-PLAN.md
 Resume file: None
