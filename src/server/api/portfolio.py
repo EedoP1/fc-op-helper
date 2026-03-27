@@ -2,12 +2,14 @@
 
 Given a budget, returns the best set of players to OP sell,
 using stored scores and the existing optimize_portfolio() engine.
-Also provides DELETE endpoint to swap a player out of the portfolio.
+Also provides DELETE endpoint to swap a player out of the portfolio,
+POST endpoints for two-step generate/confirm flow, and GET confirmed.
 """
 import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query, Request, Path, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, delete
 
 from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction
@@ -17,6 +19,35 @@ from src.optimizer import optimize_portfolio
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
+
+
+# ── Request models ─────────────────────────────────────────────────────────────
+
+class GenerateRequest(BaseModel):
+    """Request body for POST /portfolio/generate."""
+
+    budget: int = Field(..., gt=0, description="Total budget in coins")
+
+
+class ConfirmPlayer(BaseModel):
+    """A single player entry in a confirm request."""
+
+    ea_id: int
+    buy_price: int
+    sell_price: int
+
+
+class ConfirmRequest(BaseModel):
+    """Request body for POST /portfolio/confirm."""
+
+    players: list[ConfirmPlayer]
+
+
+class SwapPreviewRequest(BaseModel):
+    """Request body for POST /portfolio/swap-preview."""
+
+    freed_budget: int = Field(..., gt=0, description="Budget freed by removing a player")
+    excluded_ea_ids: list[int]
 
 
 class _PlayerProxy:
@@ -157,6 +188,250 @@ async def get_portfolio(
         "budget_used": budget_used,
         "budget_remaining": budget - budget_used,
     }
+
+
+@router.post("/portfolio/generate")
+async def generate_portfolio(
+    request: Request,
+    body: GenerateRequest,
+):
+    """Return an optimized portfolio preview without persisting any DB rows.
+
+    Runs the same optimizer logic as GET /portfolio but accepts a JSON body
+    instead of a query parameter and never writes PortfolioSlot rows.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+        body: GenerateRequest with budget field.
+
+    Returns:
+        Dict with keys: data (list), count, budget, budget_used, budget_remaining.
+        On no viable players: includes an error key and empty data.
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        # Subquery: latest scored_at per player for viable scores only
+        latest_subq = (
+            select(
+                PlayerScore.ea_id,
+                func.max(PlayerScore.scored_at).label("max_scored_at"),
+            )
+            .where(PlayerScore.is_viable == True)  # noqa: E712
+            .group_by(PlayerScore.ea_id)
+            .subquery()
+        )
+
+        stmt = (
+            select(PlayerScore, PlayerRecord)
+            .join(
+                latest_subq,
+                (PlayerScore.ea_id == latest_subq.c.ea_id)
+                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
+            )
+            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
+            .where(PlayerRecord.is_active == True)  # noqa: E712
+        )
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    scored_list = [_build_scored_entry(score, record) for score, record in rows]
+
+    if not scored_list:
+        return {
+            "error": "Not enough listing data yet. The system needs to accumulate market observations before it can recommend players. This typically takes a few hours of scanning.",
+            "data": [],
+            "count": 0,
+            "budget": body.budget,
+            "budget_used": 0,
+            "budget_remaining": body.budget,
+        }
+
+    selected = optimize_portfolio(scored_list, body.budget)
+    budget_used = sum(entry["buy_price"] for entry in selected)
+
+    stale_cutoff = datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)
+    data = []
+    for entry in selected:
+        last_scanned_at = entry["last_scanned_at"]
+        is_stale = last_scanned_at is None or last_scanned_at < stale_cutoff
+        epph = entry.get("expected_profit_per_hour")
+        data.append({
+            "ea_id": entry["ea_id"],
+            "name": entry["name"],
+            "rating": entry["rating"],
+            "position": entry["position"],
+            "price": entry["buy_price"],
+            "sell_price": entry["sell_price"],
+            "margin_pct": entry["margin_pct"],
+            "op_sales": entry["op_sales"],
+            "total_sales": entry["total_sales"],
+            "op_ratio": round(entry["op_ratio"], 3),
+            "expected_profit": round(entry["expected_profit"], 1),
+            "efficiency": round(entry["efficiency"], 4),
+            "is_stale": is_stale,
+            "last_scanned": (
+                last_scanned_at.isoformat() if last_scanned_at else None
+            ),
+            "expected_profit_per_hour": round(epph, 2) if epph else None,
+        })
+
+    return {
+        "data": data,
+        "count": len(data),
+        "budget": body.budget,
+        "budget_used": budget_used,
+        "budget_remaining": body.budget - budget_used,
+    }
+
+
+@router.post("/portfolio/confirm")
+async def confirm_portfolio(
+    request: Request,
+    body: ConfirmRequest,
+):
+    """Seed portfolio_slots with a confirmed player list (clean slate per D-06).
+
+    Clears ALL existing PortfolioSlot rows then inserts new ones from the
+    provided list. Supports calling confirm twice: the second call replaces
+    the first entirely.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+        body: ConfirmRequest with list of players (ea_id, buy_price, sell_price).
+
+    Returns:
+        Dict with keys: confirmed (int), status ("ok").
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        # Clean slate: remove all existing slots before inserting new ones
+        await session.execute(delete(PortfolioSlot))
+
+        # Insert new slots
+        for p in body.players:
+            session.add(PortfolioSlot(
+                ea_id=p.ea_id,
+                buy_price=p.buy_price,
+                sell_price=p.sell_price,
+                added_at=datetime.utcnow(),
+            ))
+
+        await session.commit()
+
+    logger.info("Confirmed %d portfolio slots (clean slate)", len(body.players))
+
+    return {"confirmed": len(body.players), "status": "ok"}
+
+
+@router.post("/portfolio/swap-preview")
+async def swap_preview(
+    request: Request,
+    body: SwapPreviewRequest,
+):
+    """Return replacement candidates for a freed budget, excluding specified ea_ids.
+
+    Stateless — does not read or write PortfolioSlot rows. Used during the
+    draft phase (D-07/D-08) before a confirm has been made.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+        body: SwapPreviewRequest with freed_budget and excluded_ea_ids.
+
+    Returns:
+        Dict with keys: replacements (list), count (int).
+    """
+    excluded = set(body.excluded_ea_ids)
+
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        latest_subq = (
+            select(
+                PlayerScore.ea_id,
+                func.max(PlayerScore.scored_at).label("max_scored_at"),
+            )
+            .where(PlayerScore.is_viable == True)  # noqa: E712
+            .group_by(PlayerScore.ea_id)
+            .subquery()
+        )
+
+        stmt = (
+            select(PlayerScore, PlayerRecord)
+            .join(
+                latest_subq,
+                (PlayerScore.ea_id == latest_subq.c.ea_id)
+                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
+            )
+            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
+            .where(PlayerRecord.is_active == True)  # noqa: E712
+        )
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    # Filter out excluded ea_ids before running optimizer
+    candidates = [
+        _build_scored_entry(score, record)
+        for score, record in rows
+        if score.ea_id not in excluded
+    ]
+
+    replacements_raw = optimize_portfolio(candidates, body.freed_budget) if candidates else []
+
+    replacements = [
+        {
+            "ea_id": entry["ea_id"],
+            "name": entry["name"],
+            "rating": entry["rating"],
+            "position": entry["position"],
+            "price": entry["buy_price"],
+            "sell_price": entry["sell_price"],
+            "margin_pct": entry["margin_pct"],
+            "op_ratio": round(entry["op_ratio"], 3),
+            "expected_profit": round(entry["expected_profit"], 1),
+            "efficiency": round(entry["efficiency"], 4),
+        }
+        for entry in replacements_raw
+    ]
+
+    return {"replacements": replacements, "count": len(replacements)}
+
+
+@router.get("/portfolio/confirmed")
+async def get_confirmed_portfolio(request: Request):
+    """Return current portfolio_slots joined with PlayerRecord metadata.
+
+    No optimizer run — purely reads the confirmed portfolio from DB.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+
+    Returns:
+        Dict with keys: data (list), count (int).
+        Each item has: ea_id, name, rating, position, buy_price, sell_price.
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        stmt = (
+            select(PortfolioSlot, PlayerRecord)
+            .join(PlayerRecord, PlayerRecord.ea_id == PortfolioSlot.ea_id)
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    data = [
+        {
+            "ea_id": slot.ea_id,
+            "name": record.name,
+            "rating": record.rating,
+            "position": record.position,
+            "buy_price": slot.buy_price,
+            "sell_price": slot.sell_price,
+        }
+        for slot, record in rows
+    ]
+
+    return {"data": data, "count": len(data)}
 
 
 @router.delete("/portfolio/{ea_id}")
