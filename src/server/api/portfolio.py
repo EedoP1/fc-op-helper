@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 
+def _read_session_factory(request: Request):
+    """Return the read-only session factory if available, else the default one."""
+    return getattr(request.app.state, "read_session_factory", None) or request.app.state.session_factory
+
+
 # ── Request models ─────────────────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -104,8 +109,8 @@ async def get_portfolio(
     Returns:
         Dict with keys: data (list), count, budget, budget_used, budget_remaining.
     """
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
+    sf = _read_session_factory(request)
+    async with sf() as session:
         # Subquery: latest scored_at per player for viable scores only
         latest_subq = (
             select(
@@ -208,8 +213,8 @@ async def generate_portfolio(
         Dict with keys: data (list), count, budget, budget_used, budget_remaining.
         On no viable players: includes an error key and empty data.
     """
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
+    sf = _read_session_factory(request)
+    async with sf() as session:
         # Subquery: latest scored_at per player for viable scores only
         latest_subq = (
             select(
@@ -343,8 +348,8 @@ async def swap_preview(
     """
     excluded = set(body.excluded_ea_ids)
 
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
+    sf = _read_session_factory(request)
+    async with sf() as session:
         latest_subq = (
             select(
                 PlayerScore.ea_id,
@@ -410,8 +415,8 @@ async def get_confirmed_portfolio(request: Request):
         Dict with keys: data (list), count (int).
         Each item has: ea_id, name, rating, position, buy_price, sell_price.
     """
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
+    sf = _read_session_factory(request)
+    async with sf() as session:
         stmt = (
             select(PortfolioSlot, PlayerRecord)
             .join(PlayerRecord, PlayerRecord.ea_id == PortfolioSlot.ea_id)

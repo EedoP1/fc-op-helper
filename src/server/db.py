@@ -43,6 +43,27 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+def create_read_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
+    """Create a read-only async engine for API queries.
+
+    Uses a separate connection so API reads don't block on scanner writes.
+    SQLite WAL mode allows concurrent readers, but aiosqlite serializes
+    all operations through a single connection per engine. A second engine
+    gives API queries their own connection.
+    """
+    engine = create_async_engine(db_url, echo=False)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_read_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA query_only=ON")
+        cursor.close()
+
+    return engine
+
+
 async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Create engine, enable WAL, create all ORM tables, return engine and session factory.
 
