@@ -122,20 +122,34 @@ export default defineContentScript({
         if (reported.has(dedupKey)) continue; // Already reported (D-07)
 
         // Report to service worker (D-06: silent auto-report)
-        try {
-          const response = await chrome.runtime.sendMessage({
-            type: 'TRADE_REPORT',
-            ea_id: player.ea_id,
-            price: item.price,
-            outcome: item.status,
-          } satisfies ExtensionMessage);
+        // Retry once on failure (service worker may still be waking up)
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const response = await chrome.runtime.sendMessage({
+              type: 'TRADE_REPORT',
+              ea_id: player.ea_id,
+              price: item.price,
+              outcome: item.status,
+            } satisfies ExtensionMessage);
 
-          if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
-            reported.add(dedupKey);
-            console.log(`[OP Seller CS] Reported ${item.status} for ${item.playerName} (${player.ea_id})`);
+            if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
+              reported.add(dedupKey);
+              console.log(`[OP Seller CS] Reported ${item.status} for ${item.playerName} (${player.ea_id})`);
+              break;
+            }
+            // Backend returned error (e.g. 404) — don't retry
+            if (response && response.type === 'TRADE_REPORT_RESULT' && !response.success) {
+              console.warn(`[OP Seller CS] Backend rejected ${item.playerName}: ${response.error}`);
+              break;
+            }
+          } catch (e) {
+            if (attempt === 0) {
+              // First failure — wait 1s for service worker to wake up, then retry
+              await new Promise(r => setTimeout(r, 1000));
+            } else {
+              console.error(`[OP Seller CS] Failed to report trade for ${item.playerName}:`, e);
+            }
           }
-        } catch (e) {
-          console.error(`[OP Seller CS] Failed to report trade for ${item.playerName}:`, e);
         }
       }
 

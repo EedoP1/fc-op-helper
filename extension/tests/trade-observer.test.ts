@@ -89,6 +89,7 @@ interface ItemConfig {
   price?: string;
   rating?: string;
   position?: string;
+  sold?: boolean; // adds "won" class to item (EA marks sold items this way)
 }
 
 /**
@@ -103,7 +104,7 @@ function buildTransferList(items: ItemConfig[]): HTMLElement {
   for (const item of items) {
     // TRANSFER_LIST_ITEM = '.listFUTItem'
     const li = document.createElement('li');
-    li.className = classFromSelector(TRANSFER_LIST_ITEM);
+    li.className = classFromSelector(TRANSFER_LIST_ITEM) + (item.sold ? ' won' : '');
 
     // ITEM_PLAYER_NAME = '.name'
     const nameEl = document.createElement('span');
@@ -233,6 +234,21 @@ describe('readTransferList', () => {
     const result = readTransferList(root);
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe('listed');
+  });
+
+  it('detects sold items via "won" class even when status text says Expired', () => {
+    // EA marks sold items with class "won" on .listFUTItem but status text still shows "Expired"
+    const container = buildTransferList([
+      { name: 'McKenzie', status: 'Expired', price: '21,750', sold: true },
+      { name: 'Haaland', status: 'Expired', price: '15,000', sold: false },
+    ]);
+    const root = document.createElement('div');
+    root.appendChild(container);
+
+    const result = readTransferList(root);
+    expect(result).toHaveLength(2);
+    expect(result[0].status).toBe('sold');     // has "won" class
+    expect(result[1].status).toBe('expired');  // no "won" class
   });
 
   it('returns price 0 when price element is absent', () => {
