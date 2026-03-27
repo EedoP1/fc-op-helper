@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to execute
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-03-27T07:17:38.811Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 07-portfolio-management plan 03 — awaiting checkpoint human-verify
+last_updated: "2026-03-27T07:26:29.002Z"
 last_activity: 2026-03-27
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 8
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 07 (portfolio-management) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -53,6 +53,8 @@ Plan: 2 of 3
 | Phase 06-extension-architecture-foundation P01 | 8 | 2 tasks | 10 files |
 | Phase 06-extension-architecture-foundation P02 | 6 | 3 tasks | 3 files |
 | Phase 07-portfolio-management P02 | 3 | 2 tasks | 6 files |
+| Phase 07-portfolio-management P01 | 15 | 2 tasks | 5 files |
+| Phase 07-portfolio-management P03 | 20 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +80,10 @@ Plan: 2 of 3
 - [Phase 06-extension-architecture-foundation]: fakeBrowser.runtime.onMessage.trigger() does not pass sendResponse callback — content script tests use addListener spy + direct handler invocation
 - [Phase 07-portfolio-management]: PORTFOLIO_* request types handled only in service worker, not content script — content script returns false for those types to maintain exhaustive switch without phantom handling
 - [Phase 07-portfolio-management]: mapToPortfolioPlayer normalizes buy_price/price field name variants from different backend endpoints
+- [Phase 07-portfolio-management]: Two-step portfolio flow: generate is read-only preview, confirm does clean-slate seed of portfolio_slots
+- [Phase 07-portfolio-management]: swap-preview is stateless: caller provides excluded_ea_ids, no PortfolioSlot reads required
+- [Phase 07-portfolio-management]: Panel declared before wxt:locationchange handler to avoid TDZ — const panel hoisted above ctx.addEventListener
+- [Phase 07-portfolio-management]: PORTFOLIO_LOAD guarded by ctx.isInvalid check to preserve existing test contract (no sendMessage when ctx invalid)
 
 ### Pending Todos
 
@@ -99,5 +105,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-27
-Stopped at: Completed 07-02-PLAN.md
+Stopped at: Completed 07-portfolio-management plan 03 — awaiting checkpoint human-verify
 Resume file: None
