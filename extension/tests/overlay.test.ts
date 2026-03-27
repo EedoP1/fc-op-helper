@@ -170,7 +170,7 @@ describe('overlay panel', () => {
     });
 
     const header = panel.container.querySelector('h3');
-    expect(header?.textContent).toBe('Portfolio (Confirmed)');
+    expect(header?.textContent).toBe('Portfolio (1 players)');
   });
 
   it('destroy removes container and toggle from DOM', () => {

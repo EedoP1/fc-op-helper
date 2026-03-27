@@ -35,6 +35,24 @@ export interface OverlayPanel {
   destroy(): void;
 }
 
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+type SortKey = 'name' | 'rating' | 'price' | 'sell_price' | 'margin_pct' | 'expected_profit' | 'op_ratio' | 'efficiency';
+type SortDir = 'asc' | 'desc';
+
+function sortPlayers(players: PortfolioPlayer[], key: SortKey, dir: SortDir): PortfolioPlayer[] {
+  const sorted = [...players];
+  sorted.sort((a, b) => {
+    const aVal = a[key];
+    const bVal = b[key];
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    }
+    return dir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+  });
+  return sorted;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n: number): string {
@@ -61,6 +79,8 @@ export function createOverlayPanel(): OverlayPanel {
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
+  let sortKey: SortKey = 'efficiency';
+  let sortDir: SortDir = 'desc';
 
   // ── Container (panel) ──────────────────────────────────────────────────────
 
@@ -187,8 +207,16 @@ export function createOverlayPanel(): OverlayPanel {
       loading.style.display = 'block';
       generateBtn.disabled = true;
 
+      // Show elapsed time so user knows it's working
+      const startTime = Date.now();
+      const timer = setInterval(() => {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+        loading.textContent = `Generating... (${elapsed}s)`;
+      }, 1000);
+
       chrome.runtime.sendMessage({ type: 'PORTFOLIO_GENERATE', budget } satisfies ExtensionMessage)
         .then((res: ExtensionMessage) => {
+          clearInterval(timer);
           loading.style.display = 'none';
           generateBtn.disabled = false;
 
@@ -206,6 +234,7 @@ export function createOverlayPanel(): OverlayPanel {
           }
         })
         .catch((err: Error) => {
+          clearInterval(timer);
           loading.style.display = 'none';
           generateBtn.disabled = false;
           renderError(err.message ?? 'Unknown error');
@@ -213,26 +242,89 @@ export function createOverlayPanel(): OverlayPanel {
     });
   }
 
+  /** Build sortable column header bar */
+  function renderSortBar(onSort: () => void): HTMLDivElement {
+    const bar = document.createElement('div');
+    Object.assign(bar.style, {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '4px',
+      marginBottom: '8px',
+    });
+
+    const columns: { label: string; key: SortKey }[] = [
+      { label: 'Name', key: 'name' },
+      { label: 'OVR', key: 'rating' },
+      { label: 'Buy', key: 'price' },
+      { label: 'Sell', key: 'sell_price' },
+      { label: 'Margin', key: 'margin_pct' },
+      { label: 'Profit', key: 'expected_profit' },
+      { label: 'OP%', key: 'op_ratio' },
+      { label: 'Eff.', key: 'efficiency' },
+    ];
+
+    columns.forEach(col => {
+      const btn = document.createElement('button');
+      const arrow = sortKey === col.key ? (sortDir === 'desc' ? ' \u25BC' : ' \u25B2') : '';
+      btn.textContent = col.label + arrow;
+      Object.assign(btn.style, {
+        background: sortKey === col.key ? '#3a3a5e' : '#2a2a3e',
+        color: sortKey === col.key ? '#fff' : '#aaa',
+        border: '1px solid #444',
+        borderRadius: '3px',
+        cursor: 'pointer',
+        padding: '3px 6px',
+        fontSize: '11px',
+        flex: '0 0 auto',
+      });
+      btn.addEventListener('click', () => {
+        if (sortKey === col.key) {
+          sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+        } else {
+          sortKey = col.key;
+          sortDir = 'desc';
+        }
+        onSort();
+      });
+      bar.appendChild(btn);
+    });
+
+    return bar;
+  }
+
   /** Render DRAFT state: player list + swap + Confirm button */
   function renderDraft(): void {
     container.innerHTML = '';
 
     const header = document.createElement('h3');
-    header.textContent = 'Draft Portfolio';
+    header.textContent = `Draft Portfolio (${draftPlayers.length} players)`;
     Object.assign(header.style, { margin: '0 0 8px', fontSize: '18px', color: '#fff' });
     container.appendChild(header);
 
     const summary = document.createElement('div');
     summary.textContent = `Used: ${fmt(draftBudgetUsed)} / Budget: ${fmt(draftBudget)} (${fmt(draftBudgetRemaining)} remaining)`;
-    Object.assign(summary.style, { fontSize: '12px', color: '#aaa', marginBottom: '12px' });
+    Object.assign(summary.style, { fontSize: '12px', color: '#aaa', marginBottom: '8px' });
     container.appendChild(summary);
+
+    const sortBarSlot = document.createElement('div');
+    container.appendChild(sortBarSlot);
 
     const listEl = document.createElement('div');
     container.appendChild(listEl);
 
     function renderPlayerList(): void {
+      // Update header count
+      header.textContent = `Draft Portfolio (${draftPlayers.length} players)`;
+
+      // Update sort bar
+      sortBarSlot.innerHTML = '';
+      sortBarSlot.appendChild(renderSortBar(renderPlayerList));
+
       listEl.innerHTML = '';
-      draftPlayers.forEach((player, idx) => {
+      const sorted = sortPlayers(draftPlayers, sortKey, sortDir);
+      sorted.forEach((player) => {
+        // Find real index in draftPlayers for removal
+        const idx = draftPlayers.indexOf(player);
         const row = document.createElement('div');
         row.className = 'op-seller-player-row';
         Object.assign(row.style, {
@@ -266,7 +358,7 @@ export function createOverlayPanel(): OverlayPanel {
         const statsLine = document.createElement('div');
         statsLine.style.fontSize = '12px';
         statsLine.style.color = '#ccc';
-        statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)}`;
+        statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)} | Eff: ${player.efficiency.toFixed(4)}`;
         row.appendChild(statsLine);
 
         // Remove (X) button — triggers swap (D-08/D-09)
@@ -304,7 +396,6 @@ export function createOverlayPanel(): OverlayPanel {
             .then((res: ExtensionMessage) => {
               if (res.type === 'PORTFOLIO_SWAP_RESULT') {
                 if (res.replacements && res.replacements.length > 0) {
-                  // Splice replacement at the removed index (clamped to length)
                   const insertIdx = Math.min(idx, draftPlayers.length);
                   draftPlayers.splice(insertIdx, 0, ...res.replacements);
                   draftBudgetUsed = draftPlayers.reduce((s, p) => s + p.price, 0);
@@ -367,49 +458,64 @@ export function createOverlayPanel(): OverlayPanel {
     container.innerHTML = '';
 
     const header = document.createElement('h3');
-    header.textContent = 'Portfolio (Confirmed)';
-    Object.assign(header.style, { margin: '0 0 12px', fontSize: '18px', color: '#fff' });
+    header.textContent = `Portfolio (${draftPlayers.length} players)`;
+    Object.assign(header.style, { margin: '0 0 8px', fontSize: '18px', color: '#fff' });
     container.appendChild(header);
 
-    draftPlayers.forEach(player => {
-      const row = document.createElement('div');
-      row.className = 'op-seller-player-row';
-      Object.assign(row.style, {
-        background: '#2a2a3e',
-        padding: '10px',
-        marginBottom: '6px',
-        borderRadius: '4px',
-        position: 'relative',
+    const sortBarSlot = document.createElement('div');
+    container.appendChild(sortBarSlot);
+
+    const listEl = document.createElement('div');
+    container.appendChild(listEl);
+
+    function renderPlayerList(): void {
+      sortBarSlot.innerHTML = '';
+      sortBarSlot.appendChild(renderSortBar(renderPlayerList));
+
+      listEl.innerHTML = '';
+      const sorted = sortPlayers(draftPlayers, sortKey, sortDir);
+      sorted.forEach(player => {
+        const row = document.createElement('div');
+        row.className = 'op-seller-player-row';
+        Object.assign(row.style, {
+          background: '#2a2a3e',
+          padding: '10px',
+          marginBottom: '6px',
+          borderRadius: '4px',
+          position: 'relative',
+        });
+
+        const topLine = document.createElement('div');
+        topLine.style.marginBottom = '4px';
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = player.name;
+        nameEl.style.color = '#fff';
+        const ratingPos = document.createElement('span');
+        ratingPos.textContent = ` ${player.rating} ${player.position}`;
+        ratingPos.style.color = '#aaa';
+        ratingPos.style.fontSize = '12px';
+        topLine.appendChild(nameEl);
+        topLine.appendChild(ratingPos);
+        row.appendChild(topLine);
+
+        const detailLine = document.createElement('div');
+        detailLine.style.fontSize = '12px';
+        detailLine.style.color = '#ccc';
+        detailLine.style.marginBottom = '2px';
+        detailLine.textContent = `Buy: ${fmt(player.price)} | Sell: ${fmt(player.sell_price)} | Margin: ${pct(player.margin_pct)}`;
+        row.appendChild(detailLine);
+
+        const statsLine = document.createElement('div');
+        statsLine.style.fontSize = '12px';
+        statsLine.style.color = '#ccc';
+        statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)} | Eff: ${player.efficiency.toFixed(4)}`;
+        row.appendChild(statsLine);
+
+        container.appendChild(row);
       });
+    }
 
-      const topLine = document.createElement('div');
-      topLine.style.marginBottom = '4px';
-      const nameEl = document.createElement('strong');
-      nameEl.textContent = player.name;
-      nameEl.style.color = '#fff';
-      const ratingPos = document.createElement('span');
-      ratingPos.textContent = ` ${player.rating} ${player.position}`;
-      ratingPos.style.color = '#aaa';
-      ratingPos.style.fontSize = '12px';
-      topLine.appendChild(nameEl);
-      topLine.appendChild(ratingPos);
-      row.appendChild(topLine);
-
-      const detailLine = document.createElement('div');
-      detailLine.style.fontSize = '12px';
-      detailLine.style.color = '#ccc';
-      detailLine.style.marginBottom = '2px';
-      detailLine.textContent = `Buy: ${fmt(player.price)} | Sell: ${fmt(player.sell_price)} | Margin: ${pct(player.margin_pct)}`;
-      row.appendChild(detailLine);
-
-      const statsLine = document.createElement('div');
-      statsLine.style.fontSize = '12px';
-      statsLine.style.color = '#ccc';
-      statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)}`;
-      row.appendChild(statsLine);
-
-      container.appendChild(row);
-    });
+    renderPlayerList();
 
     const regenBtn = document.createElement('button');
     regenBtn.textContent = 'Regenerate';
