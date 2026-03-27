@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query, Request, Path, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, MarketSnapshot
@@ -102,8 +102,20 @@ async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[
     lookback window against the latest. If (latest - earliest) / earliest > threshold,
     the player is volatile.
 
-    Players with fewer than 2 distinct snapshot timestamps in the window are skipped
-    (not enough data to determine trend).
+    Players with fewer than 2 snapshots in the window are skipped (not enough data).
+
+    Performance: uses three focused queries instead of the previous four-level nested
+    subquery approach. The original single-query plan caused SQLite to scan ~1.5M rows
+    four times (one pass per subquery materialisation), which took >30s for ~1800
+    ea_ids and caused the endpoint to exceed the 30s client timeout.
+
+    The new approach:
+      1. One GROUP BY query — finds min/max captured_at and count per ea_id (uses the
+         composite index on (ea_id, captured_at) efficiently).
+      2. One bulk query — fetches the current_lowest_bin for all (ea_id, min_ts) pairs
+         using an IN clause on the (ea_id, captured_at) pair.
+      3. One bulk query — same for (ea_id, max_ts) pairs.
+    Each of the three queries does at most one full-index range scan.
 
     Args:
         session: Active async DB session.
@@ -118,66 +130,65 @@ async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[
     cutoff = datetime.utcnow() - timedelta(days=VOLATILITY_LOOKBACK_DAYS)
     threshold = VOLATILITY_MAX_PRICE_INCREASE_PCT / 100.0
 
-    # Query the min and max captured_at timestamps per ea_id in the lookback window
-    time_range_subq = (
+    # Query 1: single-pass GROUP BY to find boundary timestamps per ea_id.
+    # HAVING filters out players with only one snapshot (insufficient data).
+    # The ix_market_snapshots_ea_id_captured_at index covers (ea_id, captured_at).
+    range_stmt = (
         select(
             MarketSnapshot.ea_id,
             func.min(MarketSnapshot.captured_at).label("min_ts"),
             func.max(MarketSnapshot.captured_at).label("max_ts"),
-            func.count(MarketSnapshot.captured_at).label("snap_count"),
         )
         .where(
             MarketSnapshot.ea_id.in_(ea_ids),
             MarketSnapshot.captured_at >= cutoff,
         )
         .group_by(MarketSnapshot.ea_id)
-        .subquery()
+        .having(func.count(MarketSnapshot.captured_at) >= 2)
     )
 
-    # Filter to only ea_ids with 2+ distinct timestamps (sufficient data)
-    # Join to get the earliest price
-    earliest_subq = (
-        select(
-            MarketSnapshot.ea_id,
-            MarketSnapshot.current_lowest_bin.label("earliest_bin"),
+    range_result = await session.execute(range_stmt)
+    ranges = range_result.all()  # [(ea_id, min_ts, max_ts), ...]
+
+    if not ranges:
+        return set()
+
+    # Build lookup sets for boundary timestamps.
+    min_ts_by_ea_id = {row.ea_id: row.min_ts for row in ranges}
+    max_ts_by_ea_id = {row.ea_id: row.max_ts for row in ranges}
+
+    # Query 2: fetch earliest bin for all ea_ids in one round-trip.
+    # Each (ea_id, captured_at) pair is a primary-key-like index lookup.
+    # SQLite will use ix_market_snapshots_ea_id_captured_at for each OR-branch.
+    earliest_stmt = (
+        select(MarketSnapshot.ea_id, MarketSnapshot.current_lowest_bin)
+        .where(
+            tuple_(MarketSnapshot.ea_id, MarketSnapshot.captured_at).in_(
+                [(ea_id, ts) for ea_id, ts in min_ts_by_ea_id.items()]
+            )
         )
-        .join(
-            time_range_subq,
-            (MarketSnapshot.ea_id == time_range_subq.c.ea_id)
-            & (MarketSnapshot.captured_at == time_range_subq.c.min_ts),
-        )
-        .where(time_range_subq.c.snap_count >= 2)
-        .subquery()
     )
+    earliest_result = await session.execute(earliest_stmt)
+    earliest_bin_by_ea_id = {row.ea_id: row.current_lowest_bin for row in earliest_result.all()}
 
-    # Join to get the latest price
-    latest_subq = (
-        select(
-            MarketSnapshot.ea_id,
-            MarketSnapshot.current_lowest_bin.label("latest_bin"),
+    # Query 3: fetch latest bin for all ea_ids in one round-trip.
+    latest_stmt = (
+        select(MarketSnapshot.ea_id, MarketSnapshot.current_lowest_bin)
+        .where(
+            tuple_(MarketSnapshot.ea_id, MarketSnapshot.captured_at).in_(
+                [(ea_id, ts) for ea_id, ts in max_ts_by_ea_id.items()]
+            )
         )
-        .join(
-            time_range_subq,
-            (MarketSnapshot.ea_id == time_range_subq.c.ea_id)
-            & (MarketSnapshot.captured_at == time_range_subq.c.max_ts),
-        )
-        .where(time_range_subq.c.snap_count >= 2)
-        .subquery()
     )
+    latest_result = await session.execute(latest_stmt)
+    latest_bin_by_ea_id = {row.ea_id: row.current_lowest_bin for row in latest_result.all()}
 
-    # Final query: join earliest and latest to compute increase
-    stmt = select(
-        earliest_subq.c.ea_id,
-        earliest_subq.c.earliest_bin,
-        latest_subq.c.latest_bin,
-    ).join(latest_subq, earliest_subq.c.ea_id == latest_subq.c.ea_id)
-
-    result = await session.execute(stmt)
-    rows = result.all()
-
+    # Evaluate volatility in Python — O(N) over the candidate set.
     volatile = set()
-    for ea_id, earliest_bin, latest_bin in rows:
-        if earliest_bin and earliest_bin > 0:
+    for ea_id in min_ts_by_ea_id:
+        earliest_bin = earliest_bin_by_ea_id.get(ea_id)
+        latest_bin = latest_bin_by_ea_id.get(ea_id)
+        if earliest_bin and earliest_bin > 0 and latest_bin is not None:
             increase = (latest_bin - earliest_bin) / earliest_bin
             if increase > threshold:
                 volatile.add(ea_id)
