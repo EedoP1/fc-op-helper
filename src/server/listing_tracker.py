@@ -235,7 +235,7 @@ async def resolve_outcomes(
     if last_resolved_at is not None:
         completed_sales = [
             sale for sale in completed_sales
-            if sale.sold_at > last_resolved_at
+            if sale.sold_at.replace(tzinfo=None) > last_resolved_at
         ]
 
     logger.debug(
@@ -248,17 +248,29 @@ async def resolve_outcomes(
     for obs in disappeared:
         by_price.setdefault(obs.buy_now_price, []).append(obs)
 
-    # Build sale counts per price from completedAuctions
-    sale_count_by_price: dict[int, int] = {}
+    # Build per-price list of sale timestamps from completedAuctions.
+    # We keep sold_at values (sorted ascending) so each price bucket can filter
+    # by the earliest first_seen_at of the observations it is trying to match.
+    # Strip tzinfo so comparisons against naive-UTC first_seen_at are safe.
+    sale_times_by_price: dict[int, list[datetime]] = {}
     for sale in completed_sales:
         price = sale.sold_price
-        sale_count_by_price[price] = sale_count_by_price.get(price, 0) + 1
+        sold_at_naive = sale.sold_at.replace(tzinfo=None)
+        sale_times_by_price.setdefault(price, []).append(sold_at_naive)
+    for times in sale_times_by_price.values():
+        times.sort()
 
     total_sold = 0
     total_expired = 0
 
     for price, obs_list in by_price.items():
-        matching_sales = sale_count_by_price.get(price, 0)
+        # Only count sales that happened at or after the earliest moment we first
+        # observed a listing at this price.  This prevents stale completedAuctions
+        # entries (e.g. sales from hours before the scanner started) from being
+        # attributed to newly-observed listings.
+        earliest_first_seen = min(obs.first_seen_at for obs in obs_list)
+        all_times = sale_times_by_price.get(price, [])
+        matching_sales = sum(1 for t in all_times if t >= earliest_first_seen)
         n_sold = min(matching_sales, len(obs_list))
         n_expired = len(obs_list) - n_sold
 
