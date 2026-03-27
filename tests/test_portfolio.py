@@ -288,3 +288,119 @@ async def test_mixed_players_only_volatile_flagged(volatile_db):
     async with session_factory() as session:
         volatile = await _get_volatile_ea_ids(session, [3005, 3006, 3007])
     assert volatile == {3005}
+
+
+# ── Volatility filter integration tests ───────────────────────────────────────
+
+@pytest.fixture
+async def volatility_integration_app(db):
+    """App with one volatile player (50% spike) and one stable player.
+
+    ea_id=4001: volatile — 50% price spike over 3 days
+    ea_id=4002: stable — 10% price increase over 3 days
+    Both are viable and active.
+    """
+    engine, session_factory = db
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        for ea_id, name in [(4001, "Volatile Player"), (4002, "Stable Player")]:
+            rec = PlayerRecord(
+                ea_id=ea_id,
+                name=name,
+                rating=88,
+                position="ST",
+                nation="Brazil",
+                league="LaLiga",
+                club="Real Madrid",
+                card_type="gold",
+                scan_tier="normal",
+                last_scanned_at=now,
+                is_active=True,
+                listing_count=30,
+                sales_per_hour=10.0,
+            )
+            session.add(rec)
+
+            buy_price = 20000
+            score = PlayerScore(
+                ea_id=ea_id,
+                scored_at=now,
+                buy_price=buy_price,
+                sell_price=int(buy_price * 1.2),
+                net_profit=int(buy_price * 0.14),
+                margin_pct=20,
+                op_sales=5,
+                total_sales=50,
+                op_ratio=0.1,
+                expected_profit=float(buy_price) * 0.05,
+                efficiency=0.05,
+                sales_per_hour=10.0,
+                is_viable=True,
+            )
+            session.add(score)
+
+        # Volatile player: 50% spike (10000 -> 15000) over 3 days
+        for captured_at, bin_price in [
+            (now - timedelta(days=2, hours=12), 10000),
+            (now - timedelta(days=1), 12000),
+            (now, 15000),
+        ]:
+            session.add(MarketSnapshot(
+                ea_id=4001,
+                captured_at=captured_at,
+                current_lowest_bin=bin_price,
+                listing_count=30,
+                live_auction_prices="[]",
+            ))
+
+        # Stable player: 10% increase (10000 -> 11000) over 3 days
+        for captured_at, bin_price in [
+            (now - timedelta(days=2), 10000),
+            (now - timedelta(days=1), 10500),
+            (now, 11000),
+        ]:
+            session.add(MarketSnapshot(
+                ea_id=4002,
+                captured_at=captured_at,
+                current_lowest_bin=bin_price,
+                listing_count=30,
+                live_auction_prices="[]",
+            ))
+
+        await session.commit()
+
+    app = make_test_app(session_factory)
+    app.include_router(portfolio_router)
+    yield app
+
+
+async def test_get_portfolio_excludes_volatile_player(volatility_integration_app):
+    """GET /portfolio excludes volatile player (50% price spike) and includes stable player."""
+    async with AsyncClient(
+        transport=ASGITransport(app=volatility_integration_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/portfolio?budget=1000000")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    ea_ids_in_response = {p["ea_id"] for p in body["data"]}
+    assert 4001 not in ea_ids_in_response, "Volatile player should be excluded"
+    assert 4002 in ea_ids_in_response, "Stable player should be included"
+
+
+async def test_generate_portfolio_excludes_volatile_player(volatility_integration_app):
+    """POST /portfolio/generate excludes volatile player (50% price spike) and includes stable player."""
+    async with AsyncClient(
+        transport=ASGITransport(app=volatility_integration_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/v1/portfolio/generate",
+            json={"budget": 1000000},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    ea_ids_in_response = {p["ea_id"] for p in body["data"]}
+    assert 4001 not in ea_ids_in_response, "Volatile player should be excluded"
+    assert 4002 in ea_ids_in_response, "Stable player should be included"

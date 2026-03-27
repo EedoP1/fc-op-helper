@@ -230,6 +230,16 @@ async def get_portfolio(
         result = await session.execute(stmt)
         rows = result.all()
 
+        # Apply volatility filter while session is still open
+        all_ea_ids = [score.ea_id for score, record in rows]
+        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
+        if volatile:
+            logger.info(
+                "Volatility filter removed %d of %d candidates (GET /portfolio)",
+                len(volatile), len(rows),
+            )
+        rows = [(s, r) for s, r in rows if s.ea_id not in volatile]
+
     # Build fresh scored entries (never cache — optimizer mutates dicts)
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
 
@@ -333,6 +343,16 @@ async def generate_portfolio(
 
         result = await session.execute(stmt)
         rows = result.all()
+
+        # Apply volatility filter while session is still open
+        all_ea_ids = [score.ea_id for score, record in rows]
+        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
+        if volatile:
+            logger.info(
+                "Volatility filter removed %d of %d candidates (POST /portfolio/generate)",
+                len(volatile), len(rows),
+            )
+        rows = [(s, r) for s, r in rows if s.ea_id not in volatile]
 
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
 
@@ -469,7 +489,17 @@ async def swap_preview(
         result = await session.execute(stmt)
         rows = result.all()
 
-    # Filter out excluded ea_ids before running optimizer
+        # Apply volatility filter before excluded_ea_ids filter, while session is open
+        all_ea_ids = [score.ea_id for score, record in rows]
+        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
+        if volatile:
+            logger.info(
+                "Volatility filter removed %d of %d candidates (POST /portfolio/swap-preview)",
+                len(volatile), len(rows),
+            )
+        excluded = excluded | volatile
+
+    # Filter out excluded ea_ids (includes volatile players) before running optimizer
     candidates = [
         _build_scored_entry(score, record)
         for score, record in rows
@@ -617,20 +647,29 @@ async def delete_portfolio_player(
         rows_result = await session.execute(stmt)
         rows = rows_result.all()
 
+        # 6. Apply volatility filter before committing (session still open)
+        all_candidate_ids = [score.ea_id for score, record in rows]
+        volatile = await _get_volatile_ea_ids(session, all_candidate_ids)
+        if volatile:
+            logger.info(
+                "Volatility filter removed %d of %d candidates (DELETE /portfolio/%d)",
+                len(volatile), len(rows), ea_id,
+            )
+
         await session.commit()
 
-    # 6. Build scored candidates excluding removed player and remaining slots
-    excluded = remaining_ea_ids | {ea_id}
+    # 7. Build scored candidates excluding removed player, remaining slots, and volatile players
+    excluded = remaining_ea_ids | {ea_id} | volatile
     scored_candidates = [
         _build_scored_entry(score, record)
         for score, record in rows
         if score.ea_id not in excluded
     ]
 
-    # 7. Run optimizer for replacements within freed budget
+    # 8. Run optimizer for replacements within freed budget
     replacements_raw = optimize_portfolio(scored_candidates, freed_budget) if scored_candidates else []
 
-    # 8. Serialize replacements
+    # 9. Serialize replacements
     replacements = [
         {
             "ea_id": entry["ea_id"],
