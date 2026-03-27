@@ -80,10 +80,12 @@ Plans:
 **Goal:** Extension passively reads EA Web App DOM (transfer list, trade pile) to detect and auto-report trade outcomes (bought/listed/sold/expired) for portfolio players. Includes DOM exploration to map selectors. Observation only — no automated clicking.
 **Requirements**: AUTO-08 (centralized selectors — shared with Phase 8)
 **Depends on:** Phase 7
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 07.1 to break down)
+- [ ] 07.1-01-PLAN.md — Selector scaffold + DOM exploration (human DevTools inspection)
+- [ ] 07.1-02-PLAN.md — Backend POST /trade-records/direct endpoint for bootstrap reporting
+- [ ] 07.1-03-PLAN.md — Trade observer module, message types, storage, SW handler, content script wiring + tests
 
 ### Phase 07.2: Portfolio Dashboard & Trade Tracking (INSERTED)
 
@@ -124,4 +126,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
 | 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
+| 07.1 Trade Reporting | v1.1 | 0/3 | Planned | - |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
