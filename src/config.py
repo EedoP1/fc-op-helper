@@ -39,5 +39,9 @@ MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consi
 # OP sell margin tiers (highest first)
 MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
 
+# Volatility filter — exclude players with large recent price spikes
+VOLATILITY_MAX_PRICE_INCREASE_PCT = 30  # percent; players with >30% increase are excluded
+VOLATILITY_LOOKBACK_DAYS = 3            # how far back to check for the price spike
+
 # Database
 DATABASE_URL = "sqlite+aiosqlite:///D:/op-seller/op_seller.db"
