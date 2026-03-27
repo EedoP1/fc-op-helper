@@ -101,8 +101,8 @@ class ScannerService:
             dict(
                 ea_id=p["ea_id"],
                 name=p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(p["ea_id"]),
-                rating=0,
-                position="UNK",
+                rating=p.get("overall", 0),
+                position=p.get("position", "UNK"),
                 nation="",
                 league="",
                 club="",
@@ -127,6 +127,8 @@ class ScannerService:
                         index_elements=["ea_id"],
                         set_=dict(
                             name=row["name"],
+                            rating=row["rating"],
+                            position=row["position"],
                             is_active=True,
                             next_scan_at=now,
                         ),
@@ -217,8 +219,8 @@ class ScannerService:
                 stmt = sqlite_insert(PlayerRecord).values(
                     ea_id=ea_id,
                     name=player_name,
-                    rating=0,
-                    position="UNK",
+                    rating=p.get("overall", 0),
+                    position=p.get("position", "UNK"),
                     nation="",
                     league="",
                     club="",
@@ -231,7 +233,12 @@ class ScannerService:
                 )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["ea_id"],
-                    set_=dict(name=player_name, is_active=True),
+                    set_=dict(
+                        name=player_name,
+                        rating=p.get("overall", 0),
+                        position=p.get("position", "UNK"),
+                        is_active=True,
+                    ),
                 )
                 await session.execute(stmt)
 
