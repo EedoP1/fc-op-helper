@@ -203,6 +203,17 @@ export default defineContentScript({
       maybeStartTradeObserver();
     });
     observer.observe(document.body, { childList: true, subtree: false });
+
+    // EA SPA renders Transfer List deep in the DOM after page load.
+    // Neither wxt:locationchange nor the shallow body observer catch it.
+    // Poll every 2s until the trade observer activates, then stop polling.
+    const pollId = ctx.setInterval(() => {
+      if (isTransferListPage(document)) {
+        console.log('[OP Seller CS] Transfer List detected via poll');
+        maybeStartTradeObserver();
+        clearInterval(pollId);
+      }
+    }, 2000);
     ctx.onInvalidated(() => observer.disconnect());
 
     // D-09: Auto-reconnect loop — retries until ctx is invalidated
