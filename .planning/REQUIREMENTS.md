@@ -23,6 +23,12 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [x] **ARCH-03**: Typed message protocol between service worker and content script (discriminated unions)
 - [x] **ARCH-04**: Content script uses MutationObserver for SPA navigation detection and listener re-initialization
 
+### Portfolio Management
+
+- [ ] **PORT-01**: Backend exposes endpoint to generate OP sell portfolio for a given budget (runs scorer/optimizer) and seeds portfolio_slots
+- [x] **UI-01**: Overlay panel injected into EA Web App showing backend-recommended portfolio (player name, buy price, OP price, margin)
+- [x] **UI-03**: User can remove a player from the list and receive replacement player(s) from the backend
+
 ### Automation
 
 - [ ] **AUTO-01**: Extension searches transfer market for target player and executes Buy Now when BIN is at or below expected buy price
@@ -33,12 +39,7 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [ ] **AUTO-06**: Extension detects CAPTCHA and stops automation immediately, alerting the user
 - [ ] **AUTO-07**: Extension fails loudly on DOM mismatch (missing elements) rather than silently continuing
 - [ ] **AUTO-08**: All selectors centralized in one file for maintainability against EA Web App updates
-
-### Extension UI
-
-- [ ] **UI-01**: Overlay panel injected into EA Web App showing backend-recommended portfolio (player name, buy price, OP price, margin)
 - [ ] **UI-02**: User can confirm the portfolio list to start the automated buy/list/relist cycle
-- [ ] **UI-03**: User can remove a player from the list and receive replacement player(s) from the backend
 - [ ] **UI-04**: Start/stop automation toggle in overlay panel
 - [ ] **UI-05**: Status display showing current action, last event, and running/stopped/error state
 
@@ -89,23 +90,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ARCH-02 | Phase 6 | Complete |
 | ARCH-03 | Phase 6 | Complete |
 | ARCH-04 | Phase 6 | Complete |
-| AUTO-01 | Phase 7 | Pending |
-| AUTO-02 | Phase 7 | Pending |
-| AUTO-03 | Phase 7 | Pending |
-| AUTO-04 | Phase 7 | Pending |
-| AUTO-05 | Phase 7 | Pending |
-| AUTO-06 | Phase 7 | Pending |
-| AUTO-07 | Phase 7 | Pending |
-| AUTO-08 | Phase 7 | Pending |
-| UI-01 | Phase 8 | Pending |
+| PORT-01 | Phase 7 | Pending |
+| UI-01 | Phase 7 | Complete |
+| UI-03 | Phase 7 | Complete |
+| AUTO-01 | Phase 8 | Pending |
+| AUTO-02 | Phase 8 | Pending |
+| AUTO-03 | Phase 8 | Pending |
+| AUTO-04 | Phase 8 | Pending |
+| AUTO-05 | Phase 8 | Pending |
+| AUTO-06 | Phase 8 | Pending |
+| AUTO-07 | Phase 8 | Pending |
+| AUTO-08 | Phase 8 | Pending |
 | UI-02 | Phase 8 | Pending |
-| UI-03 | Phase 8 | Pending |
 | UI-04 | Phase 8 | Pending |
 | UI-05 | Phase 8 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 23 total
-- Mapped to phases: 23
+- v1.1 requirements: 24 total
+- Mapped to phases: 24
 - Unmapped: 0
 
 ---

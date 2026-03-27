@@ -71,7 +71,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [ ] 07-01-PLAN.md — Backend endpoints: POST /generate, POST /confirm, POST /swap-preview, GET /confirmed + tests
-- [ ] 07-02-PLAN.md — Extension message types, storage types, service worker portfolio proxy handlers + tests
+- [x] 07-02-PLAN.md — Extension message types, storage types, service worker portfolio proxy handlers + tests
 - [ ] 07-03-PLAN.md — Overlay panel DOM injection, three-state UI, content script integration + visual verification
 **UI hint**: yes
 
@@ -103,5 +103,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
-| 7. Portfolio Management | v1.1 | 0/3 | Not started | - |
+| 7. Portfolio Management | v1.1 | 1/3 | In Progress|  |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |

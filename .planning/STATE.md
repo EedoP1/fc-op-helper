@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to plan
-stopped_at: Phase 7 context gathered
-last_updated: "2026-03-27T06:38:19.872Z"
-last_activity: 2026-03-26
+status: Ready to execute
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-03-27T07:17:38.811Z"
+last_activity: 2026-03-27
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 8
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 06 — extension-architecture-foundation
+**Current focus:** Phase 07 — portfolio-management
 
 ## Current Position
 
-Phase: 7
-Plan: Not started
+Phase: 07 (portfolio-management) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: Not started
 | Phase 05-backend-infrastructure P03 | 3 | 2 tasks | 5 files |
 | Phase 06-extension-architecture-foundation P01 | 8 | 2 tasks | 10 files |
 | Phase 06-extension-architecture-foundation P02 | 6 | 3 tasks | 3 files |
+| Phase 07-portfolio-management P02 | 3 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,8 @@ Plan: Not started
 - [Phase 06-extension-architecture-foundation]: Add types: ['chrome'] to extension/tsconfig.json — WXT auto-generated tsconfig omits @types/chrome
 - [Phase 06-extension-architecture-foundation]: Explicit case 'PONG' in content script switch — TypeScript requires all discriminated union variants handled for assertNever to receive never type
 - [Phase 06-extension-architecture-foundation]: fakeBrowser.runtime.onMessage.trigger() does not pass sendResponse callback — content script tests use addListener spy + direct handler invocation
+- [Phase 07-portfolio-management]: PORTFOLIO_* request types handled only in service worker, not content script — content script returns false for those types to maintain exhaustive switch without phantom handling
+- [Phase 07-portfolio-management]: mapToPortfolioPlayer normalizes buy_price/price field name variants from different backend endpoints
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-26
-Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-portfolio-management/07-CONTEXT.md
+Last activity: 2026-03-27
+Stopped at: Completed 07-02-PLAN.md
+Resume file: None
