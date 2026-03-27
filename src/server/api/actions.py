@@ -360,6 +360,19 @@ async def direct_trade_record(payload: DirectTradeRecordPayload, request: Reques
         if slot is None:
             raise HTTPException(status_code=404, detail=f"ea_id {payload.ea_id} not in portfolio")
 
+        # Server-side dedup: check if identical record exists in last 5 minutes
+        five_min_ago = datetime.utcnow() - timedelta(minutes=5)
+        dup_check = await session.execute(
+            select(TradeRecord).where(
+                TradeRecord.ea_id == payload.ea_id,
+                TradeRecord.outcome == payload.outcome,
+                TradeRecord.price == payload.price,
+                TradeRecord.recorded_at >= five_min_ago,
+            )
+        )
+        if dup_check.scalar_one_or_none() is not None:
+            return {"status": "ok", "trade_record_id": -1, "deduplicated": True}
+
         now = datetime.utcnow()
         record = TradeRecord(
             ea_id=payload.ea_id,
