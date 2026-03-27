@@ -76,6 +76,7 @@ export function createOverlayPanel(): OverlayPanel {
 
   let currentState: PanelState = 'empty';
   let draftPlayers: PortfolioPlayer[] = [];  // D-10: ephemeral draft, in-memory only
+  let removedEaIds: Set<number> = new Set();  // Track removed players within draft session
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
@@ -379,8 +380,13 @@ export function createOverlayPanel(): OverlayPanel {
 
         removeBtn.addEventListener('click', () => {
           const freed_budget = player.price;
-          // Exclude all remaining players AND the removed player so it can't come back
-          const excluded_ea_ids = draftPlayers.map(p => p.ea_id);
+          // Track this player as removed for the entire draft session
+          removedEaIds.add(player.ea_id);
+          // Exclude all remaining players + all previously removed players
+          const excluded_ea_ids = [
+            ...draftPlayers.map(p => p.ea_id),
+            ...removedEaIds,
+          ];
 
           // Instant remove from in-memory draft (D-09)
           draftPlayers.splice(idx, 1);
@@ -562,6 +568,7 @@ export function createOverlayPanel(): OverlayPanel {
     switch (state) {
       case 'empty':
         draftPlayers = [];
+        removedEaIds = new Set();  // Clear removed players for fresh generation
         renderEmpty();
         break;
       case 'draft':
