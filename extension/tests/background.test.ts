@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { enabledItem, lastActionItem } from '../src/storage';
+import { enabledItem, lastActionItem, portfolioItem } from '../src/storage';
 
 const MOCK_ACTION = {
   id: 1,
@@ -143,5 +143,166 @@ describe('maybePoll', () => {
 
     const stored = await lastActionItem.getValue();
     expect(stored).toBeNull();
+  });
+});
+
+// ── Portfolio message handler tests ───────────────────────────────────────────
+
+const MOCK_PORTFOLIO_PLAYERS = [
+  {
+    ea_id: 111,
+    name: 'Test Player',
+    rating: 88,
+    position: 'ST',
+    price: 20000,
+    sell_price: 28000,
+    margin_pct: 0.4,
+    expected_profit: 5000,
+    op_ratio: 0.3,
+    efficiency: 0.25,
+  },
+];
+
+/**
+ * Capture the portfolio onMessage listener registered by background.ts main().
+ * The listener is registered after alarm setup so we need the spy in place before main() runs.
+ */
+async function runBackgroundAndCapture(): Promise<{
+  portfolioListener: (msg: any, sender: any, sendResponse: (r: any) => void) => boolean | void;
+}> {
+  vi.resetModules();
+  const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
+  const mod = await import('../entrypoints/background');
+  const bg = mod.default;
+  bg.main();
+  await new Promise((r) => setTimeout(r, 50));
+
+  // The portfolio listener is the last one registered (after alarm listener)
+  const allCalls = addListenerSpy.mock.calls;
+  const portfolioListener = allCalls[allCalls.length - 1]?.[0] as any;
+  return { portfolioListener };
+}
+
+describe('portfolio message handlers', () => {
+  beforeEach(async () => {
+    fakeBrowser.reset();
+    vi.restoreAllMocks();
+    await enabledItem.setValue(false);
+    await lastActionItem.setValue(null);
+    await portfolioItem.setValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('PORTFOLIO_GENERATE proxies POST to backend and returns PORTFOLIO_GENERATE_RESULT', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: MOCK_PORTFOLIO_PLAYERS.map(p => ({ ...p, buy_price: p.price })),
+        budget_used: 20000,
+        budget_remaining: 80000,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+    expect(portfolioListener).toBeDefined();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener({ type: 'PORTFOLIO_GENERATE', budget: 100000 }, {}, sendResponse);
+
+    // Handler must return true for async response
+    expect(returnVal).toBe(true);
+
+    // Allow the async promise to resolve
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/portfolio/generate',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PORTFOLIO_GENERATE_RESULT', budget_used: 20000 }),
+    );
+  });
+
+  it('PORTFOLIO_CONFIRM proxies POST to backend and stores portfolio in portfolioItem', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ confirmed: 1 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener({ type: 'PORTFOLIO_CONFIRM', players: MOCK_PORTFOLIO_PLAYERS }, {}, sendResponse);
+    expect(returnVal).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/portfolio/confirm',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    // portfolioItem should be stored
+    const stored = await portfolioItem.getValue();
+    expect(stored).not.toBeNull();
+    expect(stored?.players).toHaveLength(1);
+    expect(stored?.players[0].ea_id).toBe(111);
+
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PORTFOLIO_CONFIRM_RESULT', confirmed: 1 }),
+    );
+  });
+
+  it('PORTFOLIO_LOAD returns the stored portfolio from portfolioItem', async () => {
+    const storedPortfolio = {
+      players: MOCK_PORTFOLIO_PLAYERS,
+      budget: 20000,
+      confirmed_at: '2026-03-27T00:00:00.000Z',
+    };
+    await portfolioItem.setValue(storedPortfolio);
+
+    // fetch mock not needed for PORTFOLIO_LOAD — it reads from storage
+    vi.stubGlobal('fetch', vi.fn());
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener({ type: 'PORTFOLIO_LOAD' }, {}, sendResponse);
+    expect(returnVal).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'PORTFOLIO_LOAD_RESULT',
+        portfolio: expect.objectContaining({ budget: 20000 }),
+      }),
+    );
+  });
+
+  it('PORTFOLIO_GENERATE returns error field when fetch throws', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    portfolioListener({ type: 'PORTFOLIO_GENERATE', budget: 50000 }, {}, sendResponse);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'PORTFOLIO_GENERATE_RESULT',
+        error: expect.stringContaining('Network error'),
+        data: [],
+      }),
+    );
   });
 });

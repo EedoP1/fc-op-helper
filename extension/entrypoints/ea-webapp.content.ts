@@ -35,6 +35,20 @@ export default defineContentScript({
           // PONG is a response type — content script should not receive it;
           // handle explicitly to satisfy exhaustive switch (D-05 compile-time safety).
           return false;
+        case 'PORTFOLIO_GENERATE':
+        case 'PORTFOLIO_CONFIRM':
+        case 'PORTFOLIO_SWAP':
+        case 'PORTFOLIO_LOAD':
+          // These are request types sent TO the service worker, not TO the content script.
+          // Content script should not receive these — return false (no response).
+          return false;
+        case 'PORTFOLIO_GENERATE_RESULT':
+        case 'PORTFOLIO_CONFIRM_RESULT':
+        case 'PORTFOLIO_SWAP_RESULT':
+        case 'PORTFOLIO_LOAD_RESULT':
+          // These are response types — content script receives them as sendMessage return values,
+          // not via onMessage listener. Handle explicitly for assertNever exhaustiveness.
+          return false;
         default:
           assertNever(msg);
       }
