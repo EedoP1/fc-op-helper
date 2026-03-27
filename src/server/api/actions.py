@@ -45,6 +45,28 @@ class SeedSlotsPayload(BaseModel):
     slots: list[SlotEntry]
 
 
+class DirectTradeRecordPayload(BaseModel):
+    """Payload for POST /api/v1/trade-records/direct.
+
+    Used by the trade observer for bootstrap reporting — records outcomes
+    without requiring an existing TradeAction (Pitfall 2 resolution).
+    """
+
+    ea_id: int
+    price: int
+    outcome: str  # "bought" | "listed" | "sold" | "expired"
+
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+_OUTCOME_TO_ACTION_TYPE = {
+    "bought": "buy",
+    "listed": "list",
+    "sold": "list",      # sold is the result of a list action
+    "expired": "list",   # expired is the result of a list action
+}
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 async def _reset_stale_actions(session) -> None:
@@ -300,3 +322,59 @@ async def seed_portfolio_slots(payload: SeedSlotsPayload, request: Request):
 
     logger.info("Seeded %d portfolio slots", len(payload.slots))
     return {"status": "ok", "count": len(payload.slots)}
+
+
+@router.post("/trade-records/direct", status_code=201)
+async def direct_trade_record(payload: DirectTradeRecordPayload, request: Request):
+    """Record a trade outcome directly without an action_id.
+
+    Used by the trade observer for bootstrap: when the extension first scans
+    the Transfer List after portfolio confirmation, no TradeActions exist yet.
+    This endpoint inserts a TradeRecord directly so _derive_next_action can
+    correctly determine the next lifecycle step.
+
+    Validates that ea_id exists in portfolio_slots (D-03: only track portfolio players).
+
+    Args:
+        payload: Contains ea_id, price, outcome.
+        request: FastAPI request (session_factory on app.state).
+
+    Returns:
+        Dict with status "ok" and trade_record_id.
+
+    Raises:
+        HTTPException 400 if outcome is invalid.
+        HTTPException 404 if ea_id not in portfolio_slots.
+    """
+    action_type = _OUTCOME_TO_ACTION_TYPE.get(payload.outcome)
+    if action_type is None:
+        raise HTTPException(status_code=400, detail=f"Invalid outcome: {payload.outcome}")
+
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        # Validate ea_id exists in portfolio
+        result = await session.execute(
+            select(PortfolioSlot).where(PortfolioSlot.ea_id == payload.ea_id)
+        )
+        slot = result.scalar_one_or_none()
+        if slot is None:
+            raise HTTPException(status_code=404, detail=f"ea_id {payload.ea_id} not in portfolio")
+
+        now = datetime.utcnow()
+        record = TradeRecord(
+            ea_id=payload.ea_id,
+            action_type=action_type,
+            price=payload.price,
+            outcome=payload.outcome,
+            recorded_at=now,
+        )
+        session.add(record)
+        await session.flush()
+        record_id = record.id
+        await session.commit()
+
+    logger.info(
+        "Direct trade record ea_id=%d outcome=%s price=%d record_id=%d",
+        payload.ea_id, payload.outcome, payload.price, record_id,
+    )
+    return {"status": "ok", "trade_record_id": record_id}
