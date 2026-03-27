@@ -338,14 +338,19 @@ export function createOverlayPanel(): OverlayPanel {
 
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
-        const nameEl = document.createElement('strong');
-        nameEl.textContent = player.name;
-        nameEl.style.color = '#fff';
+        const nameLink = document.createElement('a');
+        nameLink.href = `https://www.fut.gg/players/26/${player.ea_id}/`;
+        nameLink.target = '_blank';
+        nameLink.rel = 'noopener';
+        nameLink.textContent = player.name;
+        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold' });
+        nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
+        nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
         const ratingPos = document.createElement('span');
         ratingPos.textContent = ` ${player.rating} ${player.position}`;
         ratingPos.style.color = '#aaa';
         ratingPos.style.fontSize = '12px';
-        topLine.appendChild(nameEl);
+        topLine.appendChild(nameLink);
         topLine.appendChild(ratingPos);
         row.appendChild(topLine);
 
@@ -492,14 +497,19 @@ export function createOverlayPanel(): OverlayPanel {
 
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
-        const nameEl = document.createElement('strong');
-        nameEl.textContent = player.name;
-        nameEl.style.color = '#fff';
+        const nameLink = document.createElement('a');
+        nameLink.href = `https://www.fut.gg/players/26/${player.ea_id}/`;
+        nameLink.target = '_blank';
+        nameLink.rel = 'noopener';
+        nameLink.textContent = player.name;
+        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold' });
+        nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
+        nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
         const ratingPos = document.createElement('span');
         ratingPos.textContent = ` ${player.rating} ${player.position}`;
         ratingPos.style.color = '#aaa';
         ratingPos.style.fontSize = '12px';
-        topLine.appendChild(nameEl);
+        topLine.appendChild(nameLink);
         topLine.appendChild(ratingPos);
         row.appendChild(topLine);
 
