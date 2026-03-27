@@ -32,3 +32,39 @@ export type PendingAction = {
 export const lastActionItem = storage.defineItem<PendingAction | null>('local:lastAction', {
   fallback: null,
 });
+
+/**
+ * Shape of a single player in the confirmed portfolio.
+ * Mirrors the scored player dict from the backend optimizer.
+ */
+export type PortfolioPlayer = {
+  ea_id: number;
+  name: string;
+  rating: number;
+  position: string;
+  price: number;          // buy_price
+  sell_price: number;
+  margin_pct: number;
+  expected_profit: number;
+  op_ratio: number;
+  efficiency: number;
+};
+
+/**
+ * A portfolio that the user has confirmed — stored locally so the overlay
+ * can display it immediately without a backend round-trip.
+ */
+export type ConfirmedPortfolio = {
+  players: PortfolioPlayer[];
+  budget: number;
+  confirmed_at: string;  // ISO timestamp
+};
+
+/**
+ * Confirmed portfolio persisted across service worker termination.
+ * Written on PORTFOLIO_CONFIRM success, read by PORTFOLIO_LOAD handler.
+ */
+export const portfolioItem = storage.defineItem<ConfirmedPortfolio | null>(
+  'local:portfolio',
+  { fallback: null },
+);
