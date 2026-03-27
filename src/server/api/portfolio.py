@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query, Request, Path, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update, delete, tuple_
+from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, MarketSnapshot
+from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, MarketSnapshot, SnapshotPricePoint
 from src.config import STALE_THRESHOLD_HOURS, VOLATILITY_MAX_PRICE_INCREASE_PCT, VOLATILITY_LOOKBACK_DAYS
 from src.optimizer import optimize_portfolio
 
@@ -95,27 +95,22 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
 
 
 async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[int]:
-    """Return ea_ids whose price increased more than VOLATILITY_MAX_PRICE_INCREASE_PCT
+    """Return ea_ids whose price varied more than VOLATILITY_MAX_PRICE_INCREASE_PCT
     over the last VOLATILITY_LOOKBACK_DAYS days.
 
-    For each player, compares the earliest MarketSnapshot.current_lowest_bin in the
-    lookback window against the latest. If (latest - earliest) / earliest > threshold,
-    the player is volatile.
+    Uses SnapshotPricePoint (fut.gg hourly price history) to compute MIN vs MAX
+    lowest_bin over the lookback window. This catches mid-window price spikes that
+    return to normal — the old earliest-vs-latest MarketSnapshot approach would miss
+    a spike at day -1 if the price had returned to baseline by day 0.
 
-    Players with fewer than 2 snapshots in the window are skipped (not enough data).
+    For each player: if (max_bin - min_bin) / min_bin > threshold, the player is
+    volatile.
 
-    Performance: uses three focused queries instead of the previous four-level nested
-    subquery approach. The original single-query plan caused SQLite to scan ~1.5M rows
-    four times (one pass per subquery materialisation), which took >30s for ~1800
-    ea_ids and caused the endpoint to exceed the 30s client timeout.
+    Players with fewer than 2 SnapshotPricePoint rows in the window are skipped
+    (not enough data).
 
-    The new approach:
-      1. One GROUP BY query — finds min/max captured_at and count per ea_id (uses the
-         composite index on (ea_id, captured_at) efficiently).
-      2. One bulk query — fetches the current_lowest_bin for all (ea_id, min_ts) pairs
-         using an IN clause on the (ea_id, captured_at) pair.
-      3. One bulk query — same for (ea_id, max_ts) pairs.
-    Each of the three queries does at most one full-index range scan.
+    Query: JOIN SnapshotPricePoint to MarketSnapshot on snapshot_id -> id to recover
+    ea_id, then GROUP BY ea_id with MIN/MAX aggregation over lowest_bin.
 
     Args:
         session: Active async DB session.
@@ -130,68 +125,34 @@ async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[
     cutoff = datetime.utcnow() - timedelta(days=VOLATILITY_LOOKBACK_DAYS)
     threshold = VOLATILITY_MAX_PRICE_INCREASE_PCT / 100.0
 
-    # Query 1: single-pass GROUP BY to find boundary timestamps per ea_id.
-    # HAVING filters out players with only one snapshot (insufficient data).
-    # The ix_market_snapshots_ea_id_captured_at index covers (ea_id, captured_at).
-    range_stmt = (
+    # Single GROUP BY query: JOIN SnapshotPricePoint -> MarketSnapshot to get ea_id,
+    # aggregate MIN and MAX lowest_bin over the lookback window.
+    # HAVING count >= 2 filters out players with insufficient data.
+    stmt = (
         select(
             MarketSnapshot.ea_id,
-            func.min(MarketSnapshot.captured_at).label("min_ts"),
-            func.max(MarketSnapshot.captured_at).label("max_ts"),
+            func.min(SnapshotPricePoint.lowest_bin).label("min_bin"),
+            func.max(SnapshotPricePoint.lowest_bin).label("max_bin"),
         )
+        .join(MarketSnapshot, SnapshotPricePoint.snapshot_id == MarketSnapshot.id)
         .where(
             MarketSnapshot.ea_id.in_(ea_ids),
-            MarketSnapshot.captured_at >= cutoff,
+            SnapshotPricePoint.recorded_at >= cutoff,
         )
         .group_by(MarketSnapshot.ea_id)
-        .having(func.count(MarketSnapshot.captured_at) >= 2)
+        .having(func.count(SnapshotPricePoint.id) >= 2)
     )
 
-    range_result = await session.execute(range_stmt)
-    ranges = range_result.all()  # [(ea_id, min_ts, max_ts), ...]
-
-    if not ranges:
-        return set()
-
-    # Build lookup sets for boundary timestamps.
-    min_ts_by_ea_id = {row.ea_id: row.min_ts for row in ranges}
-    max_ts_by_ea_id = {row.ea_id: row.max_ts for row in ranges}
-
-    # Query 2: fetch earliest bin for all ea_ids in one round-trip.
-    # Each (ea_id, captured_at) pair is a primary-key-like index lookup.
-    # SQLite will use ix_market_snapshots_ea_id_captured_at for each OR-branch.
-    earliest_stmt = (
-        select(MarketSnapshot.ea_id, MarketSnapshot.current_lowest_bin)
-        .where(
-            tuple_(MarketSnapshot.ea_id, MarketSnapshot.captured_at).in_(
-                [(ea_id, ts) for ea_id, ts in min_ts_by_ea_id.items()]
-            )
-        )
-    )
-    earliest_result = await session.execute(earliest_stmt)
-    earliest_bin_by_ea_id = {row.ea_id: row.current_lowest_bin for row in earliest_result.all()}
-
-    # Query 3: fetch latest bin for all ea_ids in one round-trip.
-    latest_stmt = (
-        select(MarketSnapshot.ea_id, MarketSnapshot.current_lowest_bin)
-        .where(
-            tuple_(MarketSnapshot.ea_id, MarketSnapshot.captured_at).in_(
-                [(ea_id, ts) for ea_id, ts in max_ts_by_ea_id.items()]
-            )
-        )
-    )
-    latest_result = await session.execute(latest_stmt)
-    latest_bin_by_ea_id = {row.ea_id: row.current_lowest_bin for row in latest_result.all()}
+    result = await session.execute(stmt)
+    rows = result.all()
 
     # Evaluate volatility in Python — O(N) over the candidate set.
     volatile = set()
-    for ea_id in min_ts_by_ea_id:
-        earliest_bin = earliest_bin_by_ea_id.get(ea_id)
-        latest_bin = latest_bin_by_ea_id.get(ea_id)
-        if earliest_bin and earliest_bin > 0 and latest_bin is not None:
-            increase = (latest_bin - earliest_bin) / earliest_bin
+    for row in rows:
+        if row.min_bin and row.min_bin > 0:
+            increase = (row.max_bin - row.min_bin) / row.min_bin
             if increase > threshold:
-                volatile.add(ea_id)
+                volatile.add(row.ea_id)
 
     return volatile
 
