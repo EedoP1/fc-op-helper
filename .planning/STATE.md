@@ -105,9 +105,10 @@ None yet.
 | 260326-ufn | Fix all FUTBIN findings: deduplicate snapshot_sales, populate player names, set scorer_version | 2026-03-26 | ed8adc8 | [260326-ufn-fix-all-futbin-findings-deduplicate-snap](./quick/260326-ufn-fix-all-futbin-findings-deduplicate-snap/) |
 | 260326-vkj | Fix resolve_outcomes double-counting: timestamp-filter completedAuctions by last_resolved_at | 2026-03-26 | 0af76c8 | [260326-vkj-fix-listing-tracker-resolve-outcomes-dou](./quick/260326-vkj-fix-listing-tracker-resolve-outcomes-dou/) |
 | 260326-wac | Build FUTBIN health monitor CLI with audit report | 2026-03-26 | f45f78d | [260326-wac-build-futbin-health-monitor-hourly-sched](./quick/260326-wac-build-futbin-health-monitor-hourly-sched/) |
+| 260327-gxd | Add volatility filter to exclude players with >30% price increase over 3 days | 2026-03-27 | c55dc80 | [260327-gxd-add-volatility-filter-to-exclude-players](./quick/260327-gxd-add-volatility-filter-to-exclude-players/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-27
-Stopped at: Completed 07-portfolio-management plan 03 — awaiting checkpoint human-verify
+Stopped at: Completed quick task 260327-gxd — volatility filter applied to portfolio endpoints
 Resume file: None
