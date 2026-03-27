@@ -10,7 +10,7 @@
  *   - D-03: Polling gated by enabled flag in storage (Phase 8 UI wires the toggle)
  *   - D-04: Backend URL hardcoded to localhost:8000 (v1.1 is localhost-only)
  */
-import { enabledItem, lastActionItem, portfolioItem, PortfolioPlayer } from '../src/storage';
+import { enabledItem, lastActionItem, portfolioItem, PortfolioPlayer, ConfirmedPortfolio } from '../src/storage';
 import { ExtensionMessage } from '../src/messages';
 
 const BACKEND_URL = 'http://localhost:8000';
@@ -53,9 +53,7 @@ export default defineBackground({
           handlePortfolioSwap(msg.ea_id, msg.freed_budget, msg.excluded_ea_ids).then(sendResponse);
           return true;
         case 'PORTFOLIO_LOAD':
-          portfolioItem.getValue().then(portfolio =>
-            sendResponse({ type: 'PORTFOLIO_LOAD_RESULT', portfolio } satisfies ExtensionMessage)
-          );
+          handlePortfolioLoad().then(sendResponse);
           return true;
         case 'TRADE_REPORT':
           handleTradeReport(msg.ea_id, msg.price, msg.outcome).then(sendResponse);
@@ -67,6 +65,45 @@ export default defineBackground({
     });
   },
 });
+
+/**
+ * Load portfolio — check storage first, fall back to backend /portfolio/confirmed.
+ * After a fresh extension install, storage is empty but the backend may have a
+ * confirmed portfolio from a previous session. Fetching it restores the state
+ * so the trade observer can start matching immediately.
+ */
+async function handlePortfolioLoad(): Promise<ExtensionMessage> {
+  // Try storage first (fast, survives page refresh)
+  const stored = await portfolioItem.getValue();
+  if (stored && stored.players.length > 0) {
+    return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: stored };
+  }
+
+  // Storage empty — try backend
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/confirmed`);
+    if (!res.ok) {
+      return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null };
+    }
+    const json = await res.json();
+    if (!json.data || json.data.length === 0) {
+      return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null };
+    }
+
+    const players = json.data.map(mapToPortfolioPlayer);
+    const portfolio: ConfirmedPortfolio = {
+      players,
+      budget: players.reduce((s: number, p: PortfolioPlayer) => s + p.price, 0),
+      confirmed_at: new Date().toISOString(),
+    };
+
+    // Persist to storage so future loads are instant
+    await portfolioItem.setValue(portfolio);
+    return { type: 'PORTFOLIO_LOAD_RESULT', portfolio };
+  } catch {
+    return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null };
+  }
+}
 
 /**
  * Map raw backend JSON to a typed PortfolioPlayer.
