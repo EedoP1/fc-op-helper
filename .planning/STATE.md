@@ -85,6 +85,10 @@ Plan: Not started
 - [Phase 07-portfolio-management]: Panel declared before wxt:locationchange handler to avoid TDZ — const panel hoisted above ctx.addEventListener
 - [Phase 07-portfolio-management]: PORTFOLIO_LOAD guarded by ctx.isInvalid check to preserve existing test contract (no sendMessage when ctx invalid)
 
+### Roadmap Evolution
+
+- Phase 07.1 inserted after Phase 07: Portfolio Dashboard & Trade Tracking (user request — manual visibility before automation)
+
 ### Pending Todos
 
 None yet.
