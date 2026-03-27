@@ -48,6 +48,7 @@ export type PortfolioPlayer = {
   expected_profit: number;
   op_ratio: number;
   efficiency: number;
+  futgg_url?: string | null;
 };
 
 /**

@@ -285,6 +285,12 @@ class ScannerService:
             self._circuit_breaker.record_failure()
             self._scan_results_1h.append((datetime.now(timezone.utc), False))
             logger.error(f"scan_player({ea_id}) failed after retries: {exc}")
+            # Reschedule so the player doesn't get stuck in the dispatch queue
+            async with self._session_factory() as session:
+                record = await session.get(PlayerRecord, ea_id)
+                if record is not None:
+                    record.next_scan_at = datetime.utcnow() + timedelta(seconds=SCAN_INTERVAL_SECONDS * 2)
+                await session.commit()
             return
 
         async with self._session_factory() as session:
@@ -393,6 +399,8 @@ class ScannerService:
                     # Populate player name from API data
                     if market_data.player and market_data.player.name:
                         record.name = market_data.player.name
+                    if market_data.futgg_url:
+                        record.futgg_url = market_data.futgg_url
 
             # Schedule next scan at fixed 5-minute interval
             if record is not None:

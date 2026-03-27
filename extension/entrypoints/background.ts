@@ -81,6 +81,7 @@ function mapToPortfolioPlayer(p: any): PortfolioPlayer {
     expected_profit: p.expected_profit ?? 0,
     op_ratio: p.op_ratio ?? 0,
     efficiency: p.efficiency ?? 0,
+    futgg_url: p.futgg_url ?? null,
   };
 }
 
