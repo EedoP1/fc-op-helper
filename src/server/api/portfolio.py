@@ -11,9 +11,10 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Query, Request, Path, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction
-from src.config import STALE_THRESHOLD_HOURS
+from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, MarketSnapshot
+from src.config import STALE_THRESHOLD_HOURS, VOLATILITY_MAX_PRICE_INCREASE_PCT, VOLATILITY_LOOKBACK_DAYS
 from src.optimizer import optimize_portfolio
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,97 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "expected_profit_per_hour": score.expected_profit_per_hour,
         "futgg_url": record.futgg_url,
     }
+
+
+async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[int]:
+    """Return ea_ids whose price increased more than VOLATILITY_MAX_PRICE_INCREASE_PCT
+    over the last VOLATILITY_LOOKBACK_DAYS days.
+
+    For each player, compares the earliest MarketSnapshot.current_lowest_bin in the
+    lookback window against the latest. If (latest - earliest) / earliest > threshold,
+    the player is volatile.
+
+    Players with fewer than 2 distinct snapshot timestamps in the window are skipped
+    (not enough data to determine trend).
+
+    Args:
+        session: Active async DB session.
+        ea_ids: List of ea_ids to check.
+
+    Returns:
+        Set of ea_ids considered volatile.
+    """
+    if not ea_ids:
+        return set()
+
+    cutoff = datetime.utcnow() - timedelta(days=VOLATILITY_LOOKBACK_DAYS)
+    threshold = VOLATILITY_MAX_PRICE_INCREASE_PCT / 100.0
+
+    # Query the min and max captured_at timestamps per ea_id in the lookback window
+    time_range_subq = (
+        select(
+            MarketSnapshot.ea_id,
+            func.min(MarketSnapshot.captured_at).label("min_ts"),
+            func.max(MarketSnapshot.captured_at).label("max_ts"),
+            func.count(MarketSnapshot.captured_at).label("snap_count"),
+        )
+        .where(
+            MarketSnapshot.ea_id.in_(ea_ids),
+            MarketSnapshot.captured_at >= cutoff,
+        )
+        .group_by(MarketSnapshot.ea_id)
+        .subquery()
+    )
+
+    # Filter to only ea_ids with 2+ distinct timestamps (sufficient data)
+    # Join to get the earliest price
+    earliest_subq = (
+        select(
+            MarketSnapshot.ea_id,
+            MarketSnapshot.current_lowest_bin.label("earliest_bin"),
+        )
+        .join(
+            time_range_subq,
+            (MarketSnapshot.ea_id == time_range_subq.c.ea_id)
+            & (MarketSnapshot.captured_at == time_range_subq.c.min_ts),
+        )
+        .where(time_range_subq.c.snap_count >= 2)
+        .subquery()
+    )
+
+    # Join to get the latest price
+    latest_subq = (
+        select(
+            MarketSnapshot.ea_id,
+            MarketSnapshot.current_lowest_bin.label("latest_bin"),
+        )
+        .join(
+            time_range_subq,
+            (MarketSnapshot.ea_id == time_range_subq.c.ea_id)
+            & (MarketSnapshot.captured_at == time_range_subq.c.max_ts),
+        )
+        .where(time_range_subq.c.snap_count >= 2)
+        .subquery()
+    )
+
+    # Final query: join earliest and latest to compute increase
+    stmt = select(
+        earliest_subq.c.ea_id,
+        earliest_subq.c.earliest_bin,
+        latest_subq.c.latest_bin,
+    ).join(latest_subq, earliest_subq.c.ea_id == latest_subq.c.ea_id)
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    volatile = set()
+    for ea_id, earliest_bin, latest_bin in rows:
+        if earliest_bin and earliest_bin > 0:
+            increase = (latest_bin - earliest_bin) / earliest_bin
+            if increase > threshold:
+                volatile.add(ea_id)
+
+    return volatile
 
 
 @router.get("/portfolio")
