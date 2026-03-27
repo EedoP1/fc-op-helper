@@ -17,6 +17,8 @@ import {
   ITEM_STATUS_LABEL,
   ITEM_PLAYER_NAME,
   ITEM_BIN_PRICE,
+  ITEM_RATING,
+  ITEM_POSITION,
 } from '../src/selectors';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +87,8 @@ interface ItemConfig {
   name: string;
   status: string;
   price?: string;
+  rating?: string;
+  position?: string;
 }
 
 /**
@@ -106,6 +110,18 @@ function buildTransferList(items: ItemConfig[]): HTMLElement {
     nameEl.className = classFromSelector(ITEM_PLAYER_NAME);
     nameEl.textContent = item.name;
     li.appendChild(nameEl);
+
+    // ITEM_RATING = '.rating'
+    const ratingEl = document.createElement('span');
+    ratingEl.className = classFromSelector(ITEM_RATING);
+    ratingEl.textContent = item.rating ?? '90';
+    li.appendChild(ratingEl);
+
+    // ITEM_POSITION = '.position'
+    const positionEl = document.createElement('span');
+    positionEl.className = classFromSelector(ITEM_POSITION);
+    positionEl.textContent = item.position ?? 'ST';
+    li.appendChild(positionEl);
 
     // ITEM_STATUS_LABEL = '.auction-state .time'
     li.appendChild(buildStatusElement(item.status));
@@ -142,8 +158,8 @@ describe('readTransferList', () => {
     const result = readTransferList(root);
     expect(result).toHaveLength(2);
 
-    expect(result[0]).toEqual({ playerName: 'Mbappé', status: 'expired', price: 15000 });
-    expect(result[1]).toEqual({ playerName: 'Haaland', status: 'sold', price: 25000 });
+    expect(result[0]).toEqual({ playerName: 'Mbappé', rating: 90, position: 'ST', status: 'expired', price: 15000 });
+    expect(result[1]).toEqual({ playerName: 'Haaland', rating: 90, position: 'ST', status: 'sold', price: 25000 });
   });
 
   it('skips items with missing name element', () => {

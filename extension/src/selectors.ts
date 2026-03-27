@@ -36,3 +36,9 @@ export const ITEM_BIN_PRICE = '.auction .auctionValue:nth-child(3) .value';
 
 /** Start price / current bid displayed in the auction info section */
 export const ITEM_START_PRICE = '.auctionStartPrice .value';
+
+/** Player overall rating number on the card */
+export const ITEM_RATING = '.rating';
+
+/** Player position abbreviation on the card (e.g. "CAM", "ST") */
+export const ITEM_POSITION = '.position';
