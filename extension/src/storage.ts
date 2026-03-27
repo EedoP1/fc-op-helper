@@ -69,3 +69,14 @@ export const portfolioItem = storage.defineItem<ConfirmedPortfolio | null>(
   'local:portfolio',
   { fallback: null },
 );
+
+/**
+ * Deduplication set for reported trade outcomes (D-07).
+ * Keys are composite: "{ea_id}:{outcome}:{price}" to uniquely identify events.
+ * Checked before every report; written after successful report.
+ * Survives service worker termination and page refreshes.
+ */
+export const reportedOutcomesItem = storage.defineItem<string[]>(
+  'local:reportedOutcomes',
+  { fallback: [] },
+);

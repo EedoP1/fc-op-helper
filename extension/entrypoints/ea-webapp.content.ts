@@ -52,6 +52,12 @@ export default defineContentScript({
           // These are response types — content script receives them as sendMessage return values,
           // not via onMessage listener. Handle explicitly for assertNever exhaustiveness.
           return false;
+        case 'TRADE_REPORT':
+          // Request type sent TO the service worker — content script should not receive it via onMessage.
+          return false;
+        case 'TRADE_REPORT_RESULT':
+          // Response type — received as sendMessage return value, not via onMessage.
+          return false;
         default:
           assertNever(msg);
       }

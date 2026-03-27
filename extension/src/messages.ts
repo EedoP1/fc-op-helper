@@ -16,7 +16,10 @@ export type ExtensionMessage =
   | { type: 'PORTFOLIO_SWAP'; ea_id: number; freed_budget: number; excluded_ea_ids: number[] }
   | { type: 'PORTFOLIO_SWAP_RESULT'; replacements: PortfolioPlayer[]; error?: string }
   | { type: 'PORTFOLIO_LOAD' }
-  | { type: 'PORTFOLIO_LOAD_RESULT'; portfolio: ConfirmedPortfolio | null };
+  | { type: 'PORTFOLIO_LOAD_RESULT'; portfolio: ConfirmedPortfolio | null }
+  // Trade reporting (Phase 07.1: passive DOM reading → backend relay)
+  | { type: 'TRADE_REPORT'; ea_id: number; price: number; outcome: 'bought' | 'listed' | 'sold' | 'expired' }
+  | { type: 'TRADE_REPORT_RESULT'; success: boolean; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.
