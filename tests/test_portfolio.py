@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from src.server.db import create_engine_and_tables
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotPricePoint
 from src.server.api.portfolio import router as portfolio_router, _get_volatile_ea_ids
 from tests.test_api import make_test_app
 
@@ -199,15 +199,26 @@ async def volatile_db():
 
 
 async def _seed_snapshots(session_factory, snapshots: list[tuple[int, datetime, int]]):
-    """Seed MarketSnapshot rows: (ea_id, captured_at, current_lowest_bin)."""
+    """Seed MarketSnapshot + SnapshotPricePoint rows: (ea_id, captured_at, current_lowest_bin).
+
+    Each MarketSnapshot is flushed to obtain its id, then a matching SnapshotPricePoint
+    is added so _get_volatile_ea_ids (which reads SnapshotPricePoint) sees the same data.
+    """
     async with session_factory() as session:
         for ea_id, captured_at, bin_price in snapshots:
-            session.add(MarketSnapshot(
+            snapshot = MarketSnapshot(
                 ea_id=ea_id,
                 captured_at=captured_at,
                 current_lowest_bin=bin_price,
                 listing_count=10,
                 live_auction_prices="[]",
+            )
+            session.add(snapshot)
+            await session.flush()  # get snapshot.id
+            session.add(SnapshotPricePoint(
+                snapshot_id=snapshot.id,
+                recorded_at=captured_at,
+                lowest_bin=bin_price,
             ))
         await session.commit()
 
@@ -255,15 +266,19 @@ async def test_insufficient_data_not_flagged(volatile_db):
     assert 3003 not in volatile
 
 
-async def test_price_decrease_not_flagged(volatile_db):
-    """Player whose price DECREASED is NOT returned in the volatile set."""
+async def test_price_decrease_small_not_flagged(volatile_db):
+    """Player whose price decreased modestly (within 30% threshold) is NOT flagged.
+
+    MIN/MAX approach: (max - min) / min = (11000 - 9000) / 9000 ≈ 22% < 30% threshold.
+    Player is stable despite a slight downward trend.
+    """
     engine, session_factory = volatile_db
     now = datetime.utcnow()
-    # ea_id=3004: price dropped from 15000 to 10000 — not volatile
+    # ea_id=3004: price dropped from 11000 to 9000 (~22%) — within stable threshold
     await _seed_snapshots(session_factory, [
-        (3004, now - timedelta(days=2), 15000),
-        (3004, now - timedelta(days=1), 12000),
-        (3004, now, 10000),
+        (3004, now - timedelta(days=2), 11000),
+        (3004, now - timedelta(days=1), 10000),
+        (3004, now, 9000),
     ])
     async with session_factory() as session:
         volatile = await _get_volatile_ea_ids(session, [3004])
@@ -346,12 +361,19 @@ async def volatility_integration_app(db):
             (now - timedelta(days=1), 12000),
             (now, 15000),
         ]:
-            session.add(MarketSnapshot(
+            snapshot = MarketSnapshot(
                 ea_id=4001,
                 captured_at=captured_at,
                 current_lowest_bin=bin_price,
                 listing_count=30,
                 live_auction_prices="[]",
+            )
+            session.add(snapshot)
+            await session.flush()
+            session.add(SnapshotPricePoint(
+                snapshot_id=snapshot.id,
+                recorded_at=captured_at,
+                lowest_bin=bin_price,
             ))
 
         # Stable player: 10% increase (10000 -> 11000) over 3 days
@@ -360,12 +382,19 @@ async def volatility_integration_app(db):
             (now - timedelta(days=1), 10500),
             (now, 11000),
         ]:
-            session.add(MarketSnapshot(
+            snapshot = MarketSnapshot(
                 ea_id=4002,
                 captured_at=captured_at,
                 current_lowest_bin=bin_price,
                 listing_count=30,
                 live_auction_prices="[]",
+            )
+            session.add(snapshot)
+            await session.flush()
+            session.add(SnapshotPricePoint(
+                snapshot_id=snapshot.id,
+                recorded_at=captured_at,
+                lowest_bin=bin_price,
             ))
 
         await session.commit()
@@ -404,3 +433,25 @@ async def test_generate_portfolio_excludes_volatile_player(volatility_integratio
     ea_ids_in_response = {p["ea_id"] for p in body["data"]}
     assert 4001 not in ea_ids_in_response, "Volatile player should be excluded"
     assert 4002 in ea_ids_in_response, "Stable player should be included"
+
+
+async def test_mid_window_spike_detected(volatile_db):
+    """Mid-window price spike is detected even when price returns to baseline by day 0.
+
+    Old approach (earliest-vs-latest): day -2 at 10000, day 0 at 10500 — only +5%
+    increase, NOT flagged as volatile.
+
+    New approach (min-vs-max): min=10000, max=16000 (spike at day -1) — +60%
+    increase, correctly flagged as volatile.
+    """
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3010: price spiked mid-window then returned to near-normal
+    await _seed_snapshots(session_factory, [
+        (3010, now - timedelta(days=2), 10000),     # baseline
+        (3010, now - timedelta(days=1), 16000),     # spike (+60%)
+        (3010, now, 10500),                          # returned to normal
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3010])
+    assert 3010 in volatile, "Mid-window spike should be detected via MIN/MAX aggregation"
