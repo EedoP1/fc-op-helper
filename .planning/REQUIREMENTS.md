@@ -25,7 +25,7 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 
 ### Portfolio Management
 
-- [ ] **PORT-01**: Backend exposes endpoint to generate OP sell portfolio for a given budget (runs scorer/optimizer) and seeds portfolio_slots
+- [x] **PORT-01**: Backend exposes endpoint to generate OP sell portfolio for a given budget (runs scorer/optimizer) and seeds portfolio_slots
 - [x] **UI-01**: Overlay panel injected into EA Web App showing backend-recommended portfolio (player name, buy price, OP price, margin)
 - [x] **UI-03**: User can remove a player from the list and receive replacement player(s) from the backend
 
@@ -38,7 +38,7 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [ ] **AUTO-05**: All DOM interactions use human-like delays with randomized jitter (800-2500ms)
 - [ ] **AUTO-06**: Extension detects CAPTCHA and stops automation immediately, alerting the user
 - [ ] **AUTO-07**: Extension fails loudly on DOM mismatch (missing elements) rather than silently continuing
-- [ ] **AUTO-08**: All selectors centralized in one file for maintainability against EA Web App updates
+- [x] **AUTO-08**: All selectors centralized in one file for maintainability against EA Web App updates
 - [ ] **UI-02**: User can confirm the portfolio list to start the automated buy/list/relist cycle
 - [ ] **UI-04**: Start/stop automation toggle in overlay panel
 - [ ] **UI-05**: Status display showing current action, last event, and running/stopped/error state
@@ -90,7 +90,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ARCH-02 | Phase 6 | Complete |
 | ARCH-03 | Phase 6 | Complete |
 | ARCH-04 | Phase 6 | Complete |
-| PORT-01 | Phase 7 | Pending |
+| PORT-01 | Phase 7 | Complete |
 | UI-01 | Phase 7 | Complete |
 | UI-03 | Phase 7 | Complete |
 | AUTO-01 | Phase 8 | Pending |
@@ -100,7 +100,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTO-05 | Phase 8 | Pending |
 | AUTO-06 | Phase 8 | Pending |
 | AUTO-07 | Phase 8 | Pending |
-| AUTO-08 | Phase 8 | Pending |
+| AUTO-08 | Phase 8 | Complete |
 | UI-02 | Phase 8 | Pending |
 | UI-04 | Phase 8 | Pending |
 | UI-05 | Phase 8 | Pending |
