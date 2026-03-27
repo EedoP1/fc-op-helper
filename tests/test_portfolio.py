@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from src.server.db import create_engine_and_tables
-from src.server.models_db import PlayerRecord, PlayerScore
-from src.server.api.portfolio import router as portfolio_router
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot
+from src.server.api.portfolio import router as portfolio_router, _get_volatile_ea_ids
 from tests.test_api import make_test_app
 
 
@@ -186,3 +186,105 @@ async def test_portfolio_empty_db(db):
     assert "error" in body
     assert body["data"] == []
     assert body["count"] == 0
+
+
+# ── Volatility filter unit tests ───────────────────────────────────────────────
+
+@pytest.fixture
+async def volatile_db():
+    """In-memory SQLite DB seeded with MarketSnapshot data for volatility tests."""
+    engine, session_factory = await create_engine_and_tables("sqlite+aiosqlite:///:memory:")
+    yield engine, session_factory
+    await engine.dispose()
+
+
+async def _seed_snapshots(session_factory, snapshots: list[tuple[int, datetime, int]]):
+    """Seed MarketSnapshot rows: (ea_id, captured_at, current_lowest_bin)."""
+    async with session_factory() as session:
+        for ea_id, captured_at, bin_price in snapshots:
+            session.add(MarketSnapshot(
+                ea_id=ea_id,
+                captured_at=captured_at,
+                current_lowest_bin=bin_price,
+                listing_count=10,
+                live_auction_prices="[]",
+            ))
+        await session.commit()
+
+
+async def test_volatile_player_50pct_increase_is_flagged(volatile_db):
+    """Player with 50% price increase over 3 days is returned in the volatile set."""
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3001: price went from 10000 to 15000 (+50%) over 3 days — volatile
+    await _seed_snapshots(session_factory, [
+        (3001, now - timedelta(days=2, hours=12), 10000),
+        (3001, now - timedelta(days=1), 12000),
+        (3001, now, 15000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3001])
+    assert 3001 in volatile
+
+
+async def test_stable_player_10pct_increase_not_flagged(volatile_db):
+    """Player with only 10% price increase is NOT returned in the volatile set."""
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3002: price went from 10000 to 11000 (+10%) — stable
+    await _seed_snapshots(session_factory, [
+        (3002, now - timedelta(days=2), 10000),
+        (3002, now - timedelta(days=1), 10500),
+        (3002, now, 11000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3002])
+    assert 3002 not in volatile
+
+
+async def test_insufficient_data_not_flagged(volatile_db):
+    """Player with fewer than 2 distinct timestamps in lookback window is NOT flagged."""
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3003: only one snapshot — cannot determine trend
+    await _seed_snapshots(session_factory, [
+        (3003, now - timedelta(hours=6), 10000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3003])
+    assert 3003 not in volatile
+
+
+async def test_price_decrease_not_flagged(volatile_db):
+    """Player whose price DECREASED is NOT returned in the volatile set."""
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3004: price dropped from 15000 to 10000 — not volatile
+    await _seed_snapshots(session_factory, [
+        (3004, now - timedelta(days=2), 15000),
+        (3004, now - timedelta(days=1), 12000),
+        (3004, now, 10000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3004])
+    assert 3004 not in volatile
+
+
+async def test_mixed_players_only_volatile_flagged(volatile_db):
+    """Multiple players — only the volatile ones appear in the volatile set."""
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # 3005: +50% — volatile
+    # 3006: +10% — stable
+    # 3007: -20% — stable
+    await _seed_snapshots(session_factory, [
+        (3005, now - timedelta(days=2), 10000),
+        (3005, now, 15000),
+        (3006, now - timedelta(days=2), 10000),
+        (3006, now, 11000),
+        (3007, now - timedelta(days=2), 20000),
+        (3007, now, 16000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3005, 3006, 3007])
+    assert volatile == {3005}
