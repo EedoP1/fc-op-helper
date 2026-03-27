@@ -10,8 +10,11 @@
  *   - ARCH-04: Re-initializes listeners on SPA navigation (wxt:locationchange primary)
  *   - D-08: MutationObserver on document.body as SPA navigation fallback
  *   - D-09: Auto-reconnect loop retries on service worker disconnection
+ *   - D-01: Overlay panel injected as collapsible right sidebar
+ *   - D-11: Confirmed portfolio loaded from backend on page mount
  */
 import { ExtensionMessage, assertNever } from '../src/messages';
+import { createOverlayPanel } from '../src/overlay/panel';
 
 export default defineContentScript({
   matches: ['https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*'],
@@ -63,11 +66,25 @@ export default defineContentScript({
       chrome.runtime.onMessage.removeListener(handleMessage);
     }
 
+    // ── Overlay panel injection (D-01: right sidebar) ──────────────────────
+    // Created before event handlers so the wxt:locationchange handler can reference it.
+    const panel = createOverlayPanel();
+    document.body.appendChild(panel.container);
+    document.body.appendChild(panel.toggle);
+
+    // Clean up on content script invalidation
+    ctx.onInvalidated(() => panel.destroy());
+
     // Primary SPA detection: WXT locationchange fires on History API navigation (D-04/D-08)
     ctx.addEventListener(window, 'wxt:locationchange', () => {
       teardownListeners();
       initListeners();
       console.log('[OP Seller CS] Re-initialized after SPA navigation to', location.href);
+      // Re-inject panel if removed by SPA navigation (Pitfall 5 from research)
+      if (!document.body.contains(panel.container)) {
+        document.body.appendChild(panel.container);
+        document.body.appendChild(panel.toggle);
+      }
     });
 
     // D-08 Fallback: MutationObserver on document.body for EA SPA container replacement
@@ -95,5 +112,25 @@ export default defineContentScript({
     initListeners();
     tryReconnect();
     console.log('[OP Seller CS] Content script loaded');
+
+    // Load confirmed portfolio on mount (D-11: backend is source of truth)
+    // Guard: skip if content script is already invalidated before this runs
+    if (!ctx.isInvalid) {
+      chrome.runtime.sendMessage({ type: 'PORTFOLIO_LOAD' } satisfies ExtensionMessage)
+        .then((res: ExtensionMessage) => {
+          if (res.type === 'PORTFOLIO_LOAD_RESULT' && res.portfolio) {
+            panel.setState('confirmed', {
+              players: res.portfolio.players,
+              budget: res.portfolio.budget,
+              budget_used: res.portfolio.players.reduce((s, p) => s + p.price, 0),
+              budget_remaining: 0,
+            });
+          }
+          // If null, panel stays in EMPTY state
+        })
+        .catch(() => {
+          // Service worker not ready — panel stays in EMPTY state
+        });
+    }
   },
 });
