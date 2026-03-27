@@ -23,8 +23,8 @@
 
 - [ ] **Phase 5: Backend Infrastructure** - New DB tables and API endpoints for action queue, trade tracking, and profit summary
 - [x] **Phase 6: Extension Architecture Foundation** - WXT scaffold, MV3 service worker with chrome.alarms polling, typed message protocol (completed 2026-03-26)
-- [ ] **Phase 7: DOM Automation Layer** - Buy/list/relist automation with price guard, human-paced delays, CAPTCHA detection, centralized selectors
-- [ ] **Phase 8: Extension UI + Validation** - Overlay panel, start/stop controls, player swap, end-to-end cycle validation
+- [ ] **Phase 7: Portfolio Management** - Portfolio generation endpoint, overlay panel showing portfolio, player swap UI
+- [ ] **Phase 8: DOM Automation Layer** - Buy/list/relist automation with price guard, human-paced delays, CAPTCHA detection, start/stop controls, status display
 
 ## Phase Details
 
@@ -59,35 +59,34 @@ Plans:
 - [x] 06-02-PLAN.md — Content script with typed message handling, SPA re-init, Chrome load verification
 **UI hint**: yes
 
-### Phase 7: DOM Automation Layer
-**Goal**: Extension can autonomously execute the full buy/list/relist cycle on the EA Web App with price guard, human-paced timing, and loud failure on any DOM error
+### Phase 7: Portfolio Management
+**Goal**: User can generate an OP sell portfolio from the extension, view it in an overlay panel on the EA Web App, and swap out players — the foundation that automation builds on
 **Depends on**: Phase 6
-**Requirements**: AUTO-01, AUTO-02, AUTO-03, AUTO-04, AUTO-05, AUTO-06, AUTO-07, AUTO-08
+**Requirements**: PORT-01, UI-01, UI-03
+**Success Criteria** (what must be TRUE):
+  1. Backend exposes `POST /api/v1/portfolio/generate` that accepts a budget, runs the scorer/optimizer, and seeds portfolio_slots; the generated list is returned in the response
+  2. Overlay panel appears on the EA Web App showing the portfolio (player name, buy price, OP sell price, margin) without disrupting existing page layout
+  3. User can remove a player from the overlay list and a replacement player appears within the same panel (backend re-runs optimizer with freed budget)
+  4. Portfolio persists across browser sessions — reopening the EA Web App shows the same portfolio until the user regenerates
+**Plans**: 3 plans
+Plans:
+- [ ] 07-01-PLAN.md — Backend endpoints: POST /generate, POST /confirm, POST /swap-preview, GET /confirmed + tests
+- [ ] 07-02-PLAN.md — Extension message types, storage types, service worker portfolio proxy handlers + tests
+- [ ] 07-03-PLAN.md — Overlay panel DOM injection, three-state UI, content script integration + visual verification
+**UI hint**: yes
+
+### Phase 8: DOM Automation Layer
+**Goal**: Extension autonomously executes the full buy/list/relist cycle on the EA Web App with price guard, human-paced timing, CAPTCHA detection, and user controls for start/stop and status
+**Depends on**: Phase 7
+**Requirements**: AUTO-01, AUTO-02, AUTO-03, AUTO-04, AUTO-05, AUTO-06, AUTO-07, AUTO-08, UI-02, UI-04, UI-05
 **Success Criteria** (what must be TRUE):
   1. Extension searches for a target player and executes Buy Now only when the live BIN is at or below the backend buy price; cards priced above are skipped without any action
   2. A purchased card is auto-listed at the locked OP price from the portfolio within one automation cycle
   3. An expired card is auto-relisted at the same locked OP price it was originally listed at (price does not update)
   4. All DOM interactions have randomized jitter (800-2500ms); no two consecutive action intervals are identical
   5. When automation encounters a CAPTCHA, it stops immediately and alerts the user; when any DOM element is missing, it fails loudly with the selector name rather than silently continuing
-**Plans**: 5 plans
-Plans:
-- [ ] 07-01-PLAN.md — Foundation: selectors.ts, dom-utils.ts, message protocol extension, PendingAction extension
-- [ ] 07-02-PLAN.md — Backend schema extension: card_version and position on PortfolioSlot, TradeAction, API
-- [ ] 07-03-PLAN.md — BUY flow: adaptive price sweep, price guard, Buy Now execution
-- [ ] 07-04-PLAN.md — LIST + RELIST flows: unassigned items listing, transfer list Relist All
-- [ ] 07-05-PLAN.md — Integration: service worker dispatch, content script wiring, CAPTCHA detection
-**UI hint**: yes
-
-### Phase 8: Extension UI + Validation
-**Goal**: User can operate the full automation cycle through the EA Web App overlay — view recommendations, confirm the list, swap players, start/stop automation, and see running status — with end-to-end behavior validated on a real account
-**Depends on**: Phase 7
-**Requirements**: UI-01, UI-02, UI-03, UI-04, UI-05
-**Success Criteria** (what must be TRUE):
-  1. Overlay panel appears on the EA Web App showing the backend portfolio (player name, buy price, OP price, margin) without disrupting existing page layout
-  2. User clicks Confirm to start the automated cycle; the extension begins processing actions immediately
-  3. User can remove a player from the overlay list and a replacement player appears within the same panel
-  4. Start/stop toggle halts automation mid-cycle and resumes from the correct next action on restart
-  5. Status display shows current action, last event, and running/stopped/error state at all times
+  6. User clicks Confirm to start the automated cycle; start/stop toggle halts automation mid-cycle and resumes from the correct next action
+  7. Status display shows current action, last event, and running/stopped/error state at all times
 **Plans**: TBD
 **UI hint**: yes
 
@@ -104,5 +103,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 8
 | 4. Refactor Scoring + DB | v1.0 | 4/4 | Complete | 2026-03-25 |
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
-| 7. DOM Automation Layer | v1.1 | 0/5 | Not started | - |
-| 8. Extension UI + Validation | v1.1 | 0/TBD | Not started | - |
+| 7. Portfolio Management | v1.1 | 0/3 | Not started | - |
+| 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
