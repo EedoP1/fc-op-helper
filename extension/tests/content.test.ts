@@ -168,4 +168,50 @@ describe('content script message handling', () => {
     expect(typeof retryFn).toBe('function');
     expect(retryDelay).toBe(2000);
   });
+
+  it('returns false (not handled) when content script receives PORTFOLIO_GENERATE request type', async () => {
+    // PORTFOLIO_GENERATE is a request type sent TO the service worker.
+    // Content script switch handles it with return false — no error thrown.
+    const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
+    const mod = await import('../entrypoints/ea-webapp.content');
+    const ctx = createMockCtx();
+    mod.default.main(ctx as any);
+
+    const registeredHandler = addListenerSpy.mock.calls[0]?.[0];
+    expect(registeredHandler).toBeDefined();
+
+    const sendResponse = vi.fn();
+    const returnValue = registeredHandler(
+      { type: 'PORTFOLIO_GENERATE', budget: 100000 },
+      {} as chrome.runtime.MessageSender,
+      sendResponse,
+    );
+
+    // Handler returns false — message not handled by content script
+    expect(returnValue).toBe(false);
+    // sendResponse should NOT be called
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
+
+  it('returns false (not handled) when content script receives PORTFOLIO_LOAD_RESULT response type', async () => {
+    // PORTFOLIO_LOAD_RESULT is a response type returned from service worker sendMessage calls,
+    // not dispatched via onMessage to the content script.
+    const addListenerSpy = vi.spyOn(fakeBrowser.runtime.onMessage, 'addListener');
+
+    const mod = await import('../entrypoints/ea-webapp.content');
+    const ctx = createMockCtx();
+    mod.default.main(ctx as any);
+
+    const registeredHandler = addListenerSpy.mock.calls[0]?.[0];
+    const sendResponse = vi.fn();
+    const returnValue = registeredHandler(
+      { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null },
+      {} as chrome.runtime.MessageSender,
+      sendResponse,
+    );
+
+    expect(returnValue).toBe(false);
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
 });

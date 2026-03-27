@@ -10,7 +10,7 @@
  *   - D-03: Polling gated by enabled flag in storage (Phase 8 UI wires the toggle)
  *   - D-04: Backend URL hardcoded to localhost:8000 (v1.1 is localhost-only)
  */
-import { enabledItem, lastActionItem } from '../src/storage';
+import { enabledItem, lastActionItem, portfolioItem, PortfolioPlayer } from '../src/storage';
 import { ExtensionMessage } from '../src/messages';
 
 const BACKEND_URL = 'http://localhost:8000';
@@ -38,8 +38,150 @@ export default defineBackground({
 
     // D-02: Poll immediately on wake — worker may have been terminated during a cycle.
     maybePoll();
+
+    // Portfolio message handlers — proxy requests from content script to backend.
+    // All handlers return true to signal async response (Chrome MV3 requirement).
+    chrome.runtime.onMessage.addListener((msg: ExtensionMessage, _sender, sendResponse) => {
+      switch (msg.type) {
+        case 'PORTFOLIO_GENERATE':
+          handlePortfolioGenerate(msg.budget).then(sendResponse);
+          return true; // async response
+        case 'PORTFOLIO_CONFIRM':
+          handlePortfolioConfirm(msg.players).then(sendResponse);
+          return true;
+        case 'PORTFOLIO_SWAP':
+          handlePortfolioSwap(msg.ea_id, msg.freed_budget, msg.excluded_ea_ids).then(sendResponse);
+          return true;
+        case 'PORTFOLIO_LOAD':
+          portfolioItem.getValue().then(portfolio =>
+            sendResponse({ type: 'PORTFOLIO_LOAD_RESULT', portfolio } satisfies ExtensionMessage)
+          );
+          return true;
+        default:
+          // PING/PONG and other types not handled here — content script handles those
+          return false;
+      }
+    });
   },
 });
+
+/**
+ * Map raw backend JSON to a typed PortfolioPlayer.
+ * Handles both `price` and `buy_price` field names from different endpoints.
+ */
+function mapToPortfolioPlayer(p: any): PortfolioPlayer {
+  return {
+    ea_id: p.ea_id,
+    name: p.name,
+    rating: p.rating,
+    position: p.position,
+    price: p.price ?? p.buy_price,
+    sell_price: p.sell_price,
+    margin_pct: p.margin_pct,
+    expected_profit: p.expected_profit ?? 0,
+    op_ratio: p.op_ratio ?? 0,
+    efficiency: p.efficiency ?? 0,
+  };
+}
+
+/**
+ * Request the backend to generate a portfolio for the given budget.
+ * POST /api/v1/portfolio/generate → PORTFOLIO_GENERATE_RESULT
+ */
+async function handlePortfolioGenerate(budget: number): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ budget }),
+    });
+    if (!res.ok) {
+      return {
+        type: 'PORTFOLIO_GENERATE_RESULT',
+        data: [],
+        budget_used: 0,
+        budget_remaining: budget,
+        error: `Backend error: ${res.status}`,
+      };
+    }
+    const json = await res.json();
+    return {
+      type: 'PORTFOLIO_GENERATE_RESULT',
+      data: json.data.map(mapToPortfolioPlayer),
+      budget_used: json.budget_used,
+      budget_remaining: json.budget_remaining,
+    };
+  } catch (e) {
+    return {
+      type: 'PORTFOLIO_GENERATE_RESULT',
+      data: [],
+      budget_used: 0,
+      budget_remaining: budget,
+      error: String(e),
+    };
+  }
+}
+
+/**
+ * Confirm a portfolio — persist to backend and store locally.
+ * POST /api/v1/portfolio/confirm → PORTFOLIO_CONFIRM_RESULT
+ * On success, writes to portfolioItem so the overlay can show it without a backend round-trip.
+ */
+async function handlePortfolioConfirm(players: PortfolioPlayer[]): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        players: players.map(p => ({
+          ea_id: p.ea_id,
+          buy_price: p.price,
+          sell_price: p.sell_price,
+        })),
+      }),
+    });
+    if (!res.ok) {
+      return { type: 'PORTFOLIO_CONFIRM_RESULT', confirmed: 0, error: `Backend error: ${res.status}` };
+    }
+    const json = await res.json();
+    await portfolioItem.setValue({
+      players,
+      budget: players.reduce((s, p) => s + p.price, 0),
+      confirmed_at: new Date().toISOString(),
+    });
+    return { type: 'PORTFOLIO_CONFIRM_RESULT', confirmed: json.confirmed };
+  } catch (e) {
+    return { type: 'PORTFOLIO_CONFIRM_RESULT', confirmed: 0, error: String(e) };
+  }
+}
+
+/**
+ * Request swap suggestions for a removed player.
+ * POST /api/v1/portfolio/swap-preview → PORTFOLIO_SWAP_RESULT
+ */
+async function handlePortfolioSwap(
+  ea_id: number,
+  freed_budget: number,
+  excluded_ea_ids: number[],
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/swap-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ freed_budget, excluded_ea_ids }),
+    });
+    if (!res.ok) {
+      return { type: 'PORTFOLIO_SWAP_RESULT', replacements: [], error: `Backend error: ${res.status}` };
+    }
+    const json = await res.json();
+    return {
+      type: 'PORTFOLIO_SWAP_RESULT',
+      replacements: json.replacements.map(mapToPortfolioPlayer),
+    };
+  } catch (e) {
+    return { type: 'PORTFOLIO_SWAP_RESULT', replacements: [], error: String(e) };
+  }
+}
 
 /**
  * Send a PING to the active EA Web App tab to confirm the content script is alive.
