@@ -200,7 +200,7 @@ export default defineContentScript({
     // D-08 Fallback: MutationObserver on document.body for EA SPA container replacement
     // Shallow observe — only fires on direct children swap (EA SPA container swap)
     const observer = new MutationObserver(() => {
-      console.log('[OP Seller CS] DOM mutation detected on body');
+      maybeStartTradeObserver();
     });
     observer.observe(document.body, { childList: true, subtree: false });
     ctx.onInvalidated(() => observer.disconnect());
