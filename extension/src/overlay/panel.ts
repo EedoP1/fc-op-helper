@@ -8,10 +8,12 @@
  * Design references: D-01 (right sidebar), D-02 (dark theme), D-03 (player fields),
  * D-04 (budget input), D-05 (two-step flow), D-07/D-08/D-09 (swap), D-10 (ephemeral draft),
  * D-11 (confirmed from backend), D-12 (three states).
+ * Phase 07.2 adds: tab bar (D-01), Dashboard tab (D-04–D-13), fetch on switch (D-12),
+ * per-player status badges (D-06), summary bar (D-08/D-09), refresh button (D-13).
  */
 
 import type { PortfolioPlayer } from '../storage';
-import type { ExtensionMessage } from '../messages';
+import type { ExtensionMessage, DashboardData, DashboardPlayer } from '../messages';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,7 @@ export function createOverlayPanel(): OverlayPanel {
   let draftBudgetRemaining = 0;
   let sortKey: SortKey = 'efficiency';
   let sortDir: SortDir = 'desc';
+  let activeTab: 'portfolio' | 'dashboard' = 'portfolio';
 
   // ── Container (panel) ──────────────────────────────────────────────────────
 
@@ -159,6 +162,191 @@ export function createOverlayPanel(): OverlayPanel {
       fontSize: '14px',
       ...extra,
     });
+  }
+
+  // ── Dashboard helpers ──────────────────────────────────────────────────────
+
+  const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+    PENDING:  { bg: '#2a2a3e', text: '#888' },
+    BOUGHT:   { bg: '#1a3a1a', text: '#4CAF50' },
+    LISTED:   { bg: '#1a2a3a', text: '#6cf' },
+    SOLD:     { bg: '#1a3a1a', text: '#4CAF50' },
+    EXPIRED:  { bg: '#3a1a1a', text: '#f88' },
+  };
+
+  /**
+   * Render the tab bar for the confirmed state.
+   * Tab bar appears ONLY inside renderConfirmed (D-02).
+   * @param onSwitch - called with the selected tab name when user clicks a tab
+   */
+  function renderTabBar(onSwitch: (tab: 'portfolio' | 'dashboard') => void): HTMLDivElement {
+    const bar = document.createElement('div');
+    bar.className = 'op-seller-tab-bar';
+    Object.assign(bar.style, {
+      display: 'flex',
+      gap: '0',
+      marginBottom: '12px',
+      borderBottom: '1px solid #444',
+    });
+
+    (['portfolio', 'dashboard'] as const).forEach(tab => {
+      const btn = document.createElement('button');
+      btn.textContent = tab === 'portfolio' ? 'Portfolio' : 'Dashboard';
+      btn.dataset.tab = tab;
+      const isActive = tab === activeTab;
+      Object.assign(btn.style, {
+        flex: '1',
+        background: isActive ? '#3a3a5e' : 'transparent',
+        color: isActive ? '#fff' : '#aaa',
+        border: 'none',
+        borderBottom: isActive ? '2px solid #6cf' : '2px solid transparent',
+        cursor: 'pointer',
+        padding: '8px 0',
+        fontSize: '13px',
+      });
+      btn.addEventListener('click', () => onSwitch(tab));
+      bar.appendChild(btn);
+    });
+
+    return bar;
+  }
+
+  /**
+   * Render the full dashboard content (summary bar + refresh + per-player list)
+   * into the given parent element.
+   */
+  function renderDashboardContent(parent: HTMLElement, data: DashboardData): void {
+    // Summary bar (D-08)
+    const summaryBar = document.createElement('div');
+    summaryBar.className = 'op-seller-dashboard-summary';
+    Object.assign(summaryBar.style, {
+      display: 'flex',
+      justifyContent: 'space-between',
+      background: '#2a2a3e',
+      padding: '10px',
+      borderRadius: '4px',
+      marginBottom: '12px',
+      fontSize: '12px',
+    });
+
+    // Realized profit (D-09: separate label + color-coded)
+    const realizedEl = document.createElement('div');
+    const realizedColor = data.summary.realized_profit >= 0 ? '#4CAF50' : '#f88';
+    realizedEl.innerHTML = `<div style="color:#aaa">Realized</div><div style="color:${realizedColor};font-weight:bold">${fmt(data.summary.realized_profit)}</div>`;
+    summaryBar.appendChild(realizedEl);
+
+    // Unrealized P&L (D-09: separate label + color-coded)
+    const unrealizedEl = document.createElement('div');
+    const unrealizedColor = data.summary.unrealized_pnl >= 0 ? '#4CAF50' : '#f88';
+    unrealizedEl.innerHTML = `<div style="color:#aaa">Unrealized</div><div style="color:${unrealizedColor};font-weight:bold">${fmt(data.summary.unrealized_pnl)}</div>`;
+    summaryBar.appendChild(unrealizedEl);
+
+    // Trade counts (D-08)
+    const countsEl = document.createElement('div');
+    const tc = data.summary.trade_counts;
+    countsEl.innerHTML = `<div style="color:#aaa">Trades</div><div style="color:#ccc">${tc.bought}B / ${tc.sold}S / ${tc.expired}E</div>`;
+    summaryBar.appendChild(countsEl);
+
+    parent.appendChild(summaryBar);
+
+    // Refresh button (D-13: manual refresh)
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.className = 'op-seller-dashboard-refresh';
+    styleButton(refreshBtn, '#2196F3', { marginTop: '0', marginBottom: '12px', padding: '6px 12px', fontSize: '12px' });
+    refreshBtn.addEventListener('click', () => renderDashboard());
+    parent.appendChild(refreshBtn);
+
+    // Per-player list (D-04, D-06)
+    data.players.forEach((player: DashboardPlayer) => {
+      const row = document.createElement('div');
+      row.className = 'op-seller-dashboard-player';
+      Object.assign(row.style, {
+        background: '#2a2a3e',
+        padding: '8px 10px',
+        marginBottom: '4px',
+        borderRadius: '4px',
+      });
+
+      // Line 1: Name + status badge (D-06)
+      const topLine = document.createElement('div');
+      topLine.style.display = 'flex';
+      topLine.style.justifyContent = 'space-between';
+      topLine.style.alignItems = 'center';
+      topLine.style.marginBottom = '2px';
+
+      const nameEl = document.createElement('span');
+      nameEl.textContent = player.name;
+      nameEl.style.fontWeight = 'bold';
+      nameEl.style.fontSize = '13px';
+      topLine.appendChild(nameEl);
+
+      const badge = document.createElement('span');
+      badge.textContent = player.status;
+      badge.className = 'op-seller-status-badge';
+      const colors = STATUS_COLORS[player.status] || { bg: '#2a2a3e', text: '#888' };
+      Object.assign(badge.style, {
+        background: colors.bg,
+        color: colors.text,
+        padding: '2px 6px',
+        borderRadius: '3px',
+        fontSize: '10px',
+        fontWeight: 'bold',
+      });
+      topLine.appendChild(badge);
+      row.appendChild(topLine);
+
+      // Line 2: Cumulative stats (D-05, D-06)
+      const statsLine = document.createElement('div');
+      statsLine.style.fontSize = '11px';
+      const profitColor = player.realized_profit >= 0 ? '#4CAF50' : '#f88';
+      statsLine.innerHTML = `<span style="color:#aaa">${player.times_sold}x sold</span> <span style="color:#555">\u2022</span> <span class="op-seller-player-profit" style="color:${profitColor}">${player.realized_profit >= 0 ? '+' : ''}${fmt(player.realized_profit)} profit</span>`;
+      row.appendChild(statsLine);
+
+      parent.appendChild(row);
+    });
+  }
+
+  /**
+   * Render the dashboard tab content area: fetch data from service worker,
+   * show loading state, then render content or error. (D-12: fetch on tab switch)
+   * Targets the .op-seller-tab-content element inside container.
+   */
+  function renderDashboard(): void {
+    const contentArea = container.querySelector('.op-seller-tab-content') as HTMLElement | null;
+    const content = contentArea || container;
+
+    if (contentArea) contentArea.innerHTML = '';
+
+    // Loading state
+    const loading = document.createElement('div');
+    loading.textContent = 'Loading dashboard...';
+    loading.style.color = '#aaa';
+    loading.style.padding = '16px 0';
+    content.appendChild(loading);
+
+    // Fetch dashboard data (D-12: fetch on tab switch)
+    chrome.runtime.sendMessage({ type: 'DASHBOARD_STATUS_REQUEST' } satisfies ExtensionMessage)
+      .then((res: ExtensionMessage) => {
+        if (res.type === 'DASHBOARD_STATUS_RESULT') {
+          content.innerHTML = '';
+          if (res.error || !res.data) {
+            const errEl = document.createElement('div');
+            errEl.textContent = `Error: ${res.error || 'No data'}`;
+            errEl.style.color = '#f44';
+            content.appendChild(errEl);
+            return;
+          }
+          renderDashboardContent(content, res.data);
+        }
+      })
+      .catch((err: Error) => {
+        content.innerHTML = '';
+        const errEl = document.createElement('div');
+        errEl.textContent = `Error: ${err.message}`;
+        errEl.style.color = '#f44';
+        content.appendChild(errEl);
+      });
   }
 
   /** Render EMPTY state: budget input + Generate button */
@@ -465,20 +653,17 @@ export function createOverlayPanel(): OverlayPanel {
     });
   }
 
-  /** Render CONFIRMED state: read-only player list + Regenerate button */
-  function renderConfirmed(): void {
-    container.innerHTML = '';
-
-    const header = document.createElement('h3');
-    header.textContent = `Portfolio (${draftPlayers.length} players)`;
-    Object.assign(header.style, { margin: '0 0 8px', fontSize: '18px', color: '#fff' });
-    container.appendChild(header);
-
+  /**
+   * Render the portfolio player list into the given parent element.
+   * Extracted from renderConfirmed to support tab switching.
+   * Includes sort bar, player rows (read-only), and Regenerate button.
+   */
+  function renderPortfolioContent(parent: HTMLElement): void {
     const sortBarSlot = document.createElement('div');
-    container.appendChild(sortBarSlot);
+    parent.appendChild(sortBarSlot);
 
     const listEl = document.createElement('div');
-    container.appendChild(listEl);
+    parent.appendChild(listEl);
 
     function renderPlayerList(): void {
       sortBarSlot.innerHTML = '';
@@ -530,7 +715,7 @@ export function createOverlayPanel(): OverlayPanel {
         statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)} | Eff: ${player.efficiency.toFixed(4)}`;
         row.appendChild(statsLine);
 
-        container.appendChild(row);
+        parent.appendChild(row);
       });
     }
 
@@ -539,11 +724,55 @@ export function createOverlayPanel(): OverlayPanel {
     const regenBtn = document.createElement('button');
     regenBtn.textContent = 'Regenerate';
     styleButton(regenBtn, '#2196F3', { marginTop: '16px' });
-    container.appendChild(regenBtn);
+    parent.appendChild(regenBtn);
 
     regenBtn.addEventListener('click', () => {
       setState('empty');
     });
+  }
+
+  /** Render CONFIRMED state: tab bar (Portfolio / Dashboard) + content area (D-01, D-02, D-03) */
+  function renderConfirmed(): void {
+    container.innerHTML = '';
+
+    const header = document.createElement('h3');
+    header.textContent = `Portfolio (${draftPlayers.length} players)`;
+    Object.assign(header.style, { margin: '0 0 8px', fontSize: '18px', color: '#fff' });
+    container.appendChild(header);
+
+    // Tab bar (D-01: two tabs, D-02: confirmed state only, D-03: Portfolio default)
+    const tabBar = renderTabBar((tab) => {
+      activeTab = tab;
+      renderTabContent();
+    });
+    container.appendChild(tabBar);
+
+    // Tab content area
+    const contentArea = document.createElement('div');
+    contentArea.className = 'op-seller-tab-content';
+    container.appendChild(contentArea);
+
+    function renderTabContent(): void {
+      contentArea.innerHTML = '';
+      // Update tab bar active state styling
+      tabBar.querySelectorAll('button').forEach(btn => {
+        const tab = (btn as HTMLButtonElement).dataset.tab;
+        const isActive = tab === activeTab;
+        Object.assign((btn as HTMLElement).style, {
+          background: isActive ? '#3a3a5e' : 'transparent',
+          color: isActive ? '#fff' : '#aaa',
+          borderBottom: isActive ? '2px solid #6cf' : '2px solid transparent',
+        });
+      });
+
+      if (activeTab === 'portfolio') {
+        renderPortfolioContent(contentArea);
+      } else {
+        renderDashboard();
+      }
+    }
+
+    renderTabContent();
   }
 
   /** Render an inline error message inside the panel */
