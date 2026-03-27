@@ -379,9 +379,8 @@ export function createOverlayPanel(): OverlayPanel {
 
         removeBtn.addEventListener('click', () => {
           const freed_budget = player.price;
-          const excluded_ea_ids = draftPlayers
-            .filter((_, i) => i !== idx)
-            .map(p => p.ea_id);
+          // Exclude all remaining players AND the removed player so it can't come back
+          const excluded_ea_ids = draftPlayers.map(p => p.ea_id);
 
           // Instant remove from in-memory draft (D-09)
           draftPlayers.splice(idx, 1);
