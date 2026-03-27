@@ -126,5 +126,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 5. Backend Infrastructure | v1.1 | 1/3 | In Progress|  |
 | 6. Extension Architecture Foundation | v1.1 | 2/2 | Complete   | 2026-03-26 |
 | 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
-| 07.1 Trade Reporting | v1.1 | 3/3 | Complete   | 2026-03-27 |
+| 07.1 Trade Reporting | v1.1 | 3/3 | Complete    | 2026-03-27 |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
