@@ -2,8 +2,32 @@
  * Shared discriminated union message types for service worker <-> content script communication.
  * Phase 6 defines PING/PONG to prove the channel works.
  * Phase 7 adds PORTFOLIO_* types for generate, confirm, swap, and load operations.
+ * Phase 07.2 adds DASHBOARD_STATUS_* types for the portfolio dashboard panel.
  */
 import type { PortfolioPlayer, ConfirmedPortfolio } from './storage';
+
+/** Per-player trade status row returned by GET /portfolio/status. */
+export type DashboardPlayer = {
+  ea_id: number;
+  name: string;
+  status: 'PENDING' | 'BOUGHT' | 'LISTED' | 'SOLD' | 'EXPIRED';
+  times_sold: number;
+  realized_profit: number;
+  unrealized_pnl: number | null;
+  buy_price: number;
+  sell_price: number;
+  current_bin: number | null;
+};
+
+/** Full response shape from GET /portfolio/status. */
+export type DashboardData = {
+  summary: {
+    realized_profit: number;
+    unrealized_pnl: number;
+    trade_counts: { bought: number; sold: number; expired: number };
+  };
+  players: DashboardPlayer[];
+};
 
 export type ExtensionMessage =
   | { type: 'PING' }
@@ -19,7 +43,10 @@ export type ExtensionMessage =
   | { type: 'PORTFOLIO_LOAD_RESULT'; portfolio: ConfirmedPortfolio | null }
   // Trade reporting (Phase 07.1: passive DOM reading → backend relay)
   | { type: 'TRADE_REPORT'; ea_id: number; price: number; outcome: 'bought' | 'listed' | 'sold' | 'expired' }
-  | { type: 'TRADE_REPORT_RESULT'; success: boolean; error?: string };
+  | { type: 'TRADE_REPORT_RESULT'; success: boolean; error?: string }
+  // Dashboard status (Phase 07.2: portfolio dashboard)
+  | { type: 'DASHBOARD_STATUS_REQUEST' }
+  | { type: 'DASHBOARD_STATUS_RESULT'; data: DashboardData | null; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.
