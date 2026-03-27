@@ -87,26 +87,49 @@ export default defineContentScript({
     // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────
     let tradeObserver: MutationObserver | null = null;
 
+    // In-memory dedup set — survives across MutationObserver scans within the same
+    // content script lifetime. Also persisted to chrome.storage.local so it survives
+    // service worker restarts and page refreshes.
+    const reportedSet = new Set<string>();
+    let reportedSetLoaded = false;
+    let scanInProgress = false;
+
     /**
      * Scan the Transfer List DOM for portfolio player outcomes.
      * Matches detected items against the confirmed portfolio by player name (D-03).
      * Reports new outcomes to the service worker for backend relay (D-06).
-     * Deduplicates using reportedOutcomesItem (D-07).
+     * Deduplicates using in-memory set + storage persistence (D-07).
      */
     async function scanTransferList() {
+      // Prevent concurrent scans from MutationObserver rapid-fire
+      if (scanInProgress) return;
+      scanInProgress = true;
+
+      try {
+        await scanTransferListInner();
+      } finally {
+        scanInProgress = false;
+      }
+    }
+
+    async function scanTransferListInner() {
       const portfolio = await portfolioItem.getValue();
       if (!portfolio || portfolio.players.length === 0) return;
 
       const items = readTransferList(document);
       if (items.length === 0) return;
 
+      // Load persisted dedup set on first scan
+      if (!reportedSetLoaded) {
+        const stored = await reportedOutcomesItem.getValue();
+        for (const key of stored) reportedSet.add(key);
+        reportedSetLoaded = true;
+      }
+
       // Match DOM items to portfolio using composite key:
-      // name (endsWith) + rating + position + price
+      // name (endsWith) + rating + position
       // DOM shows short names ("Lo Celso") while portfolio has full names ("Giovani Lo Celso"),
       // so we use endsWith for name matching and rating+position to disambiguate.
-
-      // Load dedup set
-      const reported = new Set(await reportedOutcomesItem.getValue());
 
       for (const item of items) {
         const domName = item.playerName.toLowerCase();
@@ -119,7 +142,7 @@ export default defineContentScript({
         const player = { ea_id: match.ea_id };
 
         const dedupKey = `${player.ea_id}:${item.status}:${item.price}`;
-        if (reported.has(dedupKey)) continue; // Already reported (D-07)
+        if (reportedSet.has(dedupKey)) continue; // Already reported (D-07)
 
         // Report to service worker (D-06: silent auto-report)
         // Retry once on failure (service worker may still be waking up)
@@ -133,7 +156,7 @@ export default defineContentScript({
             } satisfies ExtensionMessage);
 
             if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
-              reported.add(dedupKey);
+              reportedSet.add(dedupKey);
               console.log(`[OP Seller CS] Reported ${item.status} for ${item.playerName} (${player.ea_id})`);
               break;
             }
@@ -153,8 +176,8 @@ export default defineContentScript({
         }
       }
 
-      // Persist updated dedup set
-      await reportedOutcomesItem.setValue([...reported]);
+      // Persist dedup set to storage (survives page refresh)
+      await reportedOutcomesItem.setValue([...reportedSet]);
     }
 
     /**
