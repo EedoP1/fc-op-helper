@@ -133,12 +133,12 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 
 ### Phase 9: Comprehensive API Integration & Performance Test Suite
 
-**Goal:** Fix broken test infrastructure, add cross-endpoint lifecycle integration tests, batch endpoint coverage, and performance smoke baselines for all critical API endpoints
+**Goal:** Real-server integration test suite — starts a real uvicorn process with a real SQLite file, tests all 16 API endpoints via real HTTP calls, validates edge cases/error handling/CORS, runs cross-endpoint lifecycle flows, and measures real latency under realistic conditions
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
 **Depends on:** Phase 5 (tests current backend surface; does not require Phase 8)
 **Plans:** 3 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Fix broken test collection (delete dead FUTBIN modules) + batch trade records tests
-- [ ] 09-02-PLAN.md — Cross-endpoint trade lifecycle integration tests (BUY->LIST->SOLD, EXPIRED->RELIST, multi-player)
-- [ ] 09-03-PLAN.md — Performance smoke tests (latency baselines for pending, status, profit endpoints)
+- [ ] 09-01-PLAN.md — Test infrastructure (real uvicorn + SQLite harness, conftest, fixtures) + fix health check + smoke test all 16 endpoints
+- [ ] 09-02-PLAN.md — Edge case tests (boundaries, duplicates, idempotency) + error handling (bad input, CORS, 404s)
+- [ ] 09-03-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST, multi-player) + performance latency + concurrent requests
