@@ -210,16 +210,26 @@ async def test_pending_action_latency(db):
 
 ### Anti-Patterns to Avoid
 
-- **Spinning up real uvicorn server in tests**: Not needed — ASGITransport calls the ASGI
-  app directly without network overhead. Real server tests introduce port conflicts and
-  process lifecycle complexity.
+- **~~Spinning up real uvicorn server in tests~~** *(RETRACTED for Phase 9)*: The user
+  explicitly requested real server integration tests. Phase 9 plans use subprocess.Popen
+  to start a real uvicorn process on a free port with a real SQLite file. This is intentional
+  and correct for this phase. The original guidance (prefer ASGITransport) remains valid for
+  unit-level endpoint tests in other phases.
+- **Using session-scoped async fixtures with pytest-asyncio 1.3.0**: pytest-asyncio 1.3.0
+  defaults to function-scoped event loops. A session-scoped `async def` fixture will fail
+  because the event loop is torn down after the first test function. Solution: make
+  session-scoped fixtures synchronous (use subprocess.Popen + time.sleep poll, not asyncio).
 - **Using `requests.get()` in async tests**: Blocks the event loop. Always use `httpx.AsyncClient`.
 - **Sharing session_factory across test functions**: SQLite in-memory databases are
   connection-scoped. Each test should get a fresh `db` fixture.
-- **Asserting on absolute latency with file SQLite**: In-memory SQLite does not represent
-  real latency. Performance tests should document this limitation.
+- **Asserting on absolute latency with file SQLite**: File-based SQLite has higher latency
+  than in-memory. Performance thresholds for real-server tests should be generous (100-300ms)
+  to account for network overhead, file I/O, and process boundary.
 - **One giant integration test file**: Keep lifecycle flows, batch records, and performance
   in separate files for discoverability and to avoid fixture bloat.
+- **Creating new SQLAlchemy engines per-test without timeout on Windows**: SQLite file
+  locking on Windows is stricter. Always use `connect_args={"timeout": 10}` when creating
+  cleanup engines that connect to the same file as the running server.
 
 ## Don't Hand-Roll
 
