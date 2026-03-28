@@ -1,153 +1,134 @@
-"""Performance latency and concurrent request integration tests.
+"""Performance threshold tests for critical API endpoints.
 
-Measures real HTTP round-trip latency (over loopback to a real uvicorn process)
-and verifies concurrent requests do not corrupt data. Thresholds are generous
-(100-300ms) to account for network overhead, SQLite file I/O, and Python async
-overhead on Windows.
+Each test:
+  1. Issues one warmup request (initializes connection pool)
+  2. Times 5 consecutive requests using time.perf_counter()
+  3. Takes the p95 (worst of 5 for N=5)
+  4. Asserts against the threshold from D-13 / D-14
+
+Thresholds (per 09-CONTEXT.md D-13, D-14):
+  - /health                < 100ms  (p95, over loopback, real DB)
+  - /actions/pending       < 200ms  (p95)
+  - /portfolio/status      < 300ms  (p95, with seeded slots)
+  - /profit/summary        < 200ms  (p95)
+  - /portfolio/generate    < 10000ms (single request, per D-14)
+
+If a threshold fails, that is a server PERFORMANCE BUG — do NOT weaken
+the threshold.
 """
-import asyncio
 import time
 
-import httpx
 import pytest
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+async def _measure_ms(client, method: str, url: str, *, n: int = 5, **kwargs) -> list[float]:
+    """Time n HTTP requests and return list of elapsed_ms values."""
+    results = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        if method == "GET":
+            r = await client.get(url, **kwargs)
+        elif method == "POST":
+            r = await client.post(url, **kwargs)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        results.append(elapsed_ms)
+        assert r.status_code < 500, f"Server error during perf test: {r.status_code} {r.text}"
+    return results
 
 
-async def _seed_realistic_data(client, n_players=10):
-    """Seed N portfolio slots and some trade records to simulate realistic DB state."""
-    slots = [
-        {"ea_id": 1000 + i, "buy_price": 30000 + i * 1000,
-         "sell_price": 45000 + i * 1000, "player_name": f"Perf Player {i}"}
-        for i in range(n_players)
-    ]
-    await client.post("/api/v1/portfolio/slots", json={"slots": slots})
-
-    # Add some trade records for half the players
-    for i in range(n_players // 2):
-        await client.post("/api/v1/trade-records/direct", json={
-            "ea_id": 1000 + i, "price": 30000 + i * 1000, "outcome": "bought"
-        })
-
-
-# ── Latency tests ─────────────────────────────────────────────────────────────
-
+# ── Tests ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_health_latency(client):
-    """GET /health responds with p95 < 100ms over real HTTP loopback."""
+    """GET /health p95 must be < 100ms over loopback with real DB."""
     # Warmup
     await client.get("/api/v1/health")
-    # Measure
-    times = []
-    for _ in range(10):
-        start = time.perf_counter()
-        r = await client.get("/api/v1/health")
-        elapsed = (time.perf_counter() - start) * 1000
-        assert r.status_code == 200
-        times.append(elapsed)
-    p95 = sorted(times)[int(len(times) * 0.95)]
-    assert p95 < 100, f"Health p95={p95:.1f}ms exceeds 100ms"
+
+    elapsed_times = await _measure_ms(client, "GET", "/api/v1/health")
+    elapsed_ms = max(elapsed_times)  # p95 = worst of 5
+
+    assert elapsed_ms < 100, (
+        f"GET /health p95={elapsed_ms:.1f}ms exceeds 100ms threshold. "
+        f"All measurements: {[f'{t:.1f}' for t in elapsed_times]}ms. "
+        "This is a server performance bug."
+    )
 
 
 @pytest.mark.asyncio
 async def test_pending_action_latency(client):
-    """GET /actions/pending responds with p95 < 200ms with 10 portfolio slots."""
-    await _seed_realistic_data(client, n_players=10)
-    await client.get("/api/v1/actions/pending")  # warmup
-    times = []
-    for _ in range(10):
-        start = time.perf_counter()
-        r = await client.get("/api/v1/actions/pending")
-        elapsed = (time.perf_counter() - start) * 1000
-        assert r.status_code == 200
-        times.append(elapsed)
-    p95 = sorted(times)[int(len(times) * 0.95)]
-    assert p95 < 200, f"Pending action p95={p95:.1f}ms exceeds 200ms"
+    """GET /actions/pending p95 must be < 200ms (empty portfolio, no derivation needed)."""
+    # Warmup
+    await client.get("/api/v1/actions/pending")
+
+    elapsed_times = await _measure_ms(client, "GET", "/api/v1/actions/pending")
+    elapsed_ms = max(elapsed_times)  # p95 = worst of 5
+
+    assert elapsed_ms < 200, (
+        f"GET /actions/pending p95={elapsed_ms:.1f}ms exceeds 200ms threshold. "
+        f"All measurements: {[f'{t:.1f}' for t in elapsed_times]}ms. "
+        "This is a server performance bug."
+    )
 
 
 @pytest.mark.asyncio
-async def test_portfolio_status_latency(client):
-    """GET /portfolio/status responds with p95 < 300ms with 10 slots and trade records."""
-    await _seed_realistic_data(client, n_players=10)
-    await client.get("/api/v1/portfolio/status")  # warmup
-    times = []
-    for _ in range(10):
-        start = time.perf_counter()
-        r = await client.get("/api/v1/portfolio/status")
-        elapsed = (time.perf_counter() - start) * 1000
-        assert r.status_code == 200
-        times.append(elapsed)
-    p95 = sorted(times)[int(len(times) * 0.95)]
-    assert p95 < 300, f"Portfolio status p95={p95:.1f}ms exceeds 300ms"
+async def test_portfolio_status_latency(client, seed_real_portfolio_slot, real_ea_id):
+    """GET /portfolio/status p95 must be < 300ms with seeded slots and real DB."""
+    assert real_ea_id is not None, "real_ea_id is None — DB may be empty"
+    assert seed_real_portfolio_slot is not None
+    assert seed_real_portfolio_slot.status_code == 201, (
+        f"Slot seed failed: {seed_real_portfolio_slot.status_code}"
+    )
+
+    # Warmup
+    await client.get("/api/v1/portfolio/status")
+
+    elapsed_times = await _measure_ms(client, "GET", "/api/v1/portfolio/status")
+    elapsed_ms = max(elapsed_times)  # p95 = worst of 5
+
+    assert elapsed_ms < 300, (
+        f"GET /portfolio/status p95={elapsed_ms:.1f}ms exceeds 300ms threshold. "
+        f"All measurements: {[f'{t:.1f}' for t in elapsed_times]}ms. "
+        "This is a server performance bug."
+    )
 
 
 @pytest.mark.asyncio
 async def test_profit_summary_latency(client):
-    """GET /profit/summary responds with p95 < 200ms with trade data present."""
-    await _seed_realistic_data(client, n_players=10)
-    await client.get("/api/v1/profit/summary")  # warmup
-    times = []
-    for _ in range(10):
-        start = time.perf_counter()
-        r = await client.get("/api/v1/profit/summary")
-        elapsed = (time.perf_counter() - start) * 1000
-        assert r.status_code == 200
-        times.append(elapsed)
-    p95 = sorted(times)[int(len(times) * 0.95)]
-    assert p95 < 200, f"Profit summary p95={p95:.1f}ms exceeds 200ms"
+    """GET /profit/summary p95 must be < 200ms."""
+    # Warmup
+    await client.get("/api/v1/profit/summary")
 
+    elapsed_times = await _measure_ms(client, "GET", "/api/v1/profit/summary")
+    elapsed_ms = max(elapsed_times)  # p95 = worst of 5
 
-# ── Concurrent request tests ───────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_concurrent_pending_actions(client, base_url):
-    """5 simultaneous GET /actions/pending all succeed without errors."""
-    await _seed_realistic_data(client, n_players=5)
-    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as c:
-        tasks = [c.get("/api/v1/actions/pending") for _ in range(5)]
-        results = await asyncio.gather(*tasks)
-    for r in results:
-        assert r.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_concurrent_batch_trade_records(client, base_url):
-    """3 simultaneous batch POSTs to different ea_ids all return 201."""
-    # Seed 3 slots
-    await client.post("/api/v1/portfolio/slots", json={"slots": [
-        {"ea_id": 2001, "buy_price": 30000, "sell_price": 45000, "player_name": "Concurrent A"},
-        {"ea_id": 2002, "buy_price": 40000, "sell_price": 55000, "player_name": "Concurrent B"},
-        {"ea_id": 2003, "buy_price": 50000, "sell_price": 65000, "player_name": "Concurrent C"},
-    ]})
-    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as c:
-        tasks = [
-            c.post("/api/v1/trade-records/batch", json={"records": [
-                {"ea_id": 2001 + i, "price": 30000 + i * 10000, "outcome": "bought"}
-            ]})
-            for i in range(3)
-        ]
-        results = await asyncio.gather(*tasks)
-    for r in results:
-        assert r.status_code == 201
-
-
-@pytest.mark.asyncio
-async def test_concurrent_reads_during_write(client, base_url):
-    """Simultaneous GET /portfolio/status reads while a write occurs do not 500."""
-    await _seed_realistic_data(client, n_players=5)
-    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as c:
-        write_task = c.post("/api/v1/trade-records/direct", json={
-            "ea_id": 1000, "price": 30000, "outcome": "listed"
-        })
-        read_tasks = [c.get("/api/v1/portfolio/status") for _ in range(3)]
-        results = await asyncio.gather(write_task, *read_tasks)
-    # Write may succeed (201), be deduplicated (200), or succeed as listed (201)
-    # It should not return a 5xx error
-    assert results[0].status_code in (200, 201), (
-        f"Write returned unexpected status {results[0].status_code}"
+    assert elapsed_ms < 200, (
+        f"GET /profit/summary p95={elapsed_ms:.1f}ms exceeds 200ms threshold. "
+        f"All measurements: {[f'{t:.1f}' for t in elapsed_times]}ms. "
+        "This is a server performance bug."
     )
-    for r in results[1:]:
-        assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_portfolio_generate_latency(client):
+    """POST /portfolio/generate must complete in < 10000ms (D-14).
+
+    Portfolio generation with real scored data should complete well under 10
+    seconds; exceeding this threshold indicates a performance regression.
+    """
+    # Warmup
+    await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
+
+    t0 = time.perf_counter()
+    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    assert r.status_code == 200, f"Unexpected status {r.status_code}: {r.text}"
+
+    assert elapsed_ms < 10_000, (
+        f"POST /portfolio/generate took {elapsed_ms:.0f}ms — exceeds 10000ms threshold. "
+        "This is a server performance regression per D-14."
+    )

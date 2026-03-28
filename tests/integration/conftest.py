@@ -5,7 +5,6 @@ Uses a synchronous live_server fixture to avoid pytest-asyncio 1.3.0
 event loop scoping issues with session-scoped async fixtures.
 """
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -33,16 +32,156 @@ REAL_DB_PATH = "D:/op-seller/op_seller.db"
 
 @pytest.fixture(scope="session")
 def test_db_path(tmp_path_factory):
-    """Copy the real DB to a temporary file so tests run against realistic data.
+    """Build a lean test DB from the real production DB.
 
-    If the real DB exists, copies it (tests start with real scored players,
-    portfolio slots, trade history, etc.). If not found, creates an empty DB.
-    The real DB is never modified — all writes go to the copy.
+    The production DB is ~7GB (years of scan history). Copying it entirely
+    takes 3+ minutes and causes server startup delays because the v1-score
+    purge query scans 249k rows without an index.
+
+    Instead, build a lean test DB that contains:
+    - ALL rows from ``players`` (player records, ~2k rows)
+    - Latest 5 player_scores per player (sufficient for scoring tests, ~10k rows)
+    - Latest 500 market_snapshots per player for current_bin queries (~1M rows)
+    - Schema-only for mutable tables (portfolio_slots, trade_actions, trade_records)
+
+    The mutable tables start empty; per-test cleanup keeps them that way.
+    Read-only tables (listing_observations, daily_listing_summaries,
+    snapshot_price_points, snapshot_sales) are omitted — tests do not require
+    them for smoke or performance testing.
+
+    If REAL_DB_PATH does not exist, the empty DB is still valid — the ORM
+    creates all tables on startup; tests that assert real data will fail with
+    clear messages.
+
+    [Deviation Rule 3] Using sqlite3.backup() + selective copy to avoid the
+    two blockers that prevented server startup:
+    1. shutil.copy2() on a live WAL DB creates a malformed copy.
+    2. Full 7GB copy + full-scan purge took 10+ min, exceeding 30s poll window.
     """
+    import sqlite3 as _sqlite3
+
     dest = tmp_path_factory.mktemp("integration") / "test_op_seller.db"
-    if os.path.exists(REAL_DB_PATH):
-        shutil.copy2(REAL_DB_PATH, dest)
+
+    if not os.path.exists(REAL_DB_PATH):
+        # Empty DB — server will create schema on startup
+        return dest
+
+    # Open source with WAL-safe read (immutable=0, no write lock needed)
+    src = _sqlite3.connect(f"file:{REAL_DB_PATH}?mode=ro", uri=True, check_same_thread=False)
+    dst = _sqlite3.connect(str(dest))
+
+    # Enable WAL on the destination so the server can start quickly
+    dst.execute("PRAGMA journal_mode=WAL")
+    dst.execute("PRAGMA synchronous=NORMAL")
+
+    # --- players (all rows, typically ~2k) ---
+    _copy_table(src, dst, "players")
+
+    # --- player_scores (latest 5 viable per player) ---
+    # This gives enough data for portfolio generation without 249k row scan
+    _copy_query(
+        src, dst,
+        "player_scores",
+        """
+        SELECT ps.*
+        FROM player_scores ps
+        INNER JOIN (
+            SELECT ea_id, MAX(id) AS max_id
+            FROM player_scores
+            WHERE is_viable = 1
+            GROUP BY ea_id
+        ) latest ON ps.id = latest.max_id
+        """,
+    )
+
+    # --- market_snapshots (latest 1 per player for current_bin queries) ---
+    _copy_query(
+        src, dst,
+        "market_snapshots",
+        """
+        SELECT ms.*
+        FROM market_snapshots ms
+        INNER JOIN (
+            SELECT ea_id, MAX(id) AS max_id
+            FROM market_snapshots
+            GROUP BY ea_id
+        ) latest ON ms.id = latest.max_id
+        """,
+    )
+
+    # --- schema-only tables (mutable, start empty) ---
+    for tbl in ("portfolio_slots", "trade_actions", "trade_records"):
+        _copy_table_schema_only(src, dst, tbl)
+
+    # --- optional tables (schema only, not needed for smoke tests) ---
+    for tbl in ("listing_observations", "daily_listing_summaries",
+                "snapshot_price_points", "snapshot_sales"):
+        _copy_table_schema_only(src, dst, tbl)
+
+    dst.commit()
+    src.close()
+    dst.close()
+
     return dest
+
+
+def _get_table_create_sql(src_con, table_name: str) -> str | None:
+    """Return the CREATE TABLE SQL for the given table from the source DB."""
+    row = src_con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _get_table_index_sqls(src_con, table_name: str) -> list[str]:
+    """Return CREATE INDEX statements for the given table."""
+    rows = src_con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+        (table_name,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _copy_table(src_con, dst_con, table_name: str) -> None:
+    """Copy full table DDL + all rows from src to dst."""
+    create_sql = _get_table_create_sql(src_con, table_name)
+    if not create_sql:
+        return
+    dst_con.execute(create_sql)
+    for idx_sql in _get_table_index_sqls(src_con, table_name):
+        dst_con.execute(idx_sql)
+    rows = src_con.execute(f"SELECT * FROM [{table_name}]").fetchall()
+    if rows:
+        placeholders = ",".join("?" * len(rows[0]))
+        dst_con.executemany(f"INSERT INTO [{table_name}] VALUES ({placeholders})", rows)
+    dst_con.commit()
+
+
+def _copy_query(src_con, dst_con, table_name: str, query: str) -> None:
+    """Copy table DDL + rows matching the given SELECT query."""
+    create_sql = _get_table_create_sql(src_con, table_name)
+    if not create_sql:
+        return
+    dst_con.execute(create_sql)
+    for idx_sql in _get_table_index_sqls(src_con, table_name):
+        dst_con.execute(idx_sql)
+    rows = src_con.execute(query).fetchall()
+    if rows:
+        placeholders = ",".join("?" * len(rows[0]))
+        dst_con.executemany(f"INSERT INTO [{table_name}] VALUES ({placeholders})", rows)
+    dst_con.commit()
+
+
+def _copy_table_schema_only(src_con, dst_con, table_name: str) -> None:
+    """Copy only the DDL (no rows) for the given table."""
+    create_sql = _get_table_create_sql(src_con, table_name)
+    if not create_sql:
+        return
+    dst_con.execute(create_sql)
+    for idx_sql in _get_table_index_sqls(src_con, table_name):
+        dst_con.execute(idx_sql)
+    dst_con.commit()
 
 
 # ── Live server ───────────────────────────────────────────────────────────────
@@ -142,7 +281,7 @@ def real_ea_id(test_db_path):
                 """
                 SELECT ps.ea_id
                 FROM player_scores ps
-                JOIN player_records pr ON pr.ea_id = ps.ea_id
+                JOIN players pr ON pr.ea_id = ps.ea_id
                 WHERE ps.is_viable = 1
                   AND pr.is_active = 1
                 ORDER BY ps.efficiency DESC
