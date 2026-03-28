@@ -7,23 +7,23 @@ Usage:
     python -m src.health_check --count 10 --verbose
 """
 
+import asyncio
 import logging
-import os
-import sqlite3
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import click
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy import select, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.futbin_client import FutbinClient
+from src.server.db import create_engine, create_session_factory
+from src.server.models_db import PlayerRecord, ListingObservation
+from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
-
-# ── Constants ─────────────────────────────────────────────────────────
-
-DB_PATH = "D:/op-seller/op_seller.db"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -35,54 +35,19 @@ def _to_db_fmt(ts: str) -> str:
 
 # ── Database helpers ──────────────────────────────────────────────────
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Add futbin_id column to players table if not present."""
-    try:
-        conn.execute("ALTER TABLE players ADD COLUMN futbin_id INTEGER")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
+async def _select_players(session: AsyncSession, count: int) -> list[dict]:
+    """Select active players randomly for health check."""
+    stmt = (
+        select(PlayerRecord.ea_id, PlayerRecord.name)
+        .where(PlayerRecord.is_active == True)  # noqa: E712
+        .order_by(func.random())
+        .limit(count)
+    )
+    result = await session.execute(stmt)
+    return [{"ea_id": row.ea_id, "name": row.name, "futbin_id": None} for row in result]
 
 
-def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
-    """Select a mix of players with and without cached futbin_id."""
-    half = count // 2
-    rest = count - half
-
-    with_id = conn.execute(
-        "SELECT ea_id, name, futbin_id FROM players "
-        "WHERE is_active = 1 AND futbin_id IS NOT NULL "
-        "ORDER BY RANDOM() LIMIT ?",
-        (half,),
-    ).fetchall()
-
-    without_id = conn.execute(
-        "SELECT ea_id, name, futbin_id FROM players "
-        "WHERE is_active = 1 AND futbin_id IS NULL "
-        "ORDER BY RANDOM() LIMIT ?",
-        (rest,),
-    ).fetchall()
-
-    combined = with_id + without_id
-    if len(combined) < count:
-        existing_ids = {r[0] for r in combined}
-        extra = conn.execute(
-            "SELECT ea_id, name, futbin_id FROM players "
-            "WHERE is_active = 1 AND ea_id NOT IN ({}) "
-            "ORDER BY RANDOM() LIMIT ?".format(
-                ",".join(str(eid) for eid in existing_ids) or "0"
-            ),
-            (count - len(combined),),
-        ).fetchall()
-        combined.extend(extra)
-
-    return [
-        {"ea_id": r[0], "name": r[1], "futbin_id": r[2]}
-        for r in combined
-    ]
-
-
-def _get_our_listings(conn: sqlite3.Connection, ea_id: int, cutoff: str) -> list[dict]:
+async def _get_our_listings(session: AsyncSession, ea_id: int, cutoff: str) -> list[dict]:
     """Get resolved listing observations for a player after cutoff.
 
     Filters by resolved_at (when the listing disappeared / auction ended)
@@ -92,12 +57,16 @@ def _get_our_listings(conn: sqlite3.Connection, ea_id: int, cutoff: str) -> list
 
     Returns list of dicts with price and outcome (sold/expired).
     """
-    rows = conn.execute(
-        "SELECT buy_now_price, outcome FROM listing_observations "
-        "WHERE ea_id = ? AND resolved_at >= ? AND outcome IS NOT NULL",
-        (ea_id, cutoff),
-    ).fetchall()
-    return [{"price": r[0], "outcome": r[1]} for r in rows]
+    stmt = (
+        select(ListingObservation.buy_now_price, ListingObservation.outcome)
+        .where(
+            ListingObservation.ea_id == ea_id,
+            ListingObservation.resolved_at >= cutoff,
+            ListingObservation.outcome != None,  # noqa: E711
+        )
+    )
+    result = await session.execute(stmt)
+    return [{"price": row.buy_now_price, "outcome": row.outcome} for row in result]
 
 
 def _get_futbin_listings(sales: list[dict], cutoff_dt: datetime | None) -> list[dict]:
@@ -219,23 +188,22 @@ def main(count: int, verbose: bool) -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    asyncio.run(_async_main(count, verbose))
 
+
+async def _async_main(count: int, verbose: bool) -> None:
+    """Async health check implementation."""
     import sys, io
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     console = Console()
 
-    if not os.path.exists(DB_PATH):
-        console.print(
-            f"[red]Database not found at {DB_PATH}[/red]\n"
-            "Start the server first: python -m src.server.main",
-        )
-        return
+    engine = create_engine()
+    session_factory = create_session_factory(engine)
 
-    conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
-        _ensure_schema(conn)
-        players = _select_players(conn, count)
+        async with session_factory() as session:
+            players = await _select_players(session, count)
 
         if not players:
             console.print("[red]No active players found in database.[/red]")
@@ -250,7 +218,6 @@ def main(count: int, verbose: bool) -> None:
             for i, player in enumerate(players, 1):
                 ea_id = player["ea_id"]
                 name = player["name"]
-                futbin_id = player["futbin_id"]
 
                 if not name or name.isdigit():
                     continue
@@ -258,18 +225,11 @@ def main(count: int, verbose: bool) -> None:
                 safe_name = name.encode("ascii", errors="replace").decode("ascii")
                 console.print(f"  [{i}/{len(players)}] {safe_name} (EA {ea_id})...", end=" ")
 
-                # Resolve futbin_id if not cached
+                # Resolve futbin_id via search (no column to cache to)
+                futbin_id = client.search_player(name, ea_id=ea_id)
                 if futbin_id is None:
-                    futbin_id = client.search_player(name, ea_id=ea_id)
-                    if futbin_id is not None:
-                        conn.execute(
-                            "UPDATE players SET futbin_id = ? WHERE ea_id = ?",
-                            (futbin_id, ea_id),
-                        )
-                        conn.commit()
-                    else:
-                        console.print("[yellow]not found on FUTBIN[/yellow]")
-                        continue
+                    console.print("[yellow]not found on FUTBIN[/yellow]")
+                    continue
 
                 # Fetch FUTBIN sales
                 sales = client.fetch_sales_page(futbin_id, name)
@@ -285,24 +245,29 @@ def main(count: int, verbose: bool) -> None:
                 # when the listing disappeared (auction ended), which aligns with
                 # FUTBIN's date field. Using first_seen_at here would be wrong
                 # because a listing could be observed hours before it ends.
-                our_earliest_row = conn.execute(
-                    "SELECT MIN(resolved_at) FROM listing_observations "
-                    "WHERE ea_id = ? AND outcome IS NOT NULL AND resolved_at IS NOT NULL",
-                    (ea_id,),
-                ).fetchone()
-                our_earliest = our_earliest_row[0] if our_earliest_row and our_earliest_row[0] else None
+                async with session_factory() as session:
+                    earliest_stmt = (
+                        select(func.min(ListingObservation.resolved_at))
+                        .where(
+                            ListingObservation.ea_id == ea_id,
+                            ListingObservation.outcome != None,  # noqa: E711
+                            ListingObservation.resolved_at != None,  # noqa: E711
+                        )
+                    )
+                    earliest_result = await session.execute(earliest_stmt)
+                    our_earliest = earliest_result.scalar()
 
                 # Overlap cutoff: whichever started later
                 overlap_cutoff = None
                 cutoff_dt = None
                 if fb_earliest and our_earliest:
                     fb_db = _to_db_fmt(fb_earliest.isoformat())
-                    our_db = _to_db_fmt(our_earliest)
+                    our_db = _to_db_fmt(str(our_earliest))
                     overlap_cutoff = max(fb_db, our_db)
                 elif fb_earliest:
                     overlap_cutoff = _to_db_fmt(fb_earliest.isoformat())
                 elif our_earliest:
-                    overlap_cutoff = _to_db_fmt(our_earliest)
+                    overlap_cutoff = _to_db_fmt(str(our_earliest))
 
                 if overlap_cutoff:
                     try:
@@ -311,7 +276,9 @@ def main(count: int, verbose: bool) -> None:
                         cutoff_dt = None
 
                 # Get listings from both sources in the overlap window
-                our_listings = _get_our_listings(conn, ea_id, overlap_cutoff or "2000-01-01")
+                async with session_factory() as session:
+                    our_listings = await _get_our_listings(session, ea_id, overlap_cutoff or "2000-01-01")
+
                 if not our_listings:
                     console.print("[yellow]no resolved observations yet[/yellow]")
                     continue
@@ -344,7 +311,7 @@ def main(count: int, verbose: bool) -> None:
             console.print("[yellow]No players could be checked.[/yellow]")
 
     finally:
-        conn.close()
+        await engine.dispose()
 
 
 def _display_results(console: Console, results: list[dict], verbose: bool) -> None:
