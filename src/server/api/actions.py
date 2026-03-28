@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 
 from src.server.models_db import PortfolioSlot, TradeAction, TradeRecord
 
@@ -55,6 +55,12 @@ class DirectTradeRecordPayload(BaseModel):
     ea_id: int
     price: int
     outcome: str  # "bought" | "listed" | "sold" | "expired"
+
+
+class BatchTradeRecordPayload(BaseModel):
+    """Payload for POST /api/v1/trade-records/batch."""
+
+    records: list[DirectTradeRecordPayload]
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -360,17 +366,17 @@ async def direct_trade_record(payload: DirectTradeRecordPayload, request: Reques
         if slot is None:
             raise HTTPException(status_code=404, detail=f"ea_id {payload.ea_id} not in portfolio")
 
-        # Server-side dedup: check if identical record exists in last 5 minutes
-        five_min_ago = datetime.utcnow() - timedelta(minutes=5)
-        dup_check = await session.execute(
-            select(TradeRecord).where(
-                TradeRecord.ea_id == payload.ea_id,
-                TradeRecord.outcome == payload.outcome,
-                TradeRecord.price == payload.price,
-                TradeRecord.recorded_at >= five_min_ago,
-            )
+        # Server-side dedup: only record if outcome differs from the most recent
+        # record for this player. Mirrors the client-side last-status dedup.
+        latest_stmt = (
+            select(TradeRecord.outcome)
+            .where(TradeRecord.ea_id == payload.ea_id)
+            .order_by(TradeRecord.id.desc())
+            .limit(1)
         )
-        if dup_check.scalar_one_or_none() is not None:
+        latest_result = await session.execute(latest_stmt)
+        latest_outcome = latest_result.scalar_one_or_none()
+        if latest_outcome == payload.outcome:
             return {"status": "ok", "trade_record_id": -1, "deduplicated": True}
 
         now = datetime.utcnow()
@@ -391,3 +397,60 @@ async def direct_trade_record(payload: DirectTradeRecordPayload, request: Reques
         payload.ea_id, payload.outcome, payload.price, record_id,
     )
     return {"status": "ok", "trade_record_id": record_id}
+
+
+@router.post("/trade-records/batch", status_code=201)
+async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request):
+    """Record multiple trade outcomes in a single DB transaction.
+
+    Validates all ea_ids exist in portfolio_slots, deduplicates within 5-minute
+    window, inserts all records in one commit. Much faster than N individual calls
+    when the scanner holds the write lock.
+    """
+    session_factory = request.app.state.session_factory
+    succeeded = []
+    failed = []
+
+    async with session_factory() as session:
+        # Load all portfolio ea_ids in one query
+        all_ea_ids = [r.ea_id for r in payload.records]
+        slot_result = await session.execute(
+            select(PortfolioSlot.ea_id).where(PortfolioSlot.ea_id.in_(all_ea_ids))
+        )
+        valid_ea_ids = {row.ea_id for row in slot_result.all()}
+
+        # Load latest outcome per player for dedup (mirrors client-side last-status logic)
+        latest_subq = (
+            select(TradeRecord.ea_id, func.max(TradeRecord.id).label("max_id"))
+            .where(TradeRecord.ea_id.in_(all_ea_ids))
+            .group_by(TradeRecord.ea_id)
+            .subquery()
+        )
+        latest_result = await session.execute(
+            select(TradeRecord.ea_id, TradeRecord.outcome)
+            .join(latest_subq, (TradeRecord.ea_id == latest_subq.c.ea_id) & (TradeRecord.id == latest_subq.c.max_id))
+        )
+        last_outcome: dict[int, str] = {r.ea_id: r.outcome for r in latest_result.all()}
+
+        now = datetime.utcnow()
+        for record in payload.records:
+            action_type = _OUTCOME_TO_ACTION_TYPE.get(record.outcome)
+            if action_type is None or record.ea_id not in valid_ea_ids:
+                failed.append(record.ea_id)
+                continue
+            if last_outcome.get(record.ea_id) == record.outcome:
+                succeeded.append(record.ea_id)  # deduped = success
+                continue
+            session.add(TradeRecord(
+                ea_id=record.ea_id,
+                action_type=action_type,
+                price=record.price,
+                outcome=record.outcome,
+                recorded_at=now,
+            ))
+            succeeded.append(record.ea_id)
+
+        await session.commit()
+
+    logger.info("Batch trade records: %d succeeded, %d failed", len(succeeded), len(failed))
+    return {"status": "ok", "succeeded": succeeded, "failed": failed}

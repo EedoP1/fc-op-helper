@@ -52,6 +52,7 @@ const DASHBOARD_DATA: DashboardData = {
     {
       ea_id: 100,
       name: 'Lionel Messi',
+      futgg_url: '/players/158023-lionel-messi/26-100158023/',
       status: 'LISTED',
       times_sold: 2,
       realized_profit: 8000,

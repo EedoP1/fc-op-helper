@@ -59,7 +59,8 @@ export default defineContentScript({
           // Request type sent TO the service worker — content script should not receive it via onMessage.
           return false;
         case 'TRADE_REPORT_RESULT':
-          // Response type — received as sendMessage return value, not via onMessage.
+        case 'TRADE_REPORT_BATCH':
+        case 'TRADE_REPORT_BATCH_RESULT':
           return false;
         case 'DASHBOARD_STATUS_REQUEST':
           // Request type sent TO the service worker — content script should not receive it via onMessage.
@@ -93,12 +94,52 @@ export default defineContentScript({
     // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────
     let tradeObserver: MutationObserver | null = null;
 
-    // In-memory dedup set — survives across MutationObserver scans within the same
-    // content script lifetime. Also persisted to chrome.storage.local so it survives
-    // service worker restarts and page refreshes.
-    const reportedSet = new Set<string>();
+    // In-memory dedup map — tracks last reported status per player (ea_id → status).
+    // A trade is only reported when the status *changes* for a player, so:
+    //   LISTED → SOLD → LISTED → SOLD = 4 reports (2 full sell cycles)
+    //   LISTED → SOLD → SOLD = 2 reports (second SOLD deduped)
+    // Persisted to chrome.storage.local so it survives service worker restarts
+    // and page refreshes.
+    const lastReportedStatus = new Map<string, string>();
     let reportedSetLoaded = false;
     let scanInProgress = false;
+
+    // Pending queue for failed reports — retried every 10s until backend is reachable
+    type TradeOutcome = 'bought' | 'listed' | 'sold' | 'expired';
+    const pendingReports: Array<{ ea_id: number; price: number; outcome: TradeOutcome; playerName: string }> = [];
+    let retryTimerId: ReturnType<typeof setTimeout> | null = null;
+
+    async function retryPendingReports() {
+      if (pendingReports.length === 0) return;
+      const batch = [...pendingReports];
+      pendingReports.length = 0;
+      for (const report of batch) {
+        try {
+          const response = await chrome.runtime.sendMessage({
+            type: 'TRADE_REPORT',
+            ea_id: report.ea_id,
+            price: report.price,
+            outcome: report.outcome,
+          } satisfies ExtensionMessage);
+          if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
+            lastReportedStatus.set(String(report.ea_id), report.outcome);
+            console.log(`[OP Seller CS] Retry OK: ${report.outcome} for ${report.playerName} (${report.ea_id})`);
+            continue;
+          }
+        } catch { /* still down */ }
+        pendingReports.push(report); // re-queue
+      }
+      // Persist dedup map after successful retries
+      if (batch.length !== pendingReports.length) {
+        await reportedOutcomesItem.setValue(
+          [...lastReportedStatus.entries()].map(([id, status]) => `${id}:${status}`),
+        );
+      }
+      // Schedule next retry if still pending
+      if (pendingReports.length > 0) {
+        retryTimerId = setTimeout(retryPendingReports, 10_000);
+      }
+    }
 
     /**
      * Scan the Transfer List DOM for portfolio player outcomes.
@@ -125,10 +166,26 @@ export default defineContentScript({
       const items = readTransferList(document);
       if (items.length === 0) return;
 
-      // Load persisted dedup set on first scan
+      // Load persisted dedup map on first scan
       if (!reportedSetLoaded) {
         const stored = await reportedOutcomesItem.getValue();
-        for (const key of stored) reportedSet.add(key);
+        let migrated = false;
+        for (const key of stored) {
+          // New format: "ea_id:status" (exactly one colon)
+          // Old format: "ea_id:status:price" (two colons) — discard on migration
+          const parts = key.split(':');
+          if (parts.length === 2 && parts[0] && parts[1]) {
+            lastReportedStatus.set(parts[0], parts[1]);
+          } else {
+            migrated = true; // old format entry — skip it
+          }
+        }
+        if (migrated) {
+          // Persist cleaned map so old entries don't reload next time
+          await reportedOutcomesItem.setValue(
+            [...lastReportedStatus.entries()].map(([id, status]) => `${id}:${status}`),
+          );
+        }
         reportedSetLoaded = true;
       }
 
@@ -136,6 +193,9 @@ export default defineContentScript({
       // name (endsWith) + rating + position
       // DOM shows short names ("Lo Celso") while portfolio has full names ("Giovani Lo Celso"),
       // so we use endsWith for name matching and rating+position to disambiguate.
+
+      // Collect all new reports, then send as a single batch
+      const batch: Array<{ ea_id: number; price: number; outcome: TradeOutcome; playerName: string }> = [];
 
       for (const item of items) {
         const domName = item.playerName.toLowerCase();
@@ -145,45 +205,57 @@ export default defineContentScript({
           p.position === item.position,
         );
         if (!match) continue; // Not a portfolio player (D-03)
-        const player = { ea_id: match.ea_id };
 
-        const dedupKey = `${player.ea_id}:${item.status}:${item.price}`;
-        if (reportedSet.has(dedupKey)) continue; // Already reported (D-07)
+        const eaId = String(match.ea_id);
+        if (lastReportedStatus.get(eaId) === item.status) continue; // Same status — dedup (D-07)
 
-        // Report to service worker (D-06: silent auto-report)
-        // Retry once on failure (service worker may still be waking up)
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const response = await chrome.runtime.sendMessage({
-              type: 'TRADE_REPORT',
-              ea_id: player.ea_id,
-              price: item.price,
-              outcome: item.status,
-            } satisfies ExtensionMessage);
+        batch.push({ ea_id: match.ea_id, price: item.price, outcome: item.status, playerName: item.playerName });
+      }
 
-            if (response && response.type === 'TRADE_REPORT_RESULT' && response.success) {
-              reportedSet.add(dedupKey);
-              console.log(`[OP Seller CS] Reported ${item.status} for ${item.playerName} (${player.ea_id})`);
-              break;
+      if (batch.length === 0) return;
+
+      // Send all reports in one message → one backend call → one DB transaction
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'TRADE_REPORT_BATCH',
+          reports: batch.map(r => ({ ea_id: r.ea_id, price: r.price, outcome: r.outcome })),
+        } satisfies ExtensionMessage);
+
+        if (response && response.type === 'TRADE_REPORT_BATCH_RESULT') {
+          const succeededSet = new Set(response.succeeded);
+          for (const report of batch) {
+            if (succeededSet.has(report.ea_id)) {
+              lastReportedStatus.set(String(report.ea_id), report.outcome);
             }
-            // Backend returned error (e.g. 404) — don't retry
-            if (response && response.type === 'TRADE_REPORT_RESULT' && !response.success) {
-              console.warn(`[OP Seller CS] Backend rejected ${item.playerName}: ${response.error}`);
-              break;
+          }
+          const ok = response.succeeded?.length ?? 0;
+          const fail = response.failed?.length ?? 0;
+          console.log(`[OP Seller CS] Batch reported ${ok} trades (${fail} failed)`);
+          if (fail > 0) {
+            // Queue failed ones for retry
+            for (const report of batch) {
+              if (!succeededSet.has(report.ea_id)) {
+                pendingReports.push(report);
+              }
             }
-          } catch (e) {
-            if (attempt === 0) {
-              // First failure — wait 1s for service worker to wake up, then retry
-              await new Promise(r => setTimeout(r, 1000));
-            } else {
-              console.error(`[OP Seller CS] Failed to report trade for ${item.playerName}:`, e);
+            if (pendingReports.length > 0 && !retryTimerId) {
+              retryTimerId = setTimeout(retryPendingReports, 10_000);
             }
           }
         }
+      } catch {
+        // Backend completely unreachable — queue everything
+        pendingReports.push(...batch);
+        if (!retryTimerId) {
+          retryTimerId = setTimeout(retryPendingReports, 10_000);
+          console.log(`[OP Seller CS] Backend down, queued ${batch.length} report(s) for retry`);
+        }
       }
 
-      // Persist dedup set to storage (survives page refresh)
-      await reportedOutcomesItem.setValue([...reportedSet]);
+      // Persist dedup map to storage (survives page refresh)
+      await reportedOutcomesItem.setValue(
+        [...lastReportedStatus.entries()].map(([id, status]) => `${id}:${status}`),
+      );
     }
 
     /**
@@ -221,8 +293,9 @@ export default defineContentScript({
       console.log('[OP Seller CS] Trade observer activated on Transfer List');
     }
 
-    // Clean up trade observer on invalidation
+    // Clean up trade observer and retry timer on invalidation
     ctx.onInvalidated(() => {
+      if (retryTimerId) clearTimeout(retryTimerId);
       if (tradeObserver) {
         tradeObserver.disconnect();
         tradeObserver = null;

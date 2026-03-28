@@ -58,6 +58,9 @@ export default defineBackground({
         case 'TRADE_REPORT':
           handleTradeReport(msg.ea_id, msg.price, msg.outcome).then(sendResponse);
           return true; // async response
+        case 'TRADE_REPORT_BATCH':
+          handleTradeReportBatch(msg.reports).then(sendResponse);
+          return true;
         case 'DASHBOARD_STATUS_REQUEST':
           handleDashboardStatus().then(sendResponse);
           return true; // async response
@@ -253,6 +256,30 @@ async function handleTradeReport(
     return { type: 'TRADE_REPORT_RESULT', success: true };
   } catch (e) {
     return { type: 'TRADE_REPORT_RESULT', success: false, error: String(e) };
+  }
+}
+
+/**
+ * Report multiple trade outcomes in a single backend call.
+ * Falls back to individual reports if the batch endpoint is unavailable.
+ */
+async function handleTradeReportBatch(
+  reports: Array<{ ea_id: number; price: number; outcome: string }>,
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/trade-records/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: reports }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => `${res.status}`);
+      return { type: 'TRADE_REPORT_BATCH_RESULT', succeeded: [], failed: reports.map(r => r.ea_id), error: detail };
+    }
+    const data = await res.json();
+    return { type: 'TRADE_REPORT_BATCH_RESULT', succeeded: data.succeeded || reports.map(r => r.ea_id), failed: data.failed || [] };
+  } catch (e) {
+    return { type: 'TRADE_REPORT_BATCH_RESULT', succeeded: [], failed: reports.map(r => r.ea_id), error: String(e) };
   }
 }
 

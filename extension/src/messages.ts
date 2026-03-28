@@ -10,6 +10,7 @@ import type { PortfolioPlayer, ConfirmedPortfolio } from './storage';
 export type DashboardPlayer = {
   ea_id: number;
   name: string;
+  futgg_url: string | null;
   status: 'PENDING' | 'BOUGHT' | 'LISTED' | 'SOLD' | 'EXPIRED';
   times_sold: number;
   realized_profit: number;
@@ -44,6 +45,8 @@ export type ExtensionMessage =
   // Trade reporting (Phase 07.1: passive DOM reading → backend relay)
   | { type: 'TRADE_REPORT'; ea_id: number; price: number; outcome: 'bought' | 'listed' | 'sold' | 'expired' }
   | { type: 'TRADE_REPORT_RESULT'; success: boolean; error?: string }
+  | { type: 'TRADE_REPORT_BATCH'; reports: Array<{ ea_id: number; price: number; outcome: 'bought' | 'listed' | 'sold' | 'expired' }> }
+  | { type: 'TRADE_REPORT_BATCH_RESULT'; succeeded: number[]; failed: number[]; error?: string }
   // Dashboard status (Phase 07.2: portfolio dashboard)
   | { type: 'DASHBOARD_STATUS_REQUEST' }
   | { type: 'DASHBOARD_STATUS_RESULT'; data: DashboardData | null; error?: string };

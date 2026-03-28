@@ -44,7 +44,7 @@ async def get_portfolio_status(request: Request):
             players: list of per-player dicts (ea_id, name, status, times_sold,
                      realized_profit, unrealized_pnl, buy_price, sell_price, current_bin)
     """
-    session_factory = request.app.state.session_factory
+    session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
         # Query 1 — All active portfolio slots
         slots_result = await session.execute(
@@ -132,11 +132,13 @@ async def get_portfolio_status(request: Request):
 
         # Query 5 — Player names from PlayerRecord
         name_result = await session.execute(
-            select(PlayerRecord.ea_id, PlayerRecord.name).where(
+            select(PlayerRecord.ea_id, PlayerRecord.name, PlayerRecord.futgg_url).where(
                 PlayerRecord.ea_id.in_(ea_ids)
             )
         )
-        name_map: dict[int, str] = {row.ea_id: row.name for row in name_result.all()}
+        player_info: dict[int, tuple[str, str | None]] = {
+            row.ea_id: (row.name, row.futgg_url) for row in name_result.all()
+        }
 
     # ── Assembly ────────────────────────────────────────────────────────────────
 
@@ -190,9 +192,14 @@ async def get_portfolio_status(request: Request):
         total_sold_count += times_sold
         total_expired_count += expired_count
 
+        info = player_info.get(ea_id)
+        name = info[0] if info else f"Player {ea_id}"
+        futgg_url = info[1] if info else None
+
         players.append({
             "ea_id": ea_id,
-            "name": name_map.get(ea_id, f"Player {ea_id}"),
+            "name": name,
+            "futgg_url": futgg_url,
             "status": status,
             "times_sold": times_sold,
             "realized_profit": realized_profit,

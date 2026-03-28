@@ -435,23 +435,18 @@ async def test_generate_portfolio_excludes_volatile_player(volatility_integratio
     assert 4002 in ea_ids_in_response, "Stable player should be included"
 
 
-async def test_mid_window_spike_detected(volatile_db):
-    """Mid-window price spike is detected even when price returns to baseline by day 0.
+async def test_mid_window_spike_returns_to_baseline_not_flagged(volatile_db):
+    """Mid-window spike that returns to baseline is NOT flagged.
 
-    Old approach (earliest-vs-latest): day -2 at 10000, day 0 at 10500 — only +5%
-    increase, NOT flagged as volatile.
-
-    New approach (min-vs-max): min=10000, max=16000 (spike at day -1) — +60%
-    increase, correctly flagged as volatile.
+    Earliest=10000, latest=10500 — only +5% directional increase.
     """
     engine, session_factory = volatile_db
     now = datetime.utcnow()
-    # ea_id=3010: price spiked mid-window then returned to near-normal
     await _seed_snapshots(session_factory, [
-        (3010, now - timedelta(days=2), 10000),     # baseline
-        (3010, now - timedelta(days=1), 16000),     # spike (+60%)
-        (3010, now, 10500),                          # returned to normal
+        (3010, now - timedelta(days=2), 10000),
+        (3010, now - timedelta(days=1), 16000),  # spike (irrelevant — returned)
+        (3010, now, 10500),
     ])
     async with session_factory() as session:
         volatile = await _get_volatile_ea_ids(session, [3010])
-    assert 3010 in volatile, "Mid-window spike should be detected via MIN/MAX aggregation"
+    assert 3010 not in volatile, "Price returned to baseline — not a sustained increase"

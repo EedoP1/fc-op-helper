@@ -32,7 +32,7 @@ async def get_profit_summary(request: Request):
             totals: {total_spent, total_earned, net_profit, trade_count}
             per_player: list of {ea_id, name, total_spent, total_earned, net_profit, trade_count}
     """
-    session_factory = request.app.state.session_factory
+    session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
         # Aggregate per ea_id: sum bought prices, sum sold prices, count all records
         agg_stmt = (

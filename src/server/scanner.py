@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import select, func
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -122,7 +122,7 @@ class ScannerService:
             for i in range(0, len(values_list), chunk_size):
                 chunk = values_list[i : i + chunk_size]
                 for row in chunk:
-                    stmt = sqlite_insert(PlayerRecord).values(**row)
+                    stmt = pg_insert(PlayerRecord).values(**row)
                     stmt = stmt.on_conflict_do_update(
                         index_elements=["ea_id"],
                         set_=dict(
@@ -216,7 +216,7 @@ class ScannerService:
             for p in players:
                 ea_id = p["ea_id"]
                 player_name = p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(ea_id)
-                stmt = sqlite_insert(PlayerRecord).values(
+                stmt = pg_insert(PlayerRecord).values(
                     ea_id=ea_id,
                     name=player_name,
                     rating=p.get("overall", 0),
