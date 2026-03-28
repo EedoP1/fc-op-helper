@@ -8,12 +8,27 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - D:/op-seller/postgres_data:/var/lib/postgresql/data
+    command: postgres -c max_connections=200
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U op_seller"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-volumes:
-  postgres_data:
+  postgres-test:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: op_seller
+      POSTGRES_PASSWORD: op_seller
+      POSTGRES_DB: op_seller
+    ports:
+      - "5433:5432"
+    volumes:
+      - D:/op-seller/postgres_data_test:/var/lib/postgresql/data
+    command: postgres -c max_connections=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U op_seller"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

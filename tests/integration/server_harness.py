@@ -109,10 +109,10 @@ async def lifespan(app: FastAPI):
 
     # NOTE: bootstrap job intentionally omitted — see module docstring.
     # Production server adds: scheduler.add_job(scanner.run_bootstrap_and_score, ...)
-    # Tests use a fresh Postgres container, so bootstrap is unnecessary and causes
+    # Tests use a pre-prepared Postgres copy, so bootstrap is unnecessary and causes
     # write-pool contention that times out all concurrent API requests.
 
-    logger.info("Test server started (scanner active, bootstrap skipped).")
+    logger.info("Test server started (scanner + scheduler active, bootstrap skipped).")
 
     yield
 
