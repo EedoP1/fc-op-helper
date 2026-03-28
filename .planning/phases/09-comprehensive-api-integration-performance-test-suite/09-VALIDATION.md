@@ -38,10 +38,10 @@ created: 2026-03-28
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 09-01-01 | 01 | 1 | Health-01 | infra | `pytest tests/test_health_check.py --collect-only` | ✅ | ⬜ pending |
+| 09-01-01 | 01 | 1 | Health-01 | infra | `python -m pytest tests/ --collect-only 2>&1 \| grep 'ERROR' && exit 1 \|\| echo 'Collection clean'` | ✅ | ⬜ pending |
+| 09-01-02 | 01 | 1 | Batch-01..04 | unit | `pytest tests/test_batch_trade_records.py -x` | ❌ W0 | ⬜ pending |
 | 09-02-01 | 02 | 1 | Lifecycle-01..05 | integration | `pytest tests/test_lifecycle_flows.py -x` | ❌ W0 | ⬜ pending |
-| 09-03-01 | 03 | 1 | Batch-01..04 | unit | `pytest tests/test_batch_trade_records.py -x` | ❌ W0 | ⬜ pending |
-| 09-04-01 | 04 | 2 | Perf-01..03 | smoke | `pytest tests/test_performance.py -x` | ❌ W0 | ⬜ pending |
+| 09-03-01 | 03 | 2 | Perf-01..03 | smoke | `pytest tests/test_performance.py -x` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
