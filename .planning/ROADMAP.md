@@ -140,5 +140,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 
 Plans:
 - [x] 09-01-PLAN.md — Real server harness (no mocks), env-configurable DB, smoke tests for all 16 endpoints, performance thresholds
-- [ ] 09-02-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST), concurrent remove duplicate bug, batch records, race conditions
+- [x] 09-02-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST), concurrent remove duplicate bug, batch records, race conditions
 - [x] 09-03-PLAN.md — Edge cases (CORS, invalid input, 404s, boundary conditions), data integrity (unique constraints, clean slate, stale reset)
