@@ -148,9 +148,9 @@ Plans:
 **Goal:** Migrate backend from SQLite (aiosqlite) to PostgreSQL (asyncpg) — swap DB engine, consolidate 3-engine split to single pool, replace all SQLite-specific code, fix DailyListingSummary upsert bug, rewrite test harness for Postgres, and create data migration script. Verification bar: all Phase 9 integration tests pass on Postgres.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13
 **Depends on:** Phase 9
-**Plans:** 0/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 09.1-01-PLAN.md — Docker Postgres setup, deps, config, db.py single-engine rewrite, main.py consolidation
-- [ ] 09.1-02-PLAN.md — Replace sqlite_insert with pg_insert (4 locations), fix DailyListingSummary upsert bug, rewrite health_check.py
-- [ ] 09.1-03-PLAN.md — Rewrite test conftest/harness for Postgres testcontainer, create data migration script
+- [x] 09.1-01-PLAN.md — Docker Postgres setup, deps, config, db.py single-engine rewrite, main.py consolidation
+- [x] 09.1-02-PLAN.md — Replace sqlite_insert with pg_insert (4 locations), fix DailyListingSummary upsert bug, rewrite health_check.py
+- [x] 09.1-03-PLAN.md — Rewrite test conftest/harness for Postgres testcontainer, create data migration script
