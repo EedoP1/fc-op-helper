@@ -1,8 +1,11 @@
 """Session-scoped fixtures for integration tests.
 
-Starts a real uvicorn process on a free port with a real SQLite file.
-Uses a synchronous live_server fixture to avoid pytest-asyncio 1.3.0
-event loop scoping issues with session-scoped async fixtures.
+Starts a real uvicorn process on a free port backed by an ephemeral Postgres
+container (testcontainers). Each test session gets a fresh Postgres DB — no
+shared SQLite file, no state leaks across runs.
+
+Uses synchronous live_server fixture to avoid pytest-asyncio 1.3.0 event loop
+scoping issues with session-scoped async fixtures.
 """
 import os
 import socket
@@ -10,9 +13,25 @@ import subprocess
 import sys
 import time
 
-import aiosqlite
+import docker
 import httpx
 import pytest
+from testcontainers.postgres import PostgresContainer
+
+
+# ── Docker pre-flight ─────────────────────────────────────────────────────────
+
+def _check_docker():
+    """Skip integration tests if Docker is not available.
+
+    On Windows, Docker Desktop must be running. This guard provides a clear
+    skip message instead of a confusing DockerException at test collection time
+    (per Pitfall 6 — Windows Docker Desktop must be running).
+    """
+    try:
+        docker.from_env().ping()
+    except Exception:
+        pytest.skip("Docker not available -- skipping integration tests")
 
 
 # ── Port discovery ────────────────────────────────────────────────────────────
@@ -25,51 +44,53 @@ def server_port():
         return s.getsockname()[1]
 
 
-# ── DB path ───────────────────────────────────────────────────────────────────
+# ── Postgres container ────────────────────────────────────────────────────────
 
-TEST_DB_PATH = "D:/op-seller/op_seller_test.db"
+@pytest.fixture(scope="session")
+def postgres_container():
+    """Session-scoped Postgres 17 container. Starts once for all tests.
+
+    testcontainers manages the Docker container lifecycle — starts before the
+    first test, stops after the last. Each test session gets a completely fresh
+    DB (no leftover data from previous runs).
+    """
+    _check_docker()
+    with PostgresContainer("postgres:17", driver=None) as pg:
+        yield pg
 
 
 @pytest.fixture(scope="session")
-def test_db_path():
-    """Use the pre-existing test DB copy.
+def test_db_url(postgres_container) -> str:
+    """Return asyncpg-compatible URL for the test container.
 
-    The test DB is a one-time sqlite3.backup() copy of the real production DB.
-    It lives at D:/op-seller/op_seller_test.db and is NOT copied per session —
-    tests read/write to it directly. The cleanup fixture resets mutable tables
-    after each test so cross-test contamination is prevented.
-
-    To refresh the test DB, run:
-        python -c "import sqlite3; s=sqlite3.connect('file:D:/op-seller/op_seller.db?mode=ro',uri=True); d=sqlite3.connect('D:/op-seller/op_seller_test.db'); s.backup(d); s.close(); d.close()"
+    testcontainers returns a psycopg2-style URL; we convert it to asyncpg
+    for use with SQLAlchemy create_async_engine.
     """
-    if not os.path.exists(TEST_DB_PATH):
-        raise RuntimeError(
-            f"Test DB not found at {TEST_DB_PATH}. "
-            "Create it once with: python -c \"import sqlite3; "
-            "s=sqlite3.connect('file:D:/op-seller/op_seller.db?mode=ro',uri=True); "
-            "d=sqlite3.connect('D:/op-seller/op_seller_test.db'); s.backup(d); s.close(); d.close()\""
-        )
-    return TEST_DB_PATH
+    url = postgres_container.get_connection_url()
+    # testcontainers returns psycopg2 URL; convert to asyncpg
+    url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
 
 
 # ── Live server ───────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session", autouse=True)
-def live_server(test_db_path, server_port):
+def live_server(test_db_url, server_port):
     """Start a real uvicorn process serving the real server harness.
 
     This fixture is SYNCHRONOUS (not async def) to avoid the pytest-asyncio 1.3.0
     event loop scoping issue where session-scoped async fixtures fail because
     pytest-asyncio defaults to function-scoped event loops.
 
-    Uses subprocess.Popen + a synchronous readiness poll with time.sleep()
-    and httpx.get() (sync client).
+    Passes DATABASE_URL via env to the subprocess — no TEST_DB_PATH needed.
+    The harness reads DATABASE_URL at import time (src.config).
 
     The real server starts with real ScannerService, CircuitBreaker, and
     APScheduler — startup takes longer than the mock harness did, so the
     readiness poll allows up to 30 seconds (300 x 0.1s).
     """
-    env = {**os.environ, "TEST_DB_PATH": str(test_db_path)}
+    env = {**os.environ, "DATABASE_URL": test_db_url}
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -133,31 +154,29 @@ async def client(base_url):
 # ── Real ea_id helper ─────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session")
-def real_ea_id(test_db_path):
-    """Return a real ea_id from the production DB copy.
+def real_ea_id(test_db_url):
+    """Return a real ea_id by querying the Postgres test container.
 
-    Queries the test DB directly (synchronously via aiosqlite event loop) to
-    find an active player with a viable score. Falls back to None if the DB
-    has no viable players (e.g., fresh empty DB).
+    Uses an asyncpg engine to query player_scores for a viable player. Returns
+    None on a fresh container with no seed data — seed_real_portfolio_slot and
+    test helpers using POST /portfolio/generate handle the None case.
     """
     import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
 
     async def _query():
-        async with aiosqlite.connect(str(test_db_path)) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """
-                SELECT ps.ea_id
-                FROM player_scores ps
-                JOIN players pr ON pr.ea_id = ps.ea_id
-                WHERE ps.is_viable = 1
-                  AND pr.is_active = 1
-                ORDER BY ps.efficiency DESC
-                LIMIT 1
-                """
-            )
-            row = await cursor.fetchone()
-            return row["ea_id"] if row else None
+        engine = create_async_engine(test_db_url)
+        async with engine.connect() as conn:
+            result = await conn.execute(text(
+                "SELECT ps.ea_id FROM player_scores ps "
+                "JOIN players pr ON pr.ea_id = ps.ea_id "
+                "WHERE ps.is_viable = true AND pr.is_active = true "
+                "ORDER BY ps.efficiency DESC LIMIT 1"
+            ))
+            row = result.first()
+            await engine.dispose()
+            return row[0] if row else None
 
     return asyncio.run(_query())
 
@@ -166,7 +185,7 @@ def real_ea_id(test_db_path):
 
 @pytest.fixture
 async def seed_real_portfolio_slot(client, real_ea_id):
-    """Seed one portfolio slot using a real ea_id from the production DB.
+    """Seed one portfolio slot using a real ea_id from the test container.
 
     This replaces the old fake ea_id=100 fixture which would fail with
     the real server because trade records validate ea_id in portfolio_slots
@@ -196,26 +215,20 @@ async def seed_real_portfolio_slot(client, real_ea_id):
 # ── Per-test cleanup ──────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-async def cleanup_tables(test_db_path):
+async def cleanup_tables(test_db_url):
     """Delete all rows from mutable tables after each test.
 
-    Preserves read-only data (player_records, player_scores, market_snapshots,
+    Preserves read-only data (players, player_scores, market_snapshots,
     snapshot_price_points, listing_observations, daily_listing_summaries,
-    snapshot_sales) per D-16 — this is the real data that makes tests
-    meaningful.
+    snapshot_sales) — this is the scored player data that makes tests meaningful.
 
-    Uses connect_args={"timeout": 30} to avoid 'database is locked' errors on
-    Windows where SQLite file locking is stricter (especially with the real
-    scanner holding write locks).
+    Uses asyncpg engine instead of aiosqlite for Postgres compatibility.
     """
     yield
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy import text
 
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{test_db_path}",
-        connect_args={"timeout": 30},
-    )
+    engine = create_async_engine(test_db_url)
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM trade_records"))
         await conn.execute(text("DELETE FROM trade_actions"))
