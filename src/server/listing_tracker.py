@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -150,7 +150,7 @@ async def record_listings(
         expected_expiry_at = now + timedelta(seconds=remaining)
 
         stmt = (
-            sqlite_insert(ListingObservation)
+            pg_insert(ListingObservation)
             .values(
                 fingerprint=fp,
                 ea_id=ea_id,
@@ -331,7 +331,7 @@ async def aggregate_daily_summaries(
         op_expired = sum(1 for obs in op_obs if obs.outcome == "expired")
 
         stmt = (
-            sqlite_insert(DailyListingSummary)
+            pg_insert(DailyListingSummary)
             .values(
                 ea_id=ea_id,
                 date=target_date,
@@ -342,7 +342,7 @@ async def aggregate_daily_summaries(
                 total_listed_count=total_listed,
             )
             .on_conflict_do_update(
-                index_elements=["id"],
+                constraint="uq_daily_summary_ea_id_date_margin",
                 set_=dict(
                     op_listed_count=op_listed,
                     op_sold_count=op_sold,

@@ -75,7 +75,7 @@ Each task was committed atomically:
 1. **Task 1: Create profit summary endpoint with tests** - `b7bf74a` (feat)
 2. **Task 2: Add player swap DELETE endpoint to portfolio router with tests** - `7fda49b` (feat)
 
-**Plan metadata:** (to be committed)
+**Plan metadata:** `d946b02` (docs: complete plan)
 
 _Note: Both tasks used TDD (RED then GREEN)_
 

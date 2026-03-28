@@ -142,6 +142,7 @@ class DailyListingSummary(Base):
 
     __table_args__ = (
         Index("ix_daily_summary_ea_id_date_margin", "ea_id", "date", "margin_pct"),
+        UniqueConstraint("ea_id", "date", "margin_pct", name="uq_daily_summary_ea_id_date_margin"),
     )
 
 

@@ -72,11 +72,11 @@ export const portfolioItem = storage.defineItem<ConfirmedPortfolio | null>(
 
 /**
  * Deduplication set for reported trade outcomes (D-07).
- * Keys are composite: "{ea_id}:{outcome}:{price}" to uniquely identify events.
+ * Keys are "ea_id:status" pairs tracking last reported status per player.
  * Checked before every report; written after successful report.
  * Survives service worker termination and page refreshes.
  */
 export const reportedOutcomesItem = storage.defineItem<string[]>(
-  'local:reportedOutcomes',
+  'local:reportedOutcomesV2',
   { fallback: [] },
 );

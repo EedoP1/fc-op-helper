@@ -1,7 +1,7 @@
 """FUTBIN health monitor CLI — validates our DB data against FUTBIN reality.
 
 Picks random scored players from the database, fetches their FUTBIN sales/listing
-data, and compares against our stored metrics to produce an audit report.
+data, and compares listing counts by price in the overlapping time window.
 
 Usage:
     python -m src.health_check --count 10 --verbose
@@ -10,7 +10,7 @@ Usage:
 import logging
 import os
 import sqlite3
-import statistics
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import click
@@ -25,56 +25,30 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = "D:/op-seller/op_seller.db"
 
-# Health score weights
-WEIGHT_SELL_THROUGH = 0.40
-WEIGHT_PRICE_ACCURACY = 0.30
-WEIGHT_LISTING_COUNT = 0.15
-WEIGHT_PRICE_RANGE = 0.15
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _to_db_fmt(ts: str) -> str:
+    """Normalise any ISO or DB timestamp to 'YYYY-MM-DD HH:MM:SS' format."""
+    return ts.replace("T", " ").split("+")[0].split("Z")[0]
 
 
 # ── Database helpers ──────────────────────────────────────────────────
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Add futbin_id column to players table if not present, and create health_checks table."""
+    """Add futbin_id column to players table if not present."""
     try:
         conn.execute("ALTER TABLE players ADD COLUMN futbin_id INTEGER")
         conn.commit()
-        logger.info("Added futbin_id column to players table")
     except sqlite3.OperationalError:
-        # Column already exists
         pass
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS health_checks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ea_id INTEGER,
-            checked_at TEXT,
-            our_sell_rate REAL,
-            futbin_sell_rate REAL,
-            our_median_price INTEGER,
-            futbin_median_price INTEGER,
-            health_score REAL
-        )
-    """)
-    conn.commit()
 
 
 def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
-    """Select a mix of players with and without cached futbin_id.
-
-    Tries 50/50 split: half with known futbin_id (fast), half without (to build cache).
-
-    Args:
-        conn: SQLite connection.
-        count: Total number of players to select.
-
-    Returns:
-        List of dicts with ea_id, name, futbin_id.
-    """
+    """Select a mix of players with and without cached futbin_id."""
     half = count // 2
     rest = count - half
 
-    # Players with cached futbin_id
     with_id = conn.execute(
         "SELECT ea_id, name, futbin_id FROM players "
         "WHERE is_active = 1 AND futbin_id IS NOT NULL "
@@ -82,7 +56,6 @@ def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
         (half,),
     ).fetchall()
 
-    # Players without futbin_id
     without_id = conn.execute(
         "SELECT ea_id, name, futbin_id FROM players "
         "WHERE is_active = 1 AND futbin_id IS NULL "
@@ -90,7 +63,6 @@ def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
         (rest,),
     ).fetchall()
 
-    # If one group has fewer, take more from the other
     combined = with_id + without_id
     if len(combined) < count:
         existing_ids = {r[0] for r in combined}
@@ -110,208 +82,141 @@ def _select_players(conn: sqlite3.Connection, count: int) -> list[dict]:
     ]
 
 
-def _get_our_data(conn: sqlite3.Connection, ea_id: int, cutoff_iso: str | None = None) -> dict:
-    """Query our DB for comparison data within a time window.
+def _get_our_listings(conn: sqlite3.Connection, ea_id: int, cutoff: str) -> list[dict]:
+    """Get resolved listing observations for a player after cutoff.
 
-    Args:
-        conn: SQLite connection.
-        ea_id: Player EA ID.
-        cutoff_iso: ISO timestamp cutoff. Only data after this time is included.
-            If None, defaults to 48 hours ago.
+    Filters by resolved_at (when the listing disappeared / auction ended)
+    rather than first_seen_at (when we first observed it). This aligns with
+    FUTBIN's date field which records when the auction completed, not when
+    it was first listed.
 
-    Returns:
-        Dict with our_sold, our_expired, our_sell_rate, our_median_price,
-        our_listing_count, our_min_price, our_max_price.
+    Returns list of dicts with price and outcome (sold/expired).
     """
-    if cutoff_iso is None:
-        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-    cutoff = cutoff_iso
-
-    # Listing observations: sold vs expired
-    sold_count = conn.execute(
-        "SELECT COUNT(*) FROM listing_observations "
-        "WHERE ea_id = ? AND first_seen_at > ? AND outcome = 'sold'",
+    rows = conn.execute(
+        "SELECT buy_now_price, outcome FROM listing_observations "
+        "WHERE ea_id = ? AND resolved_at >= ? AND outcome IS NOT NULL",
         (ea_id, cutoff),
-    ).fetchone()[0]
+    ).fetchall()
+    return [{"price": r[0], "outcome": r[1]} for r in rows]
 
-    expired_count = conn.execute(
-        "SELECT COUNT(*) FROM listing_observations "
-        "WHERE ea_id = ? AND first_seen_at > ? AND outcome = 'expired'",
-        (ea_id, cutoff),
-    ).fetchone()[0]
 
-    total = sold_count + expired_count
-    sell_rate = sold_count / total if total > 0 else 0.0
+def _get_futbin_listings(sales: list[dict], cutoff_dt: datetime | None) -> list[dict]:
+    """Filter FUTBIN sales to the overlap window.
 
-    # Listing prices for range
-    listing_prices = [
-        r[0] for r in conn.execute(
-            "SELECT buy_now_price FROM listing_observations "
-            "WHERE ea_id = ? AND first_seen_at > ?",
-            (ea_id, cutoff),
-        ).fetchall()
-    ]
+    Returns list of dicts with price (listed_for) and outcome.
+    """
+    result = []
+    for s in sales:
+        if cutoff_dt and s.get("date") is not None and s["date"] < cutoff_dt:
+            continue
+        outcome = "sold" if s["sold_for"] > 0 else "expired"
+        result.append({"price": s["listed_for"], "outcome": outcome})
+    return result
 
-    # Snapshot sales prices (via market_snapshots join)
-    sale_prices = [
-        r[0] for r in conn.execute(
-            "SELECT ss.sold_price FROM snapshot_sales ss "
-            "JOIN market_snapshots ms ON ss.snapshot_id = ms.id "
-            "WHERE ms.ea_id = ? AND ss.sold_at > ?",
-            (ea_id, cutoff),
-        ).fetchall()
-    ]
 
-    median_price = int(statistics.median(sale_prices)) if sale_prices else 0
+def _price_bucket(price: int) -> int:
+    """Round a price to a bucket for fuzzy matching.
 
-    # Latest market snapshot
-    latest = conn.execute(
-        "SELECT current_lowest_bin, listing_count FROM market_snapshots "
-        "WHERE ea_id = ? ORDER BY captured_at DESC LIMIT 1",
-        (ea_id,),
-    ).fetchone()
+    Rounds to nearest 2% of the price value. This accounts for the fact that
+    FUTBIN and our DB may record slightly different prices for the same listing
+    (e.g. 17,750 vs 18,000).
+    """
+    if price <= 0:
+        return 0
+    step = max(500, int(price * 0.02 / 500) * 500)  # 2% rounded to 500s, min 500
+    return (price // step) * step
 
-    listing_count = latest[1] if latest else 0
+
+def _compare_listings(our: list[dict], futbin: list[dict]) -> dict:
+    """Compare listings by price bucket between our DB and FUTBIN.
+
+    Prices are bucketed (rounded to ~2%) for fuzzy matching since the same
+    listing can show slightly different prices across sources. OP listings
+    far above FUTBIN's price range are excluded.
+
+    Returns dict with match counts, per-bucket breakdown, and excluded count.
+    """
+    # Derive market-price ceiling from FUTBIN's price range.
+    fb_prices = [item["price"] for item in futbin if item["price"] > 0]
+    if fb_prices:
+        price_ceiling = int(max(fb_prices) * 1.3)
+        our_filtered = [item for item in our if item["price"] <= price_ceiling]
+    else:
+        our_filtered = our
+    our_excluded = len(our) - len(our_filtered)
+
+    # Bucket both sides
+    our_buckets = Counter(_price_bucket(item["price"]) for item in our_filtered)
+    fb_buckets = Counter(_price_bucket(item["price"]) for item in futbin)
+
+    our_outcome_by_bucket: dict[int, Counter] = {}
+    for item in our_filtered:
+        b = _price_bucket(item["price"])
+        our_outcome_by_bucket.setdefault(b, Counter())[item["outcome"]] += 1
+
+    fb_outcome_by_bucket: dict[int, Counter] = {}
+    for item in futbin:
+        b = _price_bucket(item["price"])
+        fb_outcome_by_bucket.setdefault(b, Counter())[item["outcome"]] += 1
+
+    all_buckets = sorted(set(our_buckets) | set(fb_buckets))
+
+    rows = []
+    for bucket in all_buckets:
+        ours_count = our_buckets.get(bucket, 0)
+        fb_count = fb_buckets.get(bucket, 0)
+        our_oc = our_outcome_by_bucket.get(bucket, Counter())
+        fb_oc = fb_outcome_by_bucket.get(bucket, Counter())
+
+        if ours_count > 0 and fb_count > 0:
+            where = "both"
+        elif ours_count > 0:
+            where = "only_ours"
+        else:
+            where = "only_futbin"
+
+        rows.append({
+            "price": bucket,
+            "ours": ours_count,
+            "futbin": fb_count,
+            "our_sold": our_oc.get("sold", 0),
+            "our_expired": our_oc.get("expired", 0),
+            "fb_sold": fb_oc.get("sold", 0),
+            "fb_expired": fb_oc.get("expired", 0),
+            "where": where,
+        })
+
+    total_ours = sum(our_buckets.values())
+    total_fb = sum(fb_buckets.values())
+    both_buckets = set(our_buckets) & set(fb_buckets)
+    matched = sum(min(our_buckets[b], fb_buckets[b]) for b in both_buckets)
 
     return {
-        "our_sold": sold_count,
-        "our_expired": expired_count,
-        "our_sell_rate": sell_rate,
-        "our_median_price": median_price,
-        "our_listing_count": listing_count,
-        "our_min_price": min(listing_prices) if listing_prices else 0,
-        "our_max_price": max(listing_prices) if listing_prices else 0,
+        "rows": rows,
+        "total_ours": total_ours,
+        "total_futbin": total_fb,
+        "matched": matched,
+        "only_ours": total_ours - matched,
+        "only_futbin": total_fb - matched,
+        "our_excluded_op": our_excluded,
+        "our_sold": sum(1 for item in our_filtered if item["outcome"] == "sold"),
+        "our_expired": sum(1 for item in our_filtered if item["outcome"] == "expired"),
+        "fb_sold": sum(1 for item in futbin if item["outcome"] == "sold"),
+        "fb_expired": sum(1 for item in futbin if item["outcome"] == "expired"),
     }
-
-
-def _get_futbin_data(sales: list[dict]) -> dict:
-    """Compute FUTBIN metrics from parsed sales data.
-
-    Args:
-        sales: List of sale dicts from FutbinClient.
-
-    Returns:
-        Dict with futbin_sold, futbin_expired, futbin_sell_rate,
-        futbin_median_price, futbin_total, futbin_min_listed, futbin_max_listed,
-        futbin_earliest, futbin_latest (datetime or None).
-    """
-    if not sales:
-        return {
-            "futbin_sold": 0,
-            "futbin_expired": 0,
-            "futbin_sell_rate": 0.0,
-            "futbin_median_price": 0,
-            "futbin_total": 0,
-            "futbin_min_listed": 0,
-            "futbin_max_listed": 0,
-            "futbin_earliest": None,
-            "futbin_latest": None,
-        }
-
-    sold = [s for s in sales if s["sold_for"] > 0]
-    expired = [s for s in sales if s["sold_for"] == 0]
-    total = len(sold) + len(expired)
-    sell_rate = len(sold) / total if total > 0 else 0.0
-
-    sold_prices = [s["sold_for"] for s in sold]
-    median_price = int(statistics.median(sold_prices)) if sold_prices else 0
-
-    listed_prices = [s["listed_for"] for s in sales if s["listed_for"] > 0]
-
-    # Extract time range from FUTBIN data
-    dates = [s["date"] for s in sales if s.get("date") is not None]
-    futbin_earliest = min(dates) if dates else None
-    futbin_latest = max(dates) if dates else None
-
-    return {
-        "futbin_sold": len(sold),
-        "futbin_expired": len(expired),
-        "futbin_sell_rate": sell_rate,
-        "futbin_median_price": median_price,
-        "futbin_total": total,
-        "futbin_min_listed": min(listed_prices) if listed_prices else 0,
-        "futbin_max_listed": max(listed_prices) if listed_prices else 0,
-        "futbin_earliest": futbin_earliest,
-        "futbin_latest": futbin_latest,
-    }
-
-
-# ── Health score computation ─────────────────────────────────────────
-
-def compute_health_score(our: dict, futbin: dict) -> float:
-    """Compute a 0-100 health score comparing our data against FUTBIN.
-
-    Weights: sell-through 40%, price accuracy 30%, listing count 15%, price range 15%.
-
-    Args:
-        our: Dict from _get_our_data.
-        futbin: Dict from _get_futbin_data.
-
-    Returns:
-        Health score from 0 to 100.
-    """
-    # Sell-through rate accuracy (40%)
-    if futbin["futbin_total"] == 0:
-        sell_score = 100.0 if (our["our_sold"] + our["our_expired"]) == 0 else 50.0
-    else:
-        delta = abs(our["our_sell_rate"] - futbin["futbin_sell_rate"])
-        sell_score = max(0.0, 100.0 - (delta * 500.0))  # 20% delta = 0 score
-
-    # Price accuracy (30%)
-    if futbin["futbin_median_price"] == 0:
-        price_score = 100.0 if our["our_median_price"] == 0 else 50.0
-    else:
-        price_delta = abs(our["our_median_price"] - futbin["futbin_median_price"])
-        price_pct = price_delta / futbin["futbin_median_price"]
-        price_score = max(0.0, 100.0 - (price_pct * 1000.0))  # 10% = 0 score
-
-    # Listing count ratio (15%)
-    if futbin["futbin_total"] == 0:
-        count_score = 100.0 if our["our_listing_count"] == 0 else 50.0
-    else:
-        # Compare our listing count to FUTBIN total listings
-        if our["our_listing_count"] == 0:
-            count_score = 0.0
-        else:
-            ratio = min(our["our_listing_count"], futbin["futbin_total"]) / max(
-                our["our_listing_count"], futbin["futbin_total"]
-            )
-            count_score = ratio * 100.0
-
-    # Price range match (15%)
-    if futbin["futbin_min_listed"] == 0 and futbin["futbin_max_listed"] == 0:
-        range_score = 100.0 if our["our_min_price"] == 0 else 50.0
-    else:
-        min_delta = abs(our["our_min_price"] - futbin["futbin_min_listed"])
-        max_delta = abs(our["our_max_price"] - futbin["futbin_max_listed"])
-        avg_ref = (futbin["futbin_min_listed"] + futbin["futbin_max_listed"]) / 2
-        if avg_ref > 0:
-            range_pct = ((min_delta + max_delta) / 2) / avg_ref
-            range_score = max(0.0, 100.0 - (range_pct * 500.0))
-        else:
-            range_score = 50.0
-
-    score = (
-        sell_score * WEIGHT_SELL_THROUGH
-        + price_score * WEIGHT_PRICE_ACCURACY
-        + count_score * WEIGHT_LISTING_COUNT
-        + range_score * WEIGHT_PRICE_RANGE
-    )
-    return round(min(100.0, max(0.0, score)), 1)
 
 
 # ── CLI entry point ──────────────────────────────────────────────────
 
 @click.command()
 @click.option("--count", default=10, help="Number of players to check (default 10).")
-@click.option("--verbose", is_flag=True, help="Print detailed per-player breakdown.")
+@click.option("--verbose", is_flag=True, help="Print per-price listing breakdown.")
 def main(count: int, verbose: bool) -> None:
     """Run FUTBIN health check against our DB data."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
-    # Suppress noisy loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -320,12 +225,10 @@ def main(count: int, verbose: bool) -> None:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     console = Console()
 
-    # Check DB exists
     if not os.path.exists(DB_PATH):
         console.print(
             f"[red]Database not found at {DB_PATH}[/red]\n"
-            "Start the server first to create the database: "
-            "python -m src.server.main",
+            "Start the server first: python -m src.server.main",
         )
         return
 
@@ -338,7 +241,7 @@ def main(count: int, verbose: bool) -> None:
             console.print("[red]No active players found in database.[/red]")
             return
 
-        console.print(f"\n[bold]FUTBIN Health Check[/bold] - checking {len(players)} players\n")
+        console.print(f"\n[bold]FUTBIN Health Check[/bold] — checking {len(players)} players\n")
 
         client = FutbinClient()
         results: list[dict] = []
@@ -349,19 +252,11 @@ def main(count: int, verbose: bool) -> None:
                 name = player["name"]
                 futbin_id = player["futbin_id"]
 
-                # Skip players with no real name (ea_id as string or empty)
                 if not name or name.isdigit():
-                    logger.warning(
-                        "Player %d has no real name (name='%s'), skipping",
-                        ea_id, name,
-                    )
                     continue
 
                 safe_name = name.encode("ascii", errors="replace").decode("ascii")
-                console.print(
-                    f"  [{i}/{len(players)}] {safe_name} (EA {ea_id})...",
-                    end=" ",
-                )
+                console.print(f"  [{i}/{len(players)}] {safe_name} (EA {ea_id})...", end=" ")
 
                 # Resolve futbin_id if not cached
                 if futbin_id is None:
@@ -378,92 +273,71 @@ def main(count: int, verbose: bool) -> None:
 
                 # Fetch FUTBIN sales
                 sales = client.fetch_sales_page(futbin_id, name)
+                if not sales:
+                    console.print("[yellow]no sales data[/yellow]")
+                    continue
 
-                # Find overlapping time window between FUTBIN and our DB
-                futbin_all = _get_futbin_data(sales)
+                # Find FUTBIN time range
+                fb_dates = [s["date"] for s in sales if s.get("date") is not None]
+                fb_earliest = min(fb_dates) if fb_dates else None
 
-                # Get our DB's earliest observation for this player
+                # Find our earliest resolved observation by resolved_at — this is
+                # when the listing disappeared (auction ended), which aligns with
+                # FUTBIN's date field. Using first_seen_at here would be wrong
+                # because a listing could be observed hours before it ends.
                 our_earliest_row = conn.execute(
-                    "SELECT MIN(first_seen_at) FROM listing_observations "
-                    "WHERE ea_id = ? AND outcome IS NOT NULL",
+                    "SELECT MIN(resolved_at) FROM listing_observations "
+                    "WHERE ea_id = ? AND outcome IS NOT NULL AND resolved_at IS NOT NULL",
                     (ea_id,),
                 ).fetchone()
                 our_earliest = our_earliest_row[0] if our_earliest_row and our_earliest_row[0] else None
 
-                # Determine overlap cutoff: whichever started later
+                # Overlap cutoff: whichever started later
                 overlap_cutoff = None
-                if futbin_all["futbin_earliest"] and our_earliest:
-                    fb_iso = futbin_all["futbin_earliest"].isoformat()
-                    overlap_cutoff = max(fb_iso, our_earliest)
-                elif futbin_all["futbin_earliest"]:
-                    overlap_cutoff = futbin_all["futbin_earliest"].isoformat()
+                cutoff_dt = None
+                if fb_earliest and our_earliest:
+                    fb_db = _to_db_fmt(fb_earliest.isoformat())
+                    our_db = _to_db_fmt(our_earliest)
+                    overlap_cutoff = max(fb_db, our_db)
+                elif fb_earliest:
+                    overlap_cutoff = _to_db_fmt(fb_earliest.isoformat())
                 elif our_earliest:
-                    overlap_cutoff = our_earliest
+                    overlap_cutoff = _to_db_fmt(our_earliest)
 
-                # Filter FUTBIN sales to overlap window
-                if overlap_cutoff and futbin_all["futbin_earliest"]:
-                    from datetime import datetime as dt
+                if overlap_cutoff:
                     try:
-                        cutoff_dt = dt.fromisoformat(overlap_cutoff)
+                        cutoff_dt = datetime.fromisoformat(overlap_cutoff)
                     except (ValueError, TypeError):
                         cutoff_dt = None
-                    if cutoff_dt:
-                        filtered_sales = [
-                            s for s in sales
-                            if s.get("date") is not None and s["date"] >= cutoff_dt
-                        ]
-                        futbin = _get_futbin_data(filtered_sales)
-                    else:
-                        futbin = futbin_all
-                else:
-                    futbin = futbin_all
 
-                our = _get_our_data(conn, ea_id, cutoff_iso=overlap_cutoff)
+                # Get listings from both sources in the overlap window
+                our_listings = _get_our_listings(conn, ea_id, overlap_cutoff or "2000-01-01")
+                if not our_listings:
+                    console.print("[yellow]no resolved observations yet[/yellow]")
+                    continue
+                fb_listings = _get_futbin_listings(sales, cutoff_dt)
 
-                # Compute health score
-                score = compute_health_score(our, futbin)
+                comparison = _compare_listings(our_listings, fb_listings)
+                comparison["overlap_cutoff"] = overlap_cutoff
 
                 result = {
                     "name": name,
                     "ea_id": ea_id,
                     "futbin_id": futbin_id,
-                    "our": our,
-                    "futbin": futbin,
-                    "health_score": score,
+                    "comparison": comparison,
                 }
                 results.append(result)
 
-                # Store in DB
-                conn.execute(
-                    "INSERT INTO health_checks "
-                    "(ea_id, checked_at, our_sell_rate, futbin_sell_rate, "
-                    "our_median_price, futbin_median_price, health_score) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        ea_id,
-                        datetime.now(timezone.utc).isoformat(),
-                        our["our_sell_rate"],
-                        futbin["futbin_sell_rate"],
-                        our["our_median_price"],
-                        futbin["futbin_median_price"],
-                        score,
-                    ),
+                # Quick status
+                c = comparison
+                console.print(
+                    f"ours={c['total_ours']} fb={c['total_futbin']} "
+                    f"matched={c['matched']}"
                 )
-                conn.commit()
-
-                # Color-code score
-                if score >= 80:
-                    color = "green"
-                elif score >= 50:
-                    color = "yellow"
-                else:
-                    color = "red"
-                console.print(f"[{color}]{score:.0f}[/{color}]")
 
         finally:
             client.close()
 
-        # Display results table
         if results:
             _display_results(console, results, verbose)
         else:
@@ -474,80 +348,86 @@ def main(count: int, verbose: bool) -> None:
 
 
 def _display_results(console: Console, results: list[dict], verbose: bool) -> None:
-    """Display health check results as a rich table.
-
-    Args:
-        console: Rich console for output.
-        results: List of result dicts from the health check.
-        verbose: If True, show detailed per-player breakdown.
-    """
-    table = Table(title="\nHealth Check Results")
+    """Display listing comparison results."""
+    # Summary table
+    table = Table(title="\nListing Comparison (overlap window)")
     table.add_column("Player", style="cyan")
-    table.add_column("EA ID", justify="right")
-    table.add_column("FUTBIN ID", justify="right")
-    table.add_column("Sell-Through\n(Ours / FUTBIN)", justify="center")
-    table.add_column("Price Accuracy\n(Ours / FUTBIN)", justify="center")
-    table.add_column("Listing Count", justify="right")
-    table.add_column("Health Score", justify="right")
+    table.add_column("Ours\n(sold/exp)", justify="right")
+    table.add_column("FUTBIN\n(sold/exp)", justify="right")
+    table.add_column("Matched", justify="right", style="green")
+    table.add_column("Only Ours", justify="right", style="yellow")
+    table.add_column("Only FUTBIN", justify="right", style="red")
+    table.add_column("OP excl.", justify="right", style="dim")
+    table.add_column("Overlap", justify="right")
 
     for r in results:
-        our = r["our"]
-        fb = r["futbin"]
-        score = r["health_score"]
+        c = r["comparison"]
+        ours_str = f"{c['total_ours']} ({c['our_sold']}/{c['our_expired']})"
+        fb_str = f"{c['total_futbin']} ({c['fb_sold']}/{c['fb_expired']})"
 
-        # Color-code score
-        if score >= 80:
-            score_str = f"[green]{score:.0f}[/green]"
-        elif score >= 50:
-            score_str = f"[yellow]{score:.0f}[/yellow]"
-        else:
-            score_str = f"[red]{score:.0f}[/red]"
-
-        sell_through = f"{our['our_sell_rate']:.0%} / {fb['futbin_sell_rate']:.0%}"
-        price_acc = f"{our['our_median_price']:,} / {fb['futbin_median_price']:,}"
+        total = max(c["total_ours"], c["total_futbin"])
+        overlap_pct = f"{c['matched'] / total:.0%}" if total > 0 else "—"
 
         table.add_row(
             r["name"],
-            str(r["ea_id"]),
-            str(r["futbin_id"]),
-            sell_through,
-            price_acc,
-            str(our["our_listing_count"]),
-            score_str,
+            ours_str,
+            fb_str,
+            str(c["matched"]),
+            str(c["only_ours"]),
+            str(c["only_futbin"]),
+            str(c["our_excluded_op"]),
+            overlap_pct,
         )
 
     console.print(table)
 
-    # Overall health score
-    avg_score = sum(r["health_score"] for r in results) / len(results)
-    if avg_score >= 80:
-        color = "green"
-    elif avg_score >= 50:
-        color = "yellow"
-    else:
-        color = "red"
-
+    # Totals
+    total_ours = sum(r["comparison"]["total_ours"] for r in results)
+    total_fb = sum(r["comparison"]["total_futbin"] for r in results)
+    total_matched = sum(r["comparison"]["matched"] for r in results)
+    total_max = max(total_ours, total_fb)
+    overall_pct = f"{total_matched / total_max:.0%}" if total_max > 0 else "—"
     console.print(
-        f"\n[bold]Overall Health Score: [{color}]{avg_score:.1f} / 100[/{color}][/bold]"
+        f"\n[bold]Totals:[/bold] ours={total_ours} futbin={total_fb} "
+        f"matched={total_matched} ({overall_pct})"
     )
-    console.print(f"Players checked: {len(results)}\n")
 
+    # Per-price breakdown in verbose mode
     if verbose:
-        console.print("[bold]Detailed Breakdown:[/bold]\n")
+        console.print("\n[bold]Per-Price Breakdown:[/bold]")
         for r in results:
-            our = r["our"]
-            fb = r["futbin"]
-            console.print(f"  [cyan]{r['name']}[/cyan] (EA {r['ea_id']}, FUTBIN {r['futbin_id']})")
-            console.print(f"    Sell-through: ours={our['our_sell_rate']:.1%} "
-                          f"({our['our_sold']} sold, {our['our_expired']} expired) "
-                          f"vs FUTBIN={fb['futbin_sell_rate']:.1%} "
-                          f"({fb['futbin_sold']} sold, {fb['futbin_expired']} expired)")
-            console.print(f"    Median price: ours={our['our_median_price']:,} "
-                          f"vs FUTBIN={fb['futbin_median_price']:,}")
-            console.print(f"    Price range: ours={our['our_min_price']:,}-{our['our_max_price']:,} "
-                          f"vs FUTBIN={fb['futbin_min_listed']:,}-{fb['futbin_max_listed']:,}")
-            console.print(f"    Listing count: ours={our['our_listing_count']}")
-            console.print(f"    Health score: {r['health_score']:.1f}\n")
+            c = r["comparison"]
+            console.print(
+                f"\n  [cyan]{r['name']}[/cyan] "
+                f"(EA {r['ea_id']}, overlap from {c['overlap_cutoff'] or '—'})"
+            )
+
+            price_table = Table(show_header=True, box=None, padding=(0, 1))
+            price_table.add_column("Bucket", justify="right", style="bold")
+            price_table.add_column("Ours", justify="right")
+            price_table.add_column("(S/E)", justify="left")
+            price_table.add_column("FUTBIN", justify="right")
+            price_table.add_column("(S/E)", justify="left")
+            price_table.add_column("Where", justify="left")
+
+            for row in c["rows"]:
+                if row["where"] == "both":
+                    where_str = "[green]both[/green]"
+                elif row["where"] == "only_ours":
+                    where_str = "[yellow]only ours[/yellow]"
+                else:
+                    where_str = "[red]only FUTBIN[/red]"
+
+                price_table.add_row(
+                    f"{row['price']:,}",
+                    str(row["ours"]),
+                    f"({row['our_sold']}/{row['our_expired']})",
+                    str(row["futbin"]),
+                    f"({row['fb_sold']}/{row['fb_expired']})",
+                    where_str,
+                )
+
+            console.print(price_table)
 
 
 if __name__ == "__main__":

@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Phase complete — ready for verification
-stopped_at: Phase 09.1 context gathered
-last_updated: "2026-03-28T14:20:56.722Z"
+status: Ready to execute
+stopped_at: Completed 09.1-01-PLAN.md
+last_updated: "2026-03-28T14:53:46.449Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 16
+  total_plans: 19
   completed_plans: 16
 ---
 
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 09 — comprehensive-api-integration-performance-test-suite
+**Current focus:** Phase 09.1 — migrate-from-sqlite
 
 ## Current Position
 
-Phase: 09 (comprehensive-api-integration-performance-test-suite) — EXECUTING
-Plan: 3 of 3
+Phase: 09.1 (migrate-from-sqlite) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Plan: 3 of 3
 | Phase 09-comprehensive-api-integration-performance-test-suite P01 | 56 | 2 tasks | 6 files |
 | Phase 09-comprehensive-api-integration-performance-test-suite P03 | 606 | 2 tasks | 2 files |
 | Phase 09 P02 | 620 | 2 tasks | 3 files |
+| Phase 09.1-migrate-from-sqlite P01 | 2 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,8 @@ Plan: 3 of 3
 - [Phase 09]: Stale action test backdates claimed_at via direct aiosqlite to avoid 5-minute real wait
 - [Phase 09]: Tests use _get_real_ea_ids() helper via POST /portfolio/generate — no hardcoded ea_ids, always real scored players
 - [Phase 09]: ReadTimeout in bulk test runs confirms scanner dispatch (30s interval) conflicts with API write engine under 30s timeout — real server bug per D-04
+- [Phase 09.1-migrate-from-sqlite]: Single asyncpg connection pool replaces 3-engine SQLite split — Postgres MVCC handles concurrent scanner + API access
+- [Phase 09.1-migrate-from-sqlite]: app.state.read_session_factory = session_factory preserves attribute name so all API endpoints work without modification
 
 ### Roadmap Evolution
 
@@ -146,5 +149,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-28
-Stopped at: Phase 09.1 context gathered
-Resume file: .planning/phases/09.1-migrate-from-sqlite/09.1-CONTEXT.md
+Stopped at: Completed 09.1-01-PLAN.md
+Resume file: None

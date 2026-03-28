@@ -89,22 +89,20 @@ export function readTransferList(root: Document | Element = document): DetectedI
 
     if (!nameEl || !statusEl) continue; // skip malformed items
 
-    // Check item class for "won" — EA marks sold items with this class
-    // even though .auction-state .time still shows "Expired"
     const itemClasses = item.className?.toString() ?? '';
-    const isSold = itemClasses.includes('won');
-
+    const hasWonClass = itemClasses.includes('won');
     const rawStatus = (statusEl.textContent ?? '').trim().toLowerCase();
 
     let status: DetectedItem['status'] | undefined;
-    if (isSold) {
+    // Time remaining strings (e.g. "55 Minutes") always mean actively listed,
+    // regardless of the "won" class (which persists from the original purchase).
+    if (isTimeRemaining(rawStatus)) {
+      status = 'listed';
+    } else if (hasWonClass && rawStatus === 'expired') {
+      // "won" class + "Expired" text = another player bought your listing
       status = 'sold';
     } else {
       status = STATUS_MAP[rawStatus];
-      // Time remaining strings (e.g. "55 Minutes") indicate an active listing
-      if (!status && isTimeRemaining(rawStatus)) {
-        status = 'listed';
-      }
     }
 
     if (!status) continue; // unknown status — skip

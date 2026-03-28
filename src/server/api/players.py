@@ -33,7 +33,7 @@ async def get_top_players(
     Returns:
         Dict with keys: data (list), count, offset, limit.
     """
-    session_factory = request.app.state.session_factory
+    session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
         # Subquery: latest scored_at per player for viable scores only
         latest_subq = (
@@ -144,7 +144,7 @@ async def get_player(request: Request, ea_id: int):
     Raises:
         HTTPException: 404 if the player is not found.
     """
-    session_factory = request.app.state.session_factory
+    session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
         record = await session.get(PlayerRecord, ea_id)
         if record is None:

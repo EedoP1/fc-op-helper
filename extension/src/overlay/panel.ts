@@ -167,7 +167,7 @@ export function createOverlayPanel(): OverlayPanel {
   // ── Dashboard helpers ──────────────────────────────────────────────────────
 
   const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-    PENDING:  { bg: '#2a2a3e', text: '#888' },
+    PENDING:  { bg: '#3a2a00', text: '#FFB300' },
     BOUGHT:   { bg: '#1a3a1a', text: '#4CAF50' },
     LISTED:   { bg: '#1a2a3a', text: '#6cf' },
     SOLD:     { bg: '#1a3a1a', text: '#4CAF50' },
@@ -212,7 +212,7 @@ export function createOverlayPanel(): OverlayPanel {
   }
 
   /**
-   * Render the full dashboard content (summary bar + refresh + per-player list)
+   * Render the full dashboard content (summary bar + refresh + filter + per-player list)
    * into the given parent element.
    */
   function renderDashboardContent(parent: HTMLElement, data: DashboardData): void {
@@ -253,58 +253,234 @@ export function createOverlayPanel(): OverlayPanel {
     const refreshBtn = document.createElement('button');
     refreshBtn.textContent = 'Refresh';
     refreshBtn.className = 'op-seller-dashboard-refresh';
-    styleButton(refreshBtn, '#2196F3', { marginTop: '0', marginBottom: '12px', padding: '6px 12px', fontSize: '12px' });
+    styleButton(refreshBtn, '#2196F3', { marginTop: '0', marginBottom: '8px', padding: '6px 12px', fontSize: '12px' });
     refreshBtn.addEventListener('click', () => renderDashboard());
     parent.appendChild(refreshBtn);
 
-    // Per-player list (D-04, D-06)
-    data.players.forEach((player: DashboardPlayer) => {
-      const row = document.createElement('div');
-      row.className = 'op-seller-dashboard-player';
-      Object.assign(row.style, {
-        background: '#2a2a3e',
-        padding: '8px 10px',
-        marginBottom: '4px',
-        borderRadius: '4px',
-      });
+    // ── Filter controls ────────────────────────────────────────────────────────
 
-      // Line 1: Name + status badge (D-06)
-      const topLine = document.createElement('div');
-      topLine.style.display = 'flex';
-      topLine.style.justifyContent = 'space-between';
-      topLine.style.alignItems = 'center';
-      topLine.style.marginBottom = '2px';
+    let dashSearchText = '';
+    let dashStatusFilter: string = 'ALL';
 
-      const nameEl = document.createElement('span');
-      nameEl.textContent = player.name;
-      nameEl.style.fontWeight = 'bold';
-      nameEl.style.fontSize = '13px';
-      topLine.appendChild(nameEl);
-
-      const badge = document.createElement('span');
-      badge.textContent = player.status;
-      badge.className = 'op-seller-status-badge';
-      const colors = STATUS_COLORS[player.status] || { bg: '#2a2a3e', text: '#888' };
-      Object.assign(badge.style, {
-        background: colors.bg,
-        color: colors.text,
-        padding: '2px 6px',
-        borderRadius: '3px',
-        fontSize: '10px',
-        fontWeight: 'bold',
-      });
-      topLine.appendChild(badge);
-      row.appendChild(topLine);
-
-      // Line 2: Cumulative stats (D-05, D-06)
-      const statsLine = document.createElement('div');
-      statsLine.style.fontSize = '11px';
-      const profitColor = player.realized_profit >= 0 ? '#4CAF50' : '#f88';
-      statsLine.innerHTML = `<span style="color:#aaa">${player.times_sold}x sold</span> <span style="color:#555">\u2022</span> <span class="op-seller-player-profit" style="color:${profitColor}">${player.realized_profit >= 0 ? '+' : ''}${fmt(player.realized_profit)} profit</span>`;
-      row.appendChild(statsLine);
-
-      parent.appendChild(row);
+    const filterRow = document.createElement('div');
+    Object.assign(filterRow.style, {
+      display: 'flex',
+      gap: '6px',
+      marginBottom: '8px',
     });
+
+    // Name search input
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search name...';
+    Object.assign(searchInput.style, {
+      flex: '1',
+      background: '#2a2a3e',
+      color: '#fff',
+      border: '1px solid #444',
+      borderRadius: '3px',
+      padding: '4px 8px',
+      fontSize: '12px',
+      boxSizing: 'border-box',
+    });
+
+    // Status filter dropdown
+    const statusSelect = document.createElement('select');
+    Object.assign(statusSelect.style, {
+      background: '#2a2a3e',
+      color: '#ccc',
+      border: '1px solid #444',
+      borderRadius: '3px',
+      padding: '4px 6px',
+      fontSize: '12px',
+    });
+    (['ALL', 'PENDING', 'BOUGHT', 'LISTED', 'SOLD', 'EXPIRED'] as const).forEach(status => {
+      const opt = document.createElement('option');
+      opt.value = status;
+      opt.textContent = status === 'ALL' ? 'All' : status;
+      statusSelect.appendChild(opt);
+    });
+
+    filterRow.appendChild(searchInput);
+    filterRow.appendChild(statusSelect);
+    parent.appendChild(filterRow);
+
+    // ── Sort controls ──────────────────────────────────────────────────────────
+
+    type DashSortKey = 'name' | 'buy_price' | 'sell_price' | 'times_sold' | 'realized_profit' | 'unrealized_pnl';
+    let dashSortKey: DashSortKey = 'realized_profit';
+    let dashSortDir: SortDir = 'desc';
+
+    const sortBarSlot = document.createElement('div');
+    parent.appendChild(sortBarSlot);
+
+    function renderDashSortBar(): void {
+      sortBarSlot.innerHTML = '';
+      const bar = document.createElement('div');
+      Object.assign(bar.style, {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '4px',
+        marginBottom: '8px',
+      });
+
+      const columns: { label: string; key: DashSortKey }[] = [
+        { label: 'Name', key: 'name' },
+        { label: 'Buy', key: 'buy_price' },
+        { label: 'Sell', key: 'sell_price' },
+        { label: 'Times Sold', key: 'times_sold' },
+        { label: 'Profit', key: 'realized_profit' },
+        { label: 'Unreal.', key: 'unrealized_pnl' },
+      ];
+
+      columns.forEach(col => {
+        const btn = document.createElement('button');
+        const arrow = dashSortKey === col.key ? (dashSortDir === 'desc' ? ' \u25BC' : ' \u25B2') : '';
+        btn.textContent = col.label + arrow;
+        Object.assign(btn.style, {
+          background: dashSortKey === col.key ? '#3a3a5e' : '#2a2a3e',
+          color: dashSortKey === col.key ? '#fff' : '#aaa',
+          border: '1px solid #444',
+          borderRadius: '3px',
+          cursor: 'pointer',
+          padding: '3px 6px',
+          fontSize: '11px',
+          flex: '0 0 auto',
+        });
+        btn.addEventListener('click', () => {
+          if (dashSortKey === col.key) {
+            dashSortDir = dashSortDir === 'desc' ? 'asc' : 'desc';
+          } else {
+            dashSortKey = col.key;
+            dashSortDir = 'desc';
+          }
+          renderDashboardPlayerList();
+        });
+        bar.appendChild(btn);
+      });
+
+      sortBarSlot.appendChild(bar);
+    }
+
+    // ── Player list (filtered + sorted) ───────────────────────────────────────
+
+    const listEl = document.createElement('div');
+    parent.appendChild(listEl);
+
+    function renderDashboardPlayerList(): void {
+      renderDashSortBar();
+      listEl.innerHTML = '';
+
+      const query = dashSearchText.toLowerCase();
+      const filtered = data.players.filter((p: DashboardPlayer) => {
+        const nameMatch = !query || p.name.toLowerCase().includes(query);
+        const statusMatch = dashStatusFilter === 'ALL' || p.status === dashStatusFilter;
+        return nameMatch && statusMatch;
+      });
+
+      // Sort filtered players
+      filtered.sort((a: DashboardPlayer, b: DashboardPlayer) => {
+        const aRaw = a[dashSortKey];
+        const bRaw = b[dashSortKey];
+        const aVal = aRaw ?? (dashSortDir === 'desc' ? -Infinity : Infinity);
+        const bVal = bRaw ?? (dashSortDir === 'desc' ? -Infinity : Infinity);
+        if (typeof aVal === 'string' && typeof bVal === 'string') {
+          return dashSortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        }
+        return dashSortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+      });
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.textContent = 'No players match the filter.';
+        empty.style.color = '#aaa';
+        empty.style.fontSize = '12px';
+        empty.style.padding = '8px 0';
+        listEl.appendChild(empty);
+        return;
+      }
+
+      filtered.forEach((player: DashboardPlayer) => {
+        const row = document.createElement('div');
+        row.className = 'op-seller-dashboard-player';
+        Object.assign(row.style, {
+          background: '#2a2a3e',
+          padding: '8px 10px',
+          marginBottom: '4px',
+          borderRadius: '4px',
+        });
+
+        // Line 1: Name (clickable link) + status badge (D-06)
+        const topLine = document.createElement('div');
+        topLine.style.display = 'flex';
+        topLine.style.justifyContent = 'space-between';
+        topLine.style.alignItems = 'center';
+        topLine.style.marginBottom = '2px';
+
+        // Clickable link to fut.gg search for this player
+        // Use explicit click handler + window.open instead of relying on target="_blank",
+        // because the EA SPA intercepts <a> clicks at the document level for its own routing.
+        const nameLink = document.createElement('a');
+        const nameLinkUrl = player.futgg_url
+          ? `https://www.fut.gg${player.futgg_url}`
+          : `https://www.fut.gg/players/?search=${encodeURIComponent(player.name)}`;
+        nameLink.href = nameLinkUrl;
+        nameLink.target = '_blank';
+        nameLink.rel = 'noopener';
+        nameLink.textContent = player.name;
+        Object.assign(nameLink.style, {
+          color: '#6cf',
+          textDecoration: 'none',
+          fontWeight: 'bold',
+          fontSize: '13px',
+          cursor: 'pointer',
+        });
+        nameLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.open(nameLinkUrl, '_blank', 'noopener');
+        });
+        nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
+        nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
+        topLine.appendChild(nameLink);
+
+        const badge = document.createElement('span');
+        badge.textContent = player.status === 'PENDING' ? 'NEEDS BUY' : player.status;
+        badge.className = 'op-seller-status-badge';
+        const colors = STATUS_COLORS[player.status] || { bg: '#2a2a3e', text: '#888' };
+        Object.assign(badge.style, {
+          background: colors.bg,
+          color: colors.text,
+          padding: '2px 6px',
+          borderRadius: '3px',
+          fontSize: '10px',
+          fontWeight: 'bold',
+        });
+        topLine.appendChild(badge);
+        row.appendChild(topLine);
+
+        // Line 2: Cumulative stats (D-05, D-06)
+        const statsLine = document.createElement('div');
+        statsLine.style.fontSize = '11px';
+        const profitColor = player.realized_profit >= 0 ? '#4CAF50' : '#f88';
+        statsLine.innerHTML = `<span style="color:#aaa">${player.times_sold}x sold</span> <span style="color:#555">\u2022</span> <span class="op-seller-player-profit" style="color:${profitColor}">${player.realized_profit >= 0 ? '+' : ''}${fmt(player.realized_profit)} profit</span>`;
+        row.appendChild(statsLine);
+
+        listEl.appendChild(row);
+      });
+    }
+
+    searchInput.addEventListener('input', () => {
+      dashSearchText = searchInput.value;
+      renderDashboardPlayerList();
+    });
+
+    statusSelect.addEventListener('change', () => {
+      dashStatusFilter = statusSelect.value;
+      renderDashboardPlayerList();
+    });
+
+    renderDashboardPlayerList();
   }
 
   /**
@@ -527,13 +703,19 @@ export function createOverlayPanel(): OverlayPanel {
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
         const nameLink = document.createElement('a');
-        nameLink.href = player.futgg_url
+        const nameLinkUrl = player.futgg_url
           ? `https://www.fut.gg${player.futgg_url}`
           : `https://www.fut.gg/players/?search=${encodeURIComponent(player.name)}`;
+        nameLink.href = nameLinkUrl;
         nameLink.target = '_blank';
         nameLink.rel = 'noopener';
         nameLink.textContent = player.name;
-        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold' });
+        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold', cursor: 'pointer' });
+        nameLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.open(nameLinkUrl, '_blank', 'noopener');
+        });
         nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
         nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
         const ratingPos = document.createElement('span');
@@ -685,13 +867,19 @@ export function createOverlayPanel(): OverlayPanel {
         const topLine = document.createElement('div');
         topLine.style.marginBottom = '4px';
         const nameLink = document.createElement('a');
-        nameLink.href = player.futgg_url
+        const nameLinkUrl = player.futgg_url
           ? `https://www.fut.gg${player.futgg_url}`
           : `https://www.fut.gg/players/?search=${encodeURIComponent(player.name)}`;
+        nameLink.href = nameLinkUrl;
         nameLink.target = '_blank';
         nameLink.rel = 'noopener';
         nameLink.textContent = player.name;
-        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold' });
+        Object.assign(nameLink.style, { color: '#6cf', textDecoration: 'none', fontWeight: 'bold', cursor: 'pointer' });
+        nameLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.open(nameLinkUrl, '_blank', 'noopener');
+        });
         nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
         nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
         const ratingPos = document.createElement('span');
@@ -715,7 +903,7 @@ export function createOverlayPanel(): OverlayPanel {
         statsLine.textContent = `Profit: ${fmt(player.expected_profit)} | OP: ${pct(player.op_ratio)} | Eff: ${player.efficiency.toFixed(4)}`;
         row.appendChild(statsLine);
 
-        parent.appendChild(row);
+        listEl.appendChild(row);
       });
     }
 
