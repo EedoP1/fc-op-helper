@@ -1,4 +1,5 @@
 """Configuration constants for the OP Seller tool."""
+import os
 
 # EA tax rate on sales
 EA_TAX_RATE = 0.05
@@ -41,7 +42,8 @@ MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
 
 # Volatility filter — exclude players with large recent price spikes
 VOLATILITY_MAX_PRICE_INCREASE_PCT = 30  # percent; players with >30% increase are excluded
-VOLATILITY_LOOKBACK_DAYS = 3            # how far back to check for the price spike
+VOLATILITY_MAX_PRICE_INCREASE_ABS = 10_000  # coins; players with >10k increase are excluded
+VOLATILITY_LOOKBACK_DAYS = 7            # how far back to check for the price spike
 
 # Database
-DATABASE_URL = "sqlite+aiosqlite:///D:/op-seller/op_seller.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///D:/op-seller/op_seller.db")
