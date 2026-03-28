@@ -51,6 +51,8 @@ class PlayerScore(Base):
 
     __table_args__ = (
         Index("ix_player_scores_ea_id_scored_at", "ea_id", "scored_at"),
+        Index("ix_player_scores_viable_ea_scored", "is_viable", "ea_id", "scored_at"),
+        Index("ix_player_scores_epph_null", "expected_profit_per_hour"),  # speeds up v1-purge DELETE on startup
     )
 
 
@@ -100,6 +102,10 @@ class SnapshotPricePoint(Base):
     )
     recorded_at: Mapped[datetime] = mapped_column(DateTime)
     lowest_bin: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        Index("ix_spp_snapshot_recorded_bin", "snapshot_id", "recorded_at", "lowest_bin"),
+    )
 
 
 class ListingObservation(Base):
