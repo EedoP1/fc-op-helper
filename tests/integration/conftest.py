@@ -5,11 +5,13 @@ Uses a synchronous live_server fixture to avoid pytest-asyncio 1.3.0
 event loop scoping issues with session-scoped async fixtures.
 """
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import time
 
+import aiosqlite
 import httpx
 import pytest
 
@@ -26,17 +28,28 @@ def server_port():
 
 # ── DB path ───────────────────────────────────────────────────────────────────
 
+REAL_DB_PATH = "D:/op-seller/op_seller.db"
+
+
 @pytest.fixture(scope="session")
 def test_db_path(tmp_path_factory):
-    """Return a path to a temporary SQLite file for the integration test session."""
-    return tmp_path_factory.mktemp("integration") / "test_op_seller.db"
+    """Copy the real DB to a temporary file so tests run against realistic data.
+
+    If the real DB exists, copies it (tests start with real scored players,
+    portfolio slots, trade history, etc.). If not found, creates an empty DB.
+    The real DB is never modified — all writes go to the copy.
+    """
+    dest = tmp_path_factory.mktemp("integration") / "test_op_seller.db"
+    if os.path.exists(REAL_DB_PATH):
+        shutil.copy2(REAL_DB_PATH, dest)
+    return dest
 
 
 # ── Live server ───────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session", autouse=True)
 def live_server(test_db_path, server_port):
-    """Start a real uvicorn process serving the test server harness.
+    """Start a real uvicorn process serving the real server harness.
 
     This fixture is SYNCHRONOUS (not async def) to avoid the pytest-asyncio 1.3.0
     event loop scoping issue where session-scoped async fixtures fail because
@@ -44,6 +57,10 @@ def live_server(test_db_path, server_port):
 
     Uses subprocess.Popen + a synchronous readiness poll with time.sleep()
     and httpx.get() (sync client).
+
+    The real server starts with real ScannerService, CircuitBreaker, and
+    APScheduler — startup takes longer than the mock harness did, so the
+    readiness poll allows up to 30 seconds (300 x 0.1s).
     """
     env = {**os.environ, "TEST_DB_PATH": str(test_db_path)}
     proc = subprocess.Popen(
@@ -63,9 +80,11 @@ def live_server(test_db_path, server_port):
         stderr=subprocess.PIPE,
     )
 
-    # Synchronous readiness poll — no async, no event loop issues
+    # Synchronous readiness poll — no async, no event loop issues.
+    # 300 x 0.1s = 30 seconds max; the real server (scanner + scheduler) takes
+    # longer to start than a minimal mock harness.
     base_url = f"http://127.0.0.1:{server_port}"
-    for _ in range(100):  # 10 seconds max (server startup can take a few seconds)
+    for _ in range(300):
         try:
             r = httpx.get(f"{base_url}/api/v1/health", timeout=1.0)
             if r.status_code == 200:
@@ -100,24 +119,66 @@ def base_url(server_port):
 @pytest.fixture
 async def client(base_url):
     """Function-scoped async httpx client targeting the live test server."""
-    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as c:
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as c:
         yield c
 
 
-# ── Seed helper ───────────────────────────────────────────────────────────────
+# ── Real ea_id helper ─────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def real_ea_id(test_db_path):
+    """Return a real ea_id from the production DB copy.
+
+    Queries the test DB directly (synchronously via aiosqlite event loop) to
+    find an active player with a viable score. Falls back to None if the DB
+    has no viable players (e.g., fresh empty DB).
+    """
+    import asyncio
+
+    async def _query():
+        async with aiosqlite.connect(str(test_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT ps.ea_id
+                FROM player_scores ps
+                JOIN player_records pr ON pr.ea_id = ps.ea_id
+                WHERE ps.is_viable = 1
+                  AND pr.is_active = 1
+                ORDER BY ps.efficiency DESC
+                LIMIT 1
+                """
+            )
+            row = await cursor.fetchone()
+            return row["ea_id"] if row else None
+
+    return asyncio.run(_query())
+
+
+# ── Seed helper (real ea_id) ──────────────────────────────────────────────────
 
 @pytest.fixture
-async def seed_portfolio_slot(client):
-    """Seed one portfolio slot and return the response."""
+async def seed_real_portfolio_slot(client, real_ea_id):
+    """Seed one portfolio slot using a real ea_id from the production DB.
+
+    This replaces the old fake ea_id=100 fixture which would fail with
+    the real server because trade records validate ea_id in portfolio_slots
+    and portfolio_slots.ea_id has a foreign-key-like constraint in practice.
+
+    If real_ea_id is None (empty DB), skips the seed and returns None.
+    """
+    if real_ea_id is None:
+        return None
+
     resp = await client.post(
         "/api/v1/portfolio/slots",
         json={
             "slots": [
                 {
-                    "ea_id": 100,
+                    "ea_id": real_ea_id,
                     "buy_price": 50000,
                     "sell_price": 70000,
-                    "player_name": "Test Player",
+                    "player_name": f"Player {real_ea_id}",
                 }
             ]
         },
@@ -131,8 +192,14 @@ async def seed_portfolio_slot(client):
 async def cleanup_tables(test_db_path):
     """Delete all rows from mutable tables after each test.
 
-    Uses connect_args={"timeout": 10} to avoid 'database is locked' errors on
-    Windows where SQLite file locking is stricter.
+    Preserves read-only data (player_records, player_scores, market_snapshots,
+    snapshot_price_points, listing_observations, daily_listing_summaries,
+    snapshot_sales) per D-16 — this is the real data that makes tests
+    meaningful.
+
+    Uses connect_args={"timeout": 30} to avoid 'database is locked' errors on
+    Windows where SQLite file locking is stricter (especially with the real
+    scanner holding write locks).
     """
     yield
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -140,7 +207,7 @@ async def cleanup_tables(test_db_path):
 
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{test_db_path}",
-        connect_args={"timeout": 10},
+        connect_args={"timeout": 30},
     )
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM trade_records"))
