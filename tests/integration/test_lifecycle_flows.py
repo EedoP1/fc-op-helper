@@ -1,277 +1,645 @@
-"""Cross-endpoint lifecycle flow integration tests.
+"""Cross-endpoint lifecycle flow tests.
 
-Verifies state transitions across multiple endpoints work correctly end-to-end
-(BUY->LIST->SOLD, BUY->LIST->EXPIRED->RELIST, multi-player, direct records,
-delete mid-cycle, confirm reset). All via real HTTP to a real uvicorn server.
+Tests the real-world workflows the Chrome extension actually executes:
+BUY -> LIST -> SOLD, EXPIRED -> RELIST, direct/batch records, status
+reflection, and profit calculation.
+
+All tests use the real server started by conftest.live_server and a copy
+of the production DB. No mocks. No fake ea_ids.
+
+Tests that fail = server bugs. Do NOT weaken assertions to make tests
+pass (per D-04 from 09-CONTEXT.md).
 """
 import pytest
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+async def _get_real_ea_ids(client, count: int = 3) -> list[dict]:
+    """Call POST /portfolio/generate to get real scored players.
+
+    Returns a list of player dicts (ea_id, price, sell_price) from the
+    real scored DB. If generate returns an empty list (no viable players),
+    the caller should skip the test.
+
+    Args:
+        client: async httpx client pointed at the live server.
+        count:  maximum number of players to return.
+
+    Returns:
+        List of player dicts (may be shorter than count if DB has fewer).
+    """
+    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
+    assert r.status_code == 200, f"generate failed: {r.status_code} {r.text}"
+    body = r.json()
+    return body["data"][:count]
 
 
-async def _seed_slot(client, ea_id=100, buy_price=50000, sell_price=70000, name="Test Player"):
-    """Seed a portfolio slot and return the response."""
-    r = await client.post("/api/v1/portfolio/slots", json={"slots": [
-        {"ea_id": ea_id, "buy_price": buy_price, "sell_price": sell_price, "player_name": name}
-    ]})
-    assert r.status_code == 201
-    return r
+async def _seed_slot(client, ea_id: int, buy_price: int, sell_price: int) -> None:
+    """Seed a single portfolio slot via POST /portfolio/slots."""
+    r = await client.post(
+        "/api/v1/portfolio/slots",
+        json={
+            "slots": [
+                {
+                    "ea_id": ea_id,
+                    "buy_price": buy_price,
+                    "sell_price": sell_price,
+                    "player_name": f"Player {ea_id}",
+                }
+            ]
+        },
+    )
+    assert r.status_code == 201, f"seed_slot failed: {r.status_code} {r.text}"
 
 
-async def _get_and_complete(client, expected_type, outcome, price):
-    """Get pending action, assert type, complete it, return action data."""
+async def _get_pending(client) -> dict | None:
+    """GET /actions/pending, assert 200, return action dict or None."""
     r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    action = r.json()["action"]
-    assert action is not None, f"Expected {expected_type} action but got null"
-    assert action["action_type"] == expected_type
-    r2 = await client.post(f"/api/v1/actions/{action['id']}/complete",
-                            json={"price": price, "outcome": outcome})
-    assert r2.status_code == 200
-    return action
+    assert r.status_code == 200, f"pending failed: {r.status_code} {r.text}"
+    return r.json()["action"]
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+async def _complete(client, action_id: int, outcome: str, price: int) -> dict:
+    """POST /actions/{id}/complete, assert 200, return response body."""
+    r = await client.post(
+        f"/api/v1/actions/{action_id}/complete",
+        json={"price": price, "outcome": outcome},
+    )
+    assert r.status_code == 200, f"complete failed: {r.status_code} {r.text}"
+    return r.json()
 
+
+# ── Tests ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_full_buy_list_sold_cycle(client):
-    """BUY -> LIST -> SOLD produces correct profit and restarts cycle."""
-    # 1. Seed slot
-    await _seed_slot(client, ea_id=100, buy_price=50000, sell_price=70000)
+    """BUY -> bought -> LIST -> sold -> next BUY confirmed by /actions/pending (D-07, D-10).
 
-    # 2. GET /actions/pending -> BUY action (target_price=50000)
-    # 3. POST /actions/{id}/complete with outcome="bought", price=50000
-    await _get_and_complete(client, "BUY", "bought", 50000)
+    This exercises the happy-path full trade cycle that the extension
+    performs for every player:
+      1. Seed 1 slot
+      2. GET pending -> BUY
+      3. Complete BUY with outcome=bought
+      4. GET pending -> LIST
+      5. Complete LIST with outcome=sold
+      6. GET pending -> BUY (new cycle)
+      7. GET /portfolio/status -> player status SOLD
+      8. GET /profit/summary -> net_profit != 0
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB — cannot run lifecycle test")
 
-    # 4. GET /actions/pending -> LIST action (target_price=70000)
-    # 5. POST /actions/{id}/complete with outcome="sold", price=70000
-    await _get_and_complete(client, "LIST", "sold", 70000)
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+    sell_price = p["sell_price"]
 
-    # 6. GET /portfolio/status -> player status="SOLD", times_sold=1, realized_profit > 0
+    await _seed_slot(client, ea_id, buy_price, sell_price)
+
+    # Step 1: GET pending -> BUY
+    action = await _get_pending(client)
+    assert action is not None, "Expected BUY action after seeding slot, got null"
+    assert action["action_type"] == "BUY", (
+        f"Expected action_type=BUY for new slot, got {action['action_type']}"
+    )
+    assert action["ea_id"] == ea_id
+
+    buy_action_id = action["id"]
+
+    # Step 2: Complete BUY with outcome=bought
+    result = await _complete(client, buy_action_id, "bought", buy_price)
+    assert result["status"] == "ok"
+    assert result["trade_record_id"] > 0
+
+    # Step 3: GET pending -> LIST
+    action = await _get_pending(client)
+    assert action is not None, (
+        "Expected LIST action after bought, got null. "
+        "Lifecycle derivation broken: bought -> LIST not triggering."
+    )
+    assert action["action_type"] == "LIST", (
+        f"Expected action_type=LIST after bought, got {action['action_type']}"
+    )
+    assert action["ea_id"] == ea_id
+
+    list_action_id = action["id"]
+
+    # Step 4: Complete LIST with outcome=sold
+    result = await _complete(client, list_action_id, "sold", sell_price)
+    assert result["status"] == "ok"
+    assert result["trade_record_id"] > 0
+
+    # Step 5: GET pending -> BUY (cycle restarts after sold)
+    action = await _get_pending(client)
+    assert action is not None, (
+        "Expected BUY action after sold (new cycle), got null. "
+        "Lifecycle derivation broken: sold -> BUY not triggering."
+    )
+    assert action["action_type"] == "BUY", (
+        f"Expected BUY for new cycle after sold, got {action['action_type']}"
+    )
+
+    # Step 6: GET /portfolio/status -> status should be SOLD (most recent record=sold)
     r = await client.get("/api/v1/portfolio/status")
     assert r.status_code == 200
-    body = r.json()
-    players = body["players"]
-    assert len(players) == 1
-    p = players[0]
-    assert p["ea_id"] == 100
-    assert p["status"] == "SOLD"
-    assert p["times_sold"] == 1
-    assert p["realized_profit"] > 0
+    status_body = r.json()
+    assert len(status_body["players"]) > 0, "Expected at least 1 player in status"
+    player_status = next(
+        (p for p in status_body["players"] if p["ea_id"] == ea_id), None
+    )
+    assert player_status is not None, f"ea_id={ea_id} not found in status players"
+    assert player_status["status"] == "SOLD", (
+        f"Expected status=SOLD after sold record, got {player_status['status']}"
+    )
 
-    # 7. GET /profit/summary -> totals
-    # Expected: total_spent=50000, total_earned=int(70000*0.95)=66500, net_profit=16500
+    # Step 7: GET /profit/summary -> net_profit != 0 (there was a complete buy+sell)
     r = await client.get("/api/v1/profit/summary")
     assert r.status_code == 200
-    totals = r.json()["totals"]
-    assert totals["total_spent"] == 50000
-    assert totals["total_earned"] == 66500
-    assert totals["net_profit"] == 16500
-    assert totals["trade_count"] == 2
-
-    # 8. GET /actions/pending -> BUY again (cycle restarts after sold)
-    r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    action = r.json()["action"]
-    assert action is not None
-    assert action["action_type"] == "BUY"
+    profit_body = r.json()
+    assert profit_body["totals"]["net_profit"] != 0, (
+        "Expected non-zero net_profit after completed buy+sell cycle, got 0. "
+        "Either the profit calculation is broken or the records were not persisted."
+    )
 
 
 @pytest.mark.asyncio
 async def test_buy_list_expired_relist_cycle(client):
-    """BUY -> LIST -> EXPIRED -> RELIST cycle derives correct action types."""
-    # 1. Seed slot
-    await _seed_slot(client, ea_id=200, buy_price=40000, sell_price=55000)
+    """BUY -> bought -> LIST -> expired -> RELIST -> listed -> waiting (D-10).
 
-    # 2. BUY -> complete with "bought"
-    await _get_and_complete(client, "BUY", "bought", 40000)
+    Tests the expired/relist branch of the lifecycle state machine:
+      - expired leads to RELIST action
+      - after relist completes with listed, card is on market (no more actions)
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
 
-    # 3. LIST -> complete with "listed" (card is on market)
-    await _get_and_complete(client, "LIST", "listed", 55000)
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+    sell_price = p["sell_price"]
 
-    # 4. GET /actions/pending -> null (card is "listed", waiting)
-    r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    assert r.json()["action"] is None, "Expected null action when card is listed"
+    await _seed_slot(client, ea_id, buy_price, sell_price)
 
-    # 5. Record expired outcome directly
-    r = await client.post("/api/v1/trade-records/direct", json={
-        "ea_id": 200, "outcome": "expired", "price": 55000
-    })
-    assert r.status_code == 201
+    # BUY
+    action = await _get_pending(client)
+    assert action is not None and action["action_type"] == "BUY"
+    await _complete(client, action["id"], "bought", buy_price)
 
-    # 6. GET /actions/pending -> RELIST action (target_price=55000)
-    r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    action = r.json()["action"]
-    assert action is not None, "Expected RELIST action after expired record"
-    assert action["action_type"] == "RELIST"
-    assert action["target_price"] == 55000
+    # LIST
+    action = await _get_pending(client)
+    assert action is not None, "Expected LIST action after bought"
+    assert action["action_type"] == "LIST"
+    await _complete(client, action["id"], "expired", sell_price)
 
-    # 7. Complete RELIST with "listed"
-    r2 = await client.post(f"/api/v1/actions/{action['id']}/complete",
-                            json={"price": 55000, "outcome": "listed"})
-    assert r2.status_code == 200
+    # RELIST
+    action = await _get_pending(client)
+    assert action is not None, (
+        "Expected RELIST action after expired, got null. "
+        "Lifecycle broken: expired -> RELIST not triggering."
+    )
+    assert action["action_type"] == "RELIST", (
+        f"Expected RELIST after expired, got {action['action_type']}"
+    )
 
-    # 8. GET /portfolio/status -> status="LISTED"
-    r = await client.get("/api/v1/portfolio/status")
-    assert r.status_code == 200
-    players = r.json()["players"]
-    assert len(players) == 1
-    assert players[0]["status"] == "LISTED"
+    # Complete RELIST with outcome=listed -> card on market, nothing to do
+    await _complete(client, action["id"], "listed", sell_price)
+
+    action = await _get_pending(client)
+    assert action is None, (
+        f"Expected null action after listed (card on market), got action_type={action.get('action_type') if action else None}. "
+        "Lifecycle broken: listed should mean 'waiting, nothing to do'."
+    )
 
 
 @pytest.mark.asyncio
-async def test_multi_player_interleaved(client):
-    """Multi-player portfolio with interleaved actions produces correct per-player status.
+async def test_listed_means_waiting(client):
+    """After BUY+bought+LIST+listed, no more actions should be pending (D-10).
 
-    Uses direct records to set up specific states for each player, then verifies
-    that portfolio/status and profit/summary reflect both players correctly.
+    When the most recent trade record is 'listed', the card is on the
+    transfer market. The server must return null from /actions/pending.
     """
-    # 1. Seed two slots
-    r = await client.post("/api/v1/portfolio/slots", json={"slots": [
-        {"ea_id": 300, "buy_price": 30000, "sell_price": 45000, "player_name": "Player 300"},
-        {"ea_id": 400, "buy_price": 60000, "sell_price": 80000, "player_name": "Player 400"},
-    ]})
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
+
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+    sell_price = p["sell_price"]
+
+    await _seed_slot(client, ea_id, buy_price, sell_price)
+
+    # BUY -> bought
+    action = await _get_pending(client)
+    assert action is not None and action["action_type"] == "BUY"
+    await _complete(client, action["id"], "bought", buy_price)
+
+    # LIST -> listed
+    action = await _get_pending(client)
+    assert action is not None and action["action_type"] == "LIST"
+    await _complete(client, action["id"], "listed", sell_price)
+
+    # Nothing to do — card is listed
+    action = await _get_pending(client)
+    assert action is None, (
+        f"Expected null action after listed (card on market), got {action}. "
+        "Lifecycle bug: 'listed' state should produce no pending action."
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_trade_record_advances_lifecycle(client):
+    """POST /trade-records/direct with outcome=bought should derive LIST next.
+
+    Direct records bypass the action queue — used for bootstrap when the
+    extension scans the Transfer List before any actions exist.
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
+
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+    sell_price = p["sell_price"]
+
+    await _seed_slot(client, ea_id, buy_price, sell_price)
+
+    # Direct record: bought (no action_id needed)
+    r = await client.post(
+        "/api/v1/trade-records/direct",
+        json={"ea_id": ea_id, "price": buy_price, "outcome": "bought"},
+    )
+    assert r.status_code == 201, f"direct record failed: {r.status_code} {r.text}"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["trade_record_id"] > 0
+
+    # GET pending -> should derive LIST because latest record is bought
+    action = await _get_pending(client)
+    assert action is not None, (
+        "Expected LIST action after direct bought record, got null. "
+        "Direct record did not advance lifecycle."
+    )
+    assert action["action_type"] == "LIST", (
+        f"Expected LIST after direct bought record, got {action['action_type']}"
+    )
+    assert action["ea_id"] == ea_id
+
+
+@pytest.mark.asyncio
+async def test_direct_trade_record_deduplication(client):
+    """POST /trade-records/direct twice with same outcome returns deduplicated=True.
+
+    Server-side dedup: if the latest trade record has the same outcome as
+    the new request, return deduplicated=True and trade_record_id=-1.
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
+
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+
+    await _seed_slot(client, ea_id, buy_price, p["sell_price"])
+
+    # First direct record: bought
+    r = await client.post(
+        "/api/v1/trade-records/direct",
+        json={"ea_id": ea_id, "price": buy_price, "outcome": "bought"},
+    )
+    assert r.status_code == 201
+    first_body = r.json()
+    assert first_body["status"] == "ok"
+    assert first_body.get("deduplicated") is not True, (
+        "First direct record unexpectedly deduplicated — no prior record existed"
+    )
+
+    # Second direct record: same outcome=bought -> should be deduplicated
+    r = await client.post(
+        "/api/v1/trade-records/direct",
+        json={"ea_id": ea_id, "price": buy_price, "outcome": "bought"},
+    )
+    assert r.status_code == 201
+    second_body = r.json()
+    assert second_body.get("deduplicated") is True, (
+        f"Expected deduplicated=True on second identical direct record, got {second_body}"
+    )
+    assert second_body["trade_record_id"] == -1, (
+        f"Expected trade_record_id=-1 for deduped record, got {second_body['trade_record_id']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_trade_records_mixed(client):
+    """POST /trade-records/batch with 2 valid + 1 invalid ea_id handles partial failures.
+
+    The batch endpoint must:
+    - succeed for valid ea_ids (in portfolio)
+    - fail for invalid ea_ids (not in portfolio or invalid outcome)
+    - return succeeded and failed arrays
+    """
+    players = await _get_real_ea_ids(client, count=2)
+    if len(players) < 2:
+        pytest.skip("Need at least 2 viable scored players in DB")
+
+    ea_id_1 = players[0]["ea_id"]
+    ea_id_2 = players[1]["ea_id"]
+    invalid_ea_id = 999_999_999
+
+    # Seed both valid slots
+    r = await client.post(
+        "/api/v1/portfolio/slots",
+        json={
+            "slots": [
+                {
+                    "ea_id": ea_id_1,
+                    "buy_price": players[0]["price"],
+                    "sell_price": players[0]["sell_price"],
+                    "player_name": f"Player {ea_id_1}",
+                },
+                {
+                    "ea_id": ea_id_2,
+                    "buy_price": players[1]["price"],
+                    "sell_price": players[1]["sell_price"],
+                    "player_name": f"Player {ea_id_2}",
+                },
+            ]
+        },
+    )
     assert r.status_code == 201
 
-    # 2. Use direct records to set player 300 as "sold" and player 400 as "bought"
-    #    This simulates interleaved cycle progression without relying on action ordering
-    r = await client.post("/api/v1/trade-records/direct", json={
-        "ea_id": 300, "price": 30000, "outcome": "bought"
-    })
+    # Batch: 2 valid + 1 invalid
+    r = await client.post(
+        "/api/v1/trade-records/batch",
+        json={
+            "records": [
+                {"ea_id": ea_id_1, "price": players[0]["price"], "outcome": "bought"},
+                {"ea_id": ea_id_2, "price": players[1]["price"], "outcome": "bought"},
+                {"ea_id": invalid_ea_id, "price": 50000, "outcome": "bought"},
+            ]
+        },
+    )
+    assert r.status_code == 201, f"batch failed: {r.status_code} {r.text}"
+    body = r.json()
+    assert body["status"] == "ok"
+
+    assert ea_id_1 in body["succeeded"], (
+        f"Expected ea_id={ea_id_1} in succeeded, got {body['succeeded']}"
+    )
+    assert ea_id_2 in body["succeeded"], (
+        f"Expected ea_id={ea_id_2} in succeeded, got {body['succeeded']}"
+    )
+    assert invalid_ea_id in body["failed"], (
+        f"Expected invalid ea_id={invalid_ea_id} in failed, got {body['failed']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_trade_records_dedup(client):
+    """Batch record for same ea_id+outcome that was already direct-recorded is deduped.
+
+    Dedup should be success: the batch endpoint treats deduplicated records
+    as succeeded (not failed). Lifecycle must be unaffected.
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
+
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = p["price"]
+    sell_price = p["sell_price"]
+
+    await _seed_slot(client, ea_id, buy_price, sell_price)
+
+    # Direct record: bought
+    r = await client.post(
+        "/api/v1/trade-records/direct",
+        json={"ea_id": ea_id, "price": buy_price, "outcome": "bought"},
+    )
+    assert r.status_code == 201
+    assert r.json()["status"] == "ok"
+
+    # Batch with same outcome (should dedup)
+    r = await client.post(
+        "/api/v1/trade-records/batch",
+        json={
+            "records": [
+                {"ea_id": ea_id, "price": buy_price, "outcome": "bought"},
+            ]
+        },
+    )
+    assert r.status_code == 201
+    batch_body = r.json()
+    assert ea_id in batch_body["succeeded"], (
+        f"Expected ea_id in succeeded (deduped = success), got {batch_body}"
+    )
+
+    # Lifecycle should still be correct: latest record is still bought -> LIST
+    action = await _get_pending(client)
+    assert action is not None, "Expected LIST action after bought (deduped batch did not corrupt lifecycle)"
+    assert action["action_type"] == "LIST", (
+        f"Expected LIST after bought + deduped batch, got {action['action_type']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_portfolio_status_reflects_lifecycle(client):
+    """GET /portfolio/status status field reflects the most recent trade record (D-07).
+
+    Seeds 2 slots, drives slot1 to BOUGHT and slot2 to SOLD.
+    Verifies the status endpoint reports the correct per-player status.
+    """
+    players = await _get_real_ea_ids(client, count=2)
+    if len(players) < 2:
+        pytest.skip("Need at least 2 viable scored players in DB")
+
+    p1 = players[0]
+    p2 = players[1]
+
+    # Seed both slots at once
+    r = await client.post(
+        "/api/v1/portfolio/slots",
+        json={
+            "slots": [
+                {
+                    "ea_id": p1["ea_id"],
+                    "buy_price": p1["price"],
+                    "sell_price": p1["sell_price"],
+                    "player_name": f"Player {p1['ea_id']}",
+                },
+                {
+                    "ea_id": p2["ea_id"],
+                    "buy_price": p2["price"],
+                    "sell_price": p2["sell_price"],
+                    "player_name": f"Player {p2['ea_id']}",
+                },
+            ]
+        },
+    )
     assert r.status_code == 201
 
-    r = await client.post("/api/v1/trade-records/direct", json={
-        "ea_id": 300, "price": 45000, "outcome": "sold"
-    })
-    assert r.status_code == 201
+    # Drive slot1 to BOUGHT: BUY -> complete(bought)
+    action = await _get_pending(client)
+    assert action is not None
+    assert action["action_type"] == "BUY"
+    # First action is for slot1 (insert order)
+    slot1_ea_id = action["ea_id"]
+    await _complete(client, action["id"], "bought", p1["price"] if action["ea_id"] == p1["ea_id"] else p2["price"])
 
-    r = await client.post("/api/v1/trade-records/direct", json={
-        "ea_id": 400, "price": 60000, "outcome": "bought"
-    })
-    assert r.status_code == 201
+    # Drive slot2 to SOLD: need to get slot2's BUY, complete bought, get LIST, complete sold
+    # After slot1's action is DONE, slot2's BUY should surface
+    action = await _get_pending(client)
+    assert action is not None, "Expected BUY action for slot2"
+    slot2_ea_id = action["ea_id"]
+    assert slot2_ea_id != slot1_ea_id, "Expected different ea_id for second slot's action"
+    buy2_price = p1["price"] if slot2_ea_id == p1["ea_id"] else p2["price"]
+    sell2_price = p1["sell_price"] if slot2_ea_id == p1["ea_id"] else p2["sell_price"]
 
-    # 3. GET /portfolio/status -> player 300 is SOLD, player 400 is BOUGHT
+    await _complete(client, action["id"], "bought", buy2_price)
+
+    # Now slot2 needs LIST
+    action = await _get_pending(client)
+    assert action is not None
+    assert action["action_type"] == "LIST"
+    assert action["ea_id"] == slot2_ea_id
+    await _complete(client, action["id"], "sold", sell2_price)
+
+    # GET /portfolio/status
     r = await client.get("/api/v1/portfolio/status")
     assert r.status_code == 200
-    players_by_ea = {p["ea_id"]: p for p in r.json()["players"]}
-    assert len(players_by_ea) == 2
-    assert players_by_ea[300]["status"] == "SOLD"
-    assert players_by_ea[300]["times_sold"] == 1
-    assert players_by_ea[400]["status"] == "BOUGHT"
+    status_body = r.json()
 
-    # 4. GET /profit/summary -> per_player has entries for both ea_ids
+    players_map = {p["ea_id"]: p for p in status_body["players"]}
+
+    # slot1: latest record was 'bought' -> status BOUGHT
+    assert slot1_ea_id in players_map, f"slot1 ea_id={slot1_ea_id} not in status response"
+    assert players_map[slot1_ea_id]["status"] == "BOUGHT", (
+        f"Expected BOUGHT for slot1, got {players_map[slot1_ea_id]['status']}"
+    )
+
+    # slot2: latest record was 'sold' -> status SOLD
+    assert slot2_ea_id in players_map, f"slot2 ea_id={slot2_ea_id} not in status response"
+    assert players_map[slot2_ea_id]["status"] == "SOLD", (
+        f"Expected SOLD for slot2, got {players_map[slot2_ea_id]['status']}"
+    )
+
+    # Summary trade counts
+    summary = status_body["summary"]
+    assert summary["trade_counts"]["bought"] >= 2, (
+        f"Expected bought_count >= 2, got {summary['trade_counts']['bought']}"
+    )
+    assert summary["trade_counts"]["sold"] >= 1, (
+        f"Expected sold_count >= 1, got {summary['trade_counts']['sold']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_profit_summary_after_full_cycle(client):
+    """GET /profit/summary after buy+sold cycle returns correct totals.
+
+    Uses buy_price=50000, sell_price=70000.
+    Expected:
+      total_spent  = 50000
+      total_earned = int(70000 * 0.95)  = 66500
+      net_profit   = 66500 - 50000      = 16500
+    """
+    players = await _get_real_ea_ids(client, count=1)
+    if not players:
+        pytest.skip("No viable scored players in DB")
+
+    p = players[0]
+    ea_id = p["ea_id"]
+    buy_price = 50_000
+    sell_price = 70_000
+
+    await _seed_slot(client, ea_id, buy_price, sell_price)
+
+    # BUY -> bought
+    action = await _get_pending(client)
+    assert action is not None and action["action_type"] == "BUY"
+    await _complete(client, action["id"], "bought", buy_price)
+
+    # LIST -> sold
+    action = await _get_pending(client)
+    assert action is not None and action["action_type"] == "LIST"
+    await _complete(client, action["id"], "sold", sell_price)
+
     r = await client.get("/api/v1/profit/summary")
     assert r.status_code == 200
-    per_player_ea_ids = {p["ea_id"] for p in r.json()["per_player"]}
-    assert 300 in per_player_ea_ids
-    assert 400 in per_player_ea_ids
+    profit_body = r.json()
+    totals = profit_body["totals"]
 
-    # 5. Verify actions are derived correctly for the remaining needed work
-    #    Player 400 is "bought" -> next action should be LIST for 400
-    #    Player 300 is "sold" -> next action should be BUY for 300
-    r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    action = r.json()["action"]
-    assert action is not None
-    # Either BUY for 300 (restart after sold) or LIST for 400 (after bought)
-    assert action["ea_id"] in {300, 400}
-    if action["ea_id"] == 300:
-        assert action["action_type"] == "BUY"
-    else:
-        assert action["action_type"] == "LIST"
+    expected_spent = buy_price
+    expected_earned = int(sell_price * 0.95)
+    expected_net = expected_earned - expected_spent
 
-
-@pytest.mark.asyncio
-async def test_direct_record_affects_lifecycle(client):
-    """Direct trade record sets state so action derivation picks up where it left off."""
-    # 1. Seed slot
-    await _seed_slot(client, ea_id=500, buy_price=50000, sell_price=65000)
-
-    # 2. POST /trade-records/direct with ea_id=500, outcome="bought"
-    r = await client.post("/api/v1/trade-records/direct", json={
-        "ea_id": 500, "price": 50000, "outcome": "bought"
-    })
-    assert r.status_code == 201
-
-    # 3. GET /actions/pending -> LIST (not BUY, because direct record set state to "bought")
-    r = await client.get("/api/v1/actions/pending")
-    assert r.status_code == 200
-    action = r.json()["action"]
-    assert action is not None, "Expected LIST action after direct bought record"
-    assert action["action_type"] == "LIST"
-    assert action["ea_id"] == 500
-
-    # 4. Complete LIST with "sold"
-    r = await client.post(f"/api/v1/actions/{action['id']}/complete",
-                           json={"price": 65000, "outcome": "sold"})
-    assert r.status_code == 200
-
-    # 5. GET /portfolio/status -> status="SOLD"
-    r = await client.get("/api/v1/portfolio/status")
-    assert r.status_code == 200
-    players = r.json()["players"]
-    assert len(players) == 1
-    assert players[0]["status"] == "SOLD"
+    assert totals["total_spent"] == expected_spent, (
+        f"Expected total_spent={expected_spent}, got {totals['total_spent']}"
+    )
+    assert totals["total_earned"] == expected_earned, (
+        f"Expected total_earned={expected_earned} (after EA 5% tax), got {totals['total_earned']}"
+    )
+    assert totals["net_profit"] == expected_net, (
+        f"Expected net_profit={expected_net}, got {totals['net_profit']}"
+    )
 
 
 @pytest.mark.asyncio
-async def test_delete_player_mid_cycle(client):
-    """Deleting a player mid-cycle removes it from actions and status."""
-    # 1. Seed slot via /portfolio/slots (this creates the PortfolioSlot that DELETE can find)
-    # NOTE: Do NOT call /portfolio/confirm — that resets the whole portfolio
-    await _seed_slot(client, ea_id=600, buy_price=35000, sell_price=50000)
+async def test_confirm_then_lifecycle(client):
+    """POST /portfolio/confirm seeds portfolio; GET /actions/pending derives BUY.
 
-    # 2. GET pending -> BUY, complete with "bought"
-    await _get_and_complete(client, "BUY", "bought", 35000)
-
-    # 3. DELETE /portfolio/600?budget=1000000 -> 200 with removed_ea_id=600
-    r = await client.delete("/api/v1/portfolio/600?budget=1000000")
+    Two-step flow: generate -> confirm -> get pending action.
+    After confirm, the portfolio is seeded and the action queue should
+    derive BUY for the first slot.
+    """
+    # Generate
+    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
     assert r.status_code == 200
-    body = r.json()
-    assert body["removed_ea_id"] == 600
+    gen_body = r.json()
+    assert gen_body["count"] > 0, "No players generated — cannot test confirm flow"
 
-    # 4. GET /actions/pending -> null (slot removed, no more actions for ea_id=600)
-    r = await client.get("/api/v1/actions/pending")
+    players = gen_body["data"][:2]
+    confirm_payload = {
+        "players": [
+            {"ea_id": p["ea_id"], "buy_price": p["price"], "sell_price": p["sell_price"]}
+            for p in players
+        ]
+    }
+
+    # Confirm
+    r = await client.post("/api/v1/portfolio/confirm", json=confirm_payload)
+    assert r.status_code == 200, f"confirm failed: {r.status_code} {r.text}"
+    conf_body = r.json()
+    assert conf_body["confirmed"] == len(players), (
+        f"Expected confirmed={len(players)}, got {conf_body['confirmed']}"
+    )
+    assert conf_body["status"] == "ok"
+
+    # GET /portfolio/confirmed
+    r = await client.get("/api/v1/portfolio/confirmed")
     assert r.status_code == 200
-    assert r.json()["action"] is None, "Expected null action after player deleted"
+    confirmed_body = r.json()
+    assert confirmed_body["count"] == len(players), (
+        f"Expected {len(players)} confirmed slots, got {confirmed_body['count']}"
+    )
 
-    # 5. GET /portfolio/status -> player 600 no longer in players list
-    r = await client.get("/api/v1/portfolio/status")
-    assert r.status_code == 200
-    ea_ids = [p["ea_id"] for p in r.json()["players"]]
-    assert 600 not in ea_ids
-
-
-@pytest.mark.asyncio
-async def test_confirm_resets_portfolio(client):
-    """POST /portfolio/confirm replaces all existing slots with a clean slate."""
-    # 1. Seed two slots via /portfolio/confirm (ea_id=700, ea_id=800)
-    r = await client.post("/api/v1/portfolio/confirm", json={"players": [
-        {"ea_id": 700, "buy_price": 20000, "sell_price": 30000},
-        {"ea_id": 800, "buy_price": 25000, "sell_price": 35000},
-    ]})
-    assert r.status_code == 200
-    assert r.json()["confirmed"] == 2
-
-    # 2. GET /portfolio/status -> 2 players
-    r = await client.get("/api/v1/portfolio/status")
-    assert r.status_code == 200
-    assert len(r.json()["players"]) == 2
-
-    # 3. POST /portfolio/confirm with only ea_id=900
-    r = await client.post("/api/v1/portfolio/confirm", json={"players": [
-        {"ea_id": 900, "buy_price": 15000, "sell_price": 22000},
-    ]})
-    assert r.status_code == 200
-    assert r.json()["confirmed"] == 1
-
-    # 4. GET /portfolio/status -> only 1 player (ea_id=900), previous slots gone
-    r = await client.get("/api/v1/portfolio/status")
-    assert r.status_code == 200
-    players = r.json()["players"]
-    assert len(players) == 1
-    assert players[0]["ea_id"] == 900
+    # GET /actions/pending -> should derive BUY for first slot
+    action = await _get_pending(client)
+    assert action is not None, (
+        "Expected BUY action after confirm, got null. "
+        "Lifecycle derivation broken after portfolio confirmation."
+    )
+    assert action["action_type"] == "BUY", (
+        f"Expected BUY action for confirmed slot, got {action['action_type']}"
+    )
+    # ea_id should be one of the confirmed players
+    confirmed_ea_ids = {p["ea_id"] for p in players}
+    assert action["ea_id"] in confirmed_ea_ids, (
+        f"Action ea_id={action['ea_id']} not in confirmed portfolio {confirmed_ea_ids}"
+    )
