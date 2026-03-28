@@ -46,4 +46,4 @@ VOLATILITY_MAX_PRICE_INCREASE_ABS = 10_000  # coins; players with >10k increase 
 VOLATILITY_LOOKBACK_DAYS = 7            # how far back to check for the price spike
 
 # Database
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///D:/op-seller/op_seller.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://op_seller:op_seller@localhost:5432/op_seller")
