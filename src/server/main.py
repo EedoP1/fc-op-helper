@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.db import create_engine_and_tables, create_read_engine, create_session_factory
+from src.server.db import create_engine_and_tables
 from src.server.scanner import ScannerService
 from src.server.scheduler import create_scheduler
 from src.server.circuit_breaker import CircuitBreaker
@@ -60,13 +60,9 @@ async def lifespan(app: FastAPI):
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
 
-    # Read-only engine for API queries — avoids contention with scanner writes
-    read_engine = create_read_engine()
-    read_session_factory = create_session_factory(read_engine)
-
     app.state.engine = engine
     app.state.session_factory = session_factory
-    app.state.read_session_factory = read_session_factory
+    app.state.read_session_factory = session_factory  # Same pool — Postgres MVCC
     app.state.scanner = scanner
     app.state.circuit_breaker = cb
 
@@ -84,7 +80,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     scheduler.shutdown(wait=False)
     await scanner.stop()
-    await read_engine.dispose()
     await engine.dispose()
     logger.info("Server stopped.")
 

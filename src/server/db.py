@@ -1,7 +1,6 @@
-"""Database engine, session factory, and table creation for async SQLite."""
+"""Database engine, session factory, and table creation for async PostgreSQL."""
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import event
 from src.config import DATABASE_URL
 
 
@@ -10,7 +9,10 @@ class Base(DeclarativeBase):
 
 
 def create_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
-    """Create an async SQLAlchemy engine with WAL mode enabled.
+    """Create a single async Postgres engine with asyncpg connection pool.
+
+    Postgres MVCC eliminates the need for separate read/write engines.
+    The connection pool handles concurrent scanner + API access.
 
     Args:
         db_url: SQLAlchemy database URL string.
@@ -18,17 +20,13 @@ def create_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
     Returns:
         Configured AsyncEngine instance.
     """
-    engine = create_async_engine(db_url, echo=False)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def enable_wal(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    return engine
+    return create_async_engine(
+        db_url,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -43,29 +41,8 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-def create_read_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
-    """Create a read-only async engine for API queries.
-
-    Uses a separate connection so API reads don't block on scanner writes.
-    SQLite WAL mode allows concurrent readers, but aiosqlite serializes
-    all operations through a single connection per engine. A second engine
-    gives API queries their own connection.
-    """
-    engine = create_async_engine(db_url, echo=False)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def set_read_pragmas(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA query_only=ON")
-        cursor.close()
-
-    return engine
-
-
 async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    """Create engine, enable WAL, create all ORM tables, return engine and session factory.
+    """Create engine, create all ORM tables, return engine and session factory.
 
     Args:
         db_url: SQLAlchemy database URL string. Defaults to DATABASE_URL from config.
