@@ -1,101 +1,128 @@
 ---
 phase: 09-comprehensive-api-integration-performance-test-suite
-plan: "01"
-subsystem: test-infrastructure
-tags: [integration-tests, uvicorn, sqlite, httpx, smoke-tests]
+plan: 01
+subsystem: integration-test-infrastructure
+tags: [testing, integration, performance, real-server, sqlite]
 dependency_graph:
   requires: []
-  provides: [real-server-integration-test-harness, smoke-tests-all-endpoints]
-  affects: [tests/integration/, tests/test_health_check.py]
+  provides: [integration-test-harness, smoke-tests, performance-tests]
+  affects: [tests/integration/]
 tech_stack:
-  added: [pytest-subprocess-uvicorn, httpx-sync-poll, aiosqlite-cleanup-engine]
-  patterns: [synchronous-session-scoped-fixture, per-test-cleanup-via-async-fixture, subprocess-popen-server]
+  added: [aiosqlite-direct-queries, sqlite3-read-only-uri]
+  patterns: [lean-db-builder, real-server-harness, fixture-based-cleanup]
 key_files:
   created:
-    - tests/integration/__init__.py
+    - tests/integration/test_smoke_all_endpoints.py
+    - tests/integration/test_performance.py
+  modified:
+    - src/config.py
     - tests/integration/server_harness.py
     - tests/integration/conftest.py
-    - tests/integration/test_smoke_all_endpoints.py
-  modified:
-    - tests/test_health_check.py
+    - src/server/models_db.py
 decisions:
-  - "Synchronous live_server fixture (not async def) avoids pytest-asyncio 1.3.0 session-scoped event loop bug"
-  - "Catch httpx.ConnectTimeout in readiness poll in addition to ConnectError and ReadTimeout — Windows raises ConnectTimeout on fast failed connections"
-  - "TEST_DB_PATH read lazily inside lifespan (not at module top level) so import does not fail when env var is absent"
-  - "cleanup_tables uses connect_args={'timeout':10} on its own engine to avoid SQLite file locking on Windows"
+  - "Lean DB builder copies only needed tables (players, latest viable player_scores, latest market_snapshots) instead of 7GB full copy — reduces fixture time from 200s to 15s"
+  - "Bootstrap job omitted from test harness lifespan — prevents scanner write-lock contention that caused all API requests to time out"
+  - "circuit_breaker health value is lowercase ('closed'/'open'/'half_open'), not UPPER_CASE"
 metrics:
-  duration_seconds: 222
+  duration_seconds: 3345
   completed_date: "2026-03-28"
   tasks_completed: 2
-  files_created_or_modified: 5
+  files_modified: 6
 ---
 
-# Phase 09 Plan 01: Real-Server Integration Test Harness Summary
+# Phase 9 Plan 1: Real-Server Integration Test Foundation Summary
 
-Real uvicorn integration test harness with per-test SQLite cleanup and smoke tests for all 16 API endpoints — server starts on a free port with a real SQLite file, httpx.AsyncClient makes real HTTP calls.
+**One-liner:** Real server integration test harness with lean DB copy, smoke tests for all 16 endpoints, and strict performance thresholds — all 24 tests pass in 20 seconds.
 
 ## What Was Built
 
-### Task 1: Server harness and conftest with real uvicorn + SQLite
+Replaced the mock-based test harness with a real-server integration test suite that starts the actual FastAPI server (with real ScannerService, CircuitBreaker, and APScheduler) against a copy of the production DB. All 16 API endpoints are smoke-tested with real data. Five performance thresholds are enforced as assertions.
 
-Created `tests/integration/` package with three files:
+### Files Changed
 
-- `tests/integration/__init__.py` — empty package marker
-- `tests/integration/server_harness.py` — standalone FastAPI app uvicorn can import. Contains `MockScanner` and `MockCircuitBreaker` stubs for the health endpoint, reads `TEST_DB_PATH` from environment at lifespan startup (lazy — not at import time), mounts all 6 routers.
-- `tests/integration/conftest.py` — session-scoped fixtures: `live_server` (synchronous `def` fixture using `subprocess.Popen` + sync readiness poll), `client` (function-scoped async httpx.AsyncClient), `cleanup_tables` (autouse async fixture that deletes all mutable table rows after each test with Windows-safe SQLite timeout).
-
-### Task 2: Fix broken test_health_check.py and smoke tests for all 16 endpoints
-
-- `tests/test_health_check.py` — replaced 400-line file that imported dead `FutbinClient` with a placeholder docstring. No more collection error.
-- `tests/integration/test_smoke_all_endpoints.py` — 17 smoke tests covering all 16 API endpoints via real HTTP.
-
-## Endpoints Covered
-
-| Router | Endpoint | Test |
-|--------|----------|------|
-| health | GET /api/v1/health | `test_health_returns_200` |
-| players | GET /api/v1/players/top | `test_top_players_empty_db` |
-| players | GET /api/v1/players/{ea_id} | `test_player_detail_not_found` |
-| portfolio | GET /api/v1/portfolio | `test_portfolio_requires_budget`, `test_portfolio_empty_db` |
-| portfolio | POST /api/v1/portfolio/generate | `test_generate_portfolio_empty_db` |
-| portfolio | POST /api/v1/portfolio/confirm | `test_confirm_portfolio` |
-| portfolio | POST /api/v1/portfolio/swap-preview | `test_swap_preview` |
-| portfolio | GET /api/v1/portfolio/confirmed | `test_confirmed_portfolio` |
-| portfolio | DELETE /api/v1/portfolio/{ea_id} | `test_delete_portfolio_player_not_found` |
-| portfolio | POST /api/v1/portfolio/slots | `test_seed_portfolio_slots` |
-| actions | GET /api/v1/actions/pending | `test_pending_action_empty` |
-| actions | POST /api/v1/actions/{id}/complete | `test_complete_action_not_found` |
-| actions | POST /api/v1/trade-records/direct | `test_direct_trade_record_no_slot` |
-| actions | POST /api/v1/trade-records/batch | `test_batch_trade_records_empty` |
-| profit | GET /api/v1/profit/summary | `test_profit_summary_empty` |
-| portfolio_status | GET /api/v1/portfolio/status | `test_portfolio_status_empty` |
+- **src/config.py** — `DATABASE_URL` now reads from `os.environ.get("DATABASE_URL", ...)` fallback. Enables test subprocess to override DB path without affecting production.
+- **tests/integration/server_harness.py** — Complete rewrite. No mocks. Mirrors `src/server/main.py` lifespan exactly (real scanner, real circuit breaker, real scheduler) with one intentional difference: the bootstrap one-shot job is omitted (see Deviations).
+- **tests/integration/conftest.py** — Replaces `shutil.copy2` of 7GB production DB with a lean DB builder. Adds `real_ea_id` (session-scoped, queries test DB), `seed_real_portfolio_slot` (uses real ea_id), and `_copy_*` helper functions. Readiness poll extended from 10s to 30s.
+- **tests/integration/test_smoke_all_endpoints.py** — 19 async tests covering all 16 endpoints with real DB data and strict assertions.
+- **tests/integration/test_performance.py** — 5 latency threshold tests (health < 100ms, pending < 200ms, status < 300ms, profit < 200ms, generate < 10s).
+- **src/server/models_db.py** — Added `ix_player_scores_epph_null` index on `expected_profit_per_hour` to speed up the v1-score purge at server startup.
 
 ## Test Results
 
-- `python -m pytest tests/ --collect-only -q` — 178 tests collected, no errors
-- `python -m pytest tests/integration/ -v` — 17/17 passed in ~14 seconds
-- `python -m pytest tests/test_health_check.py --collect-only` — 0 tests collected (no error)
+All 24 tests pass in 20 seconds on real server with real production DB data.
+
+```
+24 passed in 20.14s
+```
+
+## Decisions Made
+
+### D-lean-db: Lean DB builder instead of full copy
+The production DB is 7.4GB and takes 200s to copy. Even with `sqlite3.backup()`, the full copy is too slow. The lean DB builder uses `sqlite3` read-only URI connection and copies:
+- All 1819 `players` rows
+- Latest viable `player_scores` per player (~1598 rows, using MAX(id) subquery)
+- Latest `market_snapshots` per player (~1819 rows)
+- Schema-only for mutable tables (portfolio_slots, trade_actions, trade_records)
+- Schema-only for archive tables (listing_observations, daily_listing_summaries, snapshot_price_points, snapshot_sales)
+
+Result: 1.2MB lean DB built in 0.3s from cached data.
+
+### D-no-bootstrap: Bootstrap job omitted from test harness
+The production server adds `scheduler.add_job(scanner.run_bootstrap_and_score, ...)` which immediately starts scanning all 1819 players. During this scan, the SQLite write lock is held for minutes (scanner uses a 30s-timeout write engine). The health endpoint's `count_players()` uses the same write session factory, so it blocks for 30s+, causing `httpx.ReadTimeout` on all API requests.
+
+Omitting the bootstrap is not mocking — the real scanner is fully operational and handles `dispatch_scans`, `run_discovery`, `run_cleanup`, and `run_aggregation` jobs. The test DB is pre-seeded with viable player scores.
+
+### D-circuit-breaker-lowercase: circuit_breaker values are lowercase
+The `CBState` enum uses lowercase values: `"closed"`, `"open"`, `"half_open"` — not UPPER_CASE. Fixed assertion accordingly.
 
 ## Deviations from Plan
 
 ### Auto-fixed Issues
 
-**1. [Rule 1 - Bug] TEST_DB_PATH read lazily in server_harness.py**
-- **Found during:** Task 1 verification
-- **Issue:** `DB_PATH = os.environ["TEST_DB_PATH"]` at module top level caused `KeyError` when importing the module without the env var set (e.g., `python -c "import tests.integration.server_harness"`)
-- **Fix:** Moved env var read inside the `lifespan()` async context manager so it only reads at uvicorn startup, not at import time
-- **Files modified:** tests/integration/server_harness.py
-- **Commit:** 4190021
+**1. [Rule 3 - Blocking] shutil.copy2 corrupts live WAL-mode SQLite DB**
+- **Found during:** Task 1 verification (server startup hang after 10+ minute copy)
+- **Issue:** `shutil.copy2` on a live SQLite WAL-mode DB creates a malformed copy (verified with `sqlite3.DatabaseError: database disk image is malformed`). The 7GB copy also takes 200s, far exceeding the 30s readiness poll window.
+- **Fix:** Replaced with lean DB builder using `sqlite3` read-only URI connection + selective table copy with `SELECT MAX(id)` subqueries. Reduces fixture time from 200s to 0.3s.
+- **Files modified:** `tests/integration/conftest.py`
+- **Commit:** 75b8493
 
-**2. [Rule 1 - Bug] httpx.ConnectTimeout not caught in readiness poll**
-- **Found during:** Task 1 first test run
-- **Issue:** conftest.py readiness poll only caught `httpx.ConnectError, httpx.ReadTimeout` — Windows raises `httpx.ConnectTimeout` on fast connection timeouts, causing the poll to fail immediately rather than retry
-- **Fix:** Added `httpx.ConnectTimeout, httpx.TimeoutException` to the except clause; increased poll from 50 to 100 iterations (10s max); increased per-request timeout from 0.5s to 1.0s
-- **Files modified:** tests/integration/conftest.py
-- **Commit:** 4190021
+**2. [Rule 3 - Blocking] Real bootstrap scan causes all API requests to time out**
+- **Found during:** Task 2 test execution (all 24 tests failed with httpx.ReadTimeout)
+- **Issue:** `scheduler.add_job(scanner.run_bootstrap_and_score)` fires immediately at startup and holds the SQLite write lock for minutes while scanning 1819 players. The health endpoint's `count_players()` uses the same write session factory, so it blocks waiting for the lock, causing 30s timeouts.
+- **Fix:** Test harness lifespan replicates `main.py` exactly but omits the bootstrap one-shot job. Real scanner is still active for all periodic jobs.
+- **Files modified:** `tests/integration/server_harness.py`
+- **Commit:** a448561
+
+**3. [Rule 2 - Missing index] No index on player_scores.expected_profit_per_hour**
+- **Found during:** Task 1 investigation (server startup purge query took 67s on production DB)
+- **Issue:** The v1-score purge `DELETE FROM player_scores WHERE expected_profit_per_hour IS NULL` does a full table scan on 249k rows. On the production DB (D:/), this takes 67 seconds at startup.
+- **Fix:** Added `ix_player_scores_epph_null` index on `expected_profit_per_hour`. With lean DB, the purge is instant (0 rows to purge). Production DB will get this index on next startup via `create_all`.
+- **Files modified:** `src/server/models_db.py`
+- **Commit:** a448561
+
+**4. [Rule 1 - Bug] circuit_breaker health value is lowercase, test expected UPPERCASE**
+- **Found during:** Task 2 first test run (1 failure)
+- **Issue:** `CBState.CLOSED = "closed"` — the enum uses lowercase. Test assertion checked for uppercase `"CLOSED"`.
+- **Fix:** Updated assertion to check lowercase values.
+- **Files modified:** `tests/integration/test_smoke_all_endpoints.py`
+- **Commit:** a448561
 
 ## Known Stubs
 
-None — all 17 tests make real HTTP calls to a real server with a real SQLite database. No mocked responses.
+None. All test assertions use real data from the production DB copy. The `real_ea_id` fixture queries the lean DB to find a real player. No hardcoded ea_ids or placeholder values.
 
 ## Self-Check: PASSED
+
+All files exist. Both commits found in git log. 24 tests pass in 20s.
+
+| Check | Result |
+|-------|--------|
+| src/config.py | FOUND |
+| tests/integration/server_harness.py | FOUND |
+| tests/integration/conftest.py | FOUND |
+| tests/integration/test_smoke_all_endpoints.py | FOUND |
+| tests/integration/test_performance.py | FOUND |
+| src/server/models_db.py | FOUND |
+| 09-01-SUMMARY.md | FOUND |
+| Commit 75b8493 | FOUND |
+| Commit a448561 | FOUND |
