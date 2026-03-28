@@ -130,3 +130,15 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 07.1 Trade Reporting | v1.1 | 3/3 | Complete    | 2026-03-27 |
 | 07.2 Portfolio Dashboard | v1.1 | 2/2 | Complete   | 2026-03-27 |
 | 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
+
+### Phase 9: Comprehensive API Integration & Performance Test Suite
+
+**Goal:** Fix broken test infrastructure, add cross-endpoint lifecycle integration tests, batch endpoint coverage, and performance smoke baselines for all critical API endpoints
+**Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
+**Depends on:** Phase 5 (tests current backend surface; does not require Phase 8)
+**Plans:** 3 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — Fix broken test collection (delete dead FUTBIN modules) + batch trade records tests
+- [ ] 09-02-PLAN.md — Cross-endpoint trade lifecycle integration tests (BUY->LIST->SOLD, EXPIRED->RELIST, multi-player)
+- [ ] 09-03-PLAN.md — Performance smoke tests (latency baselines for pending, status, profit endpoints)
