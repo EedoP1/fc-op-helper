@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Phase complete — ready for verification
-stopped_at: Completed 09.1-02-PLAN.md
-last_updated: "2026-03-28T14:59:49.595Z"
+stopped_at: Completed 09.1-03-PLAN.md
+last_updated: "2026-03-28T15:00:01.194Z"
 last_activity: 2026-03-28
 progress:
   total_phases: 8
@@ -68,6 +68,7 @@ Plan: 3 of 3
 | Phase 09 P02 | 620 | 2 tasks | 3 files |
 | Phase 09.1-migrate-from-sqlite P01 | 2 | 2 tasks | 6 files |
 | Phase 09.1-migrate-from-sqlite P02 | 8 | 3 tasks | 4 files |
+| Phase 09.1-migrate-from-sqlite P03 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -122,6 +123,8 @@ Plan: 3 of 3
 - [Phase 09.1-migrate-from-sqlite]: app.state.read_session_factory = session_factory preserves attribute name so all API endpoints work without modification
 - [Phase 09.1-migrate-from-sqlite]: DailyListingSummary upsert uses constraint= not index_elements= — conflict target is a UniqueConstraint, not a plain index; matching UniqueConstraint added to ORM model
 - [Phase 09.1-migrate-from-sqlite]: health_check.py futbin_id caching removed — UPDATE players SET futbin_id is a no-op since column is being dropped (D-10)
+- [Phase 09.1-migrate-from-sqlite]: conftest passes DATABASE_URL via subprocess env; server_harness does not override it
+- [Phase 09.1-migrate-from-sqlite]: app.state.read_session_factory = session_factory preserves API endpoint attribute name; Postgres MVCC eliminates need for separate read engine
 
 ### Roadmap Evolution
 
@@ -152,5 +155,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-28
-Stopped at: Completed 09.1-02-PLAN.md
+Stopped at: Completed 09.1-03-PLAN.md
 Resume file: None
