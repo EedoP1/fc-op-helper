@@ -15,7 +15,7 @@ Covered scenarios:
   - 404 error paths: nonexistent action, nonexistent portfolio player
   - 400 error paths: invalid outcome string
   - Boundary conditions: pagination limits, swap-preview with empty exclusion list
-  - Health fields: real scanner state (not mock values)
+  - Health fields: real scanner state (not placeholder values)
 """
 import pytest
 
@@ -407,13 +407,13 @@ async def test_swap_preview_empty_excluded(client):
 
 @pytest.mark.asyncio
 async def test_health_returns_real_scanner_state(client):
-    """GET /health returns real scanner state, not mock values.
+    """GET /health returns real scanner state, not placeholder values.
 
     Per D-01: the test server uses the REAL ScannerService, CircuitBreaker,
     and APScheduler. Health must reflect actual runtime state.
 
     Verifies:
-    - scanner_status is "running" or "stopped" (not a placeholder like "mock")
+    - scanner_status is "running" or "stopped" (not a placeholder like "unknown")
     - circuit_breaker is one of "closed", "open", "half_open" (lowercase per CBState enum)
     - players_in_db is an integer > 0 (real DB has players)
     """
