@@ -140,5 +140,5 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 
 Plans:
 - [x] 09-01-PLAN.md — Test infrastructure (real uvicorn + SQLite harness, conftest, fixtures) + fix health check + smoke test all 16 endpoints
-- [ ] 09-02-PLAN.md — Edge case tests (boundaries, duplicates, idempotency) + error handling (bad input, CORS, 404s)
+- [x] 09-02-PLAN.md — Edge case tests (boundaries, duplicates, idempotency) + error handling (bad input, CORS, 404s)
 - [ ] 09-03-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST, multi-player) + performance latency + concurrent requests
