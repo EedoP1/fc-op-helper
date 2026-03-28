@@ -21,7 +21,7 @@ created: 2026-03-28
 | **Config file** | `pytest.ini` (asyncio_mode = auto) |
 | **Quick run command** | `python -m pytest tests/ --ignore=tests/test_health_check.py -q --tb=short` |
 | **Full suite command** | `python -m pytest tests/ --ignore=tests/test_health_check.py` |
-| **Estimated runtime** | ~15 seconds |
+| **Estimated runtime** | ~90 seconds (real uvicorn server startup + HTTP round-trips + SQLite file I/O) |
 
 ---
 
@@ -30,7 +30,7 @@ created: 2026-03-28
 - **After every task commit:** Run `python -m pytest tests/ --ignore=tests/test_health_check.py -q --tb=short`
 - **After every plan wave:** Run `python -m pytest tests/`
 - **Before `/gsd:verify-work`:** Full suite must be green
-- **Max feedback latency:** 15 seconds
+- **Max feedback latency:** 90 seconds (includes server startup ~3-5s, real HTTP tests ~60-80s)
 
 ---
 
@@ -70,7 +70,7 @@ created: 2026-03-28
 - [ ] Sampling continuity: no 3 consecutive tasks without automated verify
 - [ ] Wave 0 covers all MISSING references
 - [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
+- [ ] Feedback latency < 90s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
