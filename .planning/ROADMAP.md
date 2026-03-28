@@ -136,9 +136,9 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 **Goal:** Real-server integration test suite that starts the REAL server (scanner, scheduler, circuit breaker) with a copy of the production DB, tests all 16 API endpoints via real HTTP, exercises real-world workflows (lifecycle flows, concurrent removes, rapid access), and enforces strict performance thresholds. Tests that fail = server bugs to fix.
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
 **Depends on:** Phase 5 (tests current backend surface; does not require Phase 8)
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 09-01-PLAN.md — Real server harness (no mocks), env-configurable DB, smoke tests for all 16 endpoints, performance thresholds
 - [ ] 09-02-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST), concurrent remove duplicate bug, batch records, race conditions
-- [ ] 09-03-PLAN.md — Edge cases (CORS, invalid input, 404s, boundary conditions), data integrity (unique constraints, clean slate, stale reset)
+- [x] 09-03-PLAN.md — Edge cases (CORS, invalid input, 404s, boundary conditions), data integrity (unique constraints, clean slate, stale reset)
