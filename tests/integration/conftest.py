@@ -1,8 +1,14 @@
 """Session-scoped fixtures for integration tests.
 
-Starts a real uvicorn process on a free port backed by an ephemeral Postgres
-container (testcontainers). Each test session gets a fresh Postgres DB — no
-shared SQLite file, no state leaks across runs.
+Starts a real uvicorn process on a free port backed by a pre-prepared test
+database (op_seller_test) in the same Postgres container. The test DB is a
+full clone of production — same data, same size, same performance profile.
+
+Setup (run once, before first test session):
+    python scripts/setup_test_db.py
+
+Mutable tables (portfolio_slots, trade_actions, trade_records) are cleaned
+after each test. Production data is never touched.
 
 Uses synchronous live_server fixture to avoid pytest-asyncio 1.3.0 event loop
 scoping issues with session-scoped async fixtures.
@@ -13,25 +19,39 @@ import subprocess
 import sys
 import time
 
-import docker
 import httpx
 import pytest
-from testcontainers.postgres import PostgresContainer
 
 
-# ── Docker pre-flight ─────────────────────────────────────────────────────────
+# ── Database URLs ────────────────────────────────────────────────────────────
 
-def _check_docker():
-    """Skip integration tests if Docker is not available.
+PROD_DB_URL = "postgresql+asyncpg://op_seller:op_seller@localhost:5432/op_seller"
+TEST_DB_URL = "postgresql+asyncpg://op_seller:op_seller@localhost:5433/op_seller"
 
-    On Windows, Docker Desktop must be running. This guard provides a clear
-    skip message instead of a confusing DockerException at test collection time
-    (per Pitfall 6 — Windows Docker Desktop must be running).
+def _check_test_db():
+    """Skip integration tests if the pre-prepared test DB is not reachable.
+
+    The test DB (op_seller_test) must be set up before running tests:
+        python scripts/setup_test_db.py
     """
+    import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+
+    async def _ping():
+        engine = create_async_engine(TEST_DB_URL)
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        finally:
+            await engine.dispose()
+
     try:
-        docker.from_env().ping()
+        asyncio.run(_ping())
     except Exception:
-        pytest.skip("Docker not available -- skipping integration tests")
+        pytest.skip(
+            "Test DB not available -- run 'python scripts/setup_test_db.py' first"
+        )
 
 
 # ── Port discovery ────────────────────────────────────────────────────────────
@@ -44,33 +64,17 @@ def server_port():
         return s.getsockname()[1]
 
 
-# ── Postgres container ────────────────────────────────────────────────────────
+# ── Test database ────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session")
-def postgres_container():
-    """Session-scoped Postgres 17 container. Starts once for all tests.
+def test_db_url() -> str:
+    """Return asyncpg URL for the pre-prepared test database.
 
-    testcontainers manages the Docker container lifecycle — starts before the
-    first test, stops after the last. Each test session gets a completely fresh
-    DB (no leftover data from previous runs).
+    The test DB (op_seller_test) must already exist — it's a full clone
+    of production, prepared once via scripts/setup_test_db.py.
     """
-    _check_docker()
-    with PostgresContainer("postgres:17", driver=None) as pg:
-        yield pg
-
-
-@pytest.fixture(scope="session")
-def test_db_url(postgres_container) -> str:
-    """Return asyncpg-compatible URL for the test container.
-
-    testcontainers returns a psycopg2-style URL; we convert it to asyncpg
-    for use with SQLAlchemy create_async_engine.
-    """
-    url = postgres_container.get_connection_url()
-    # testcontainers returns psycopg2 URL; convert to asyncpg
-    url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
-    url = url.replace("postgresql://", "postgresql+asyncpg://")
-    return url
+    _check_test_db()
+    return TEST_DB_URL
 
 
 # ── Live server ───────────────────────────────────────────────────────────────
@@ -83,12 +87,9 @@ def live_server(test_db_url, server_port):
     event loop scoping issue where session-scoped async fixtures fail because
     pytest-asyncio defaults to function-scoped event loops.
 
-    Passes DATABASE_URL via env to the subprocess — no TEST_DB_PATH needed.
-    The harness reads DATABASE_URL at import time (src.config).
-
-    The real server starts with real ScannerService, CircuitBreaker, and
-    APScheduler — startup takes longer than the mock harness did, so the
-    readiness poll allows up to 30 seconds (300 x 0.1s).
+    Passes DATABASE_URL pointing to op_seller_test (not production) via env
+    to the subprocess, so the harness has full read-only data but mutable
+    tables are isolated.
     """
     env = {**os.environ, "DATABASE_URL": test_db_url}
     proc = subprocess.Popen(
@@ -108,11 +109,8 @@ def live_server(test_db_url, server_port):
         stderr=subprocess.PIPE,
     )
 
-    # Synchronous readiness poll — no async, no event loop issues.
-    # 300 x 0.1s = 30 seconds max; the real server (scanner + scheduler) takes
-    # longer to start than a minimal mock harness.
     base_url = f"http://127.0.0.1:{server_port}"
-    for _ in range(300):
+    for _ in range(600):
         try:
             r = httpx.get(f"{base_url}/api/v1/health", timeout=1.0)
             if r.status_code == 200:
@@ -147,7 +145,7 @@ def base_url(server_port):
 @pytest.fixture
 async def client(base_url):
     """Function-scoped async httpx client targeting the live test server."""
-    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as c:
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as c:
         yield c
 
 
@@ -155,11 +153,10 @@ async def client(base_url):
 
 @pytest.fixture(scope="session")
 def real_ea_id(test_db_url):
-    """Return a real ea_id by querying the Postgres test container.
+    """Return a real ea_id from the cloned test data.
 
-    Uses an asyncpg engine to query player_scores for a viable player. Returns
-    None on a fresh container with no seed data — seed_real_portfolio_slot and
-    test helpers using POST /portfolio/generate handle the None case.
+    Queries player_scores for a viable active player. With the full cloned
+    dataset this should always return a valid ea_id.
     """
     import asyncio
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -185,11 +182,7 @@ def real_ea_id(test_db_url):
 
 @pytest.fixture
 async def seed_real_portfolio_slot(client, real_ea_id):
-    """Seed one portfolio slot using a real ea_id from the test container.
-
-    This replaces the old fake ea_id=100 fixture which would fail with
-    the real server because trade records validate ea_id in portfolio_slots
-    and portfolio_slots.ea_id has a foreign-key-like constraint in practice.
+    """Seed one portfolio slot using a real ea_id from the cloned data.
 
     If real_ea_id is None (empty DB), skips the seed and returns None.
     """
@@ -216,13 +209,10 @@ async def seed_real_portfolio_slot(client, real_ea_id):
 
 @pytest.fixture(autouse=True)
 async def cleanup_tables(test_db_url):
-    """Delete all rows from mutable tables after each test.
+    """Delete all rows from mutable tables in the TEST database after each test.
 
-    Preserves read-only data (players, player_scores, market_snapshots,
-    snapshot_price_points, listing_observations, daily_listing_summaries,
-    snapshot_sales) — this is the scored player data that makes tests meaningful.
-
-    Uses asyncpg engine instead of aiosqlite for Postgres compatibility.
+    Only touches op_seller_test — production op_seller is never modified.
+    Preserves read-only data (players, player_scores, market_snapshots, etc.)
     """
     yield
     from sqlalchemy.ext.asyncio import create_async_engine

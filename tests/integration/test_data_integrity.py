@@ -3,8 +3,8 @@
 These tests verify that the server maintains correct database state after
 operations — not just HTTP responses, but actual DB-level correctness.
 
-Each test queries the SQLite DB directly using aiosqlite to verify row counts,
-field values, and constraint behaviors that the HTTP API might mask.
+Each test queries the Postgres DB directly using async SQLAlchemy to verify
+row counts, field values, and constraint behaviors that the HTTP API might mask.
 
 Tests that fail = server data integrity bugs. Per D-04: Do NOT weaken
 assertions or add workarounds. Failures are bugs to track.
@@ -22,31 +22,36 @@ Covered scenarios:
   - Confirmed portfolio preserves exact buy_price and sell_price
   - Batch trade records commit atomically (all or none semantics)
 """
-import aiosqlite
 import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
-async def query_db(test_db_path, sql: str, params: tuple = ()):
-    """Execute a SQL query against the test DB and return all rows.
+async def query_db(test_db_url, sql: str, params: dict | None = None):
+    """Execute a SQL query against the test Postgres DB and return all rows.
 
-    Opens a direct aiosqlite connection to bypass the server's connection pool.
-    This lets tests verify actual DB state after API operations.
+    Opens a direct asyncpg connection via SQLAlchemy to bypass the server's
+    connection pool. This lets tests verify actual DB state after API operations.
 
-    Uses connect_args timeout=30 to avoid 'database is locked' on Windows
-    where SQLite file locking is stricter (scanner may hold write lock).
+    Args:
+        test_db_url: asyncpg-compatible DATABASE_URL for the test container.
+        sql: SQL string using :param style placeholders.
+        params: Dict of parameter values for the query.
     """
-    async with aiosqlite.connect(str(test_db_path), timeout=30) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, params)
-        return await cursor.fetchall()
+    engine = create_async_engine(test_db_url)
+    async with engine.connect() as conn:
+        result = await conn.execute(text(sql), params or {})
+        rows = result.mappings().all()
+    await engine.dispose()
+    return rows
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_portfolio_slots_unique_constraint(client, real_ea_id, test_db_path):
+async def test_portfolio_slots_unique_constraint(client, real_ea_id, test_db_url):
     """Seeding the same ea_id twice results in 1 row (upsert, not duplicate).
 
     POST /portfolio/slots handles existing ea_id by updating prices, not
@@ -74,9 +79,9 @@ async def test_portfolio_slots_unique_constraint(client, real_ea_id, test_db_pat
 
     # Direct DB query — must have exactly 1 row for this ea_id
     rows = await query_db(
-        test_db_path,
-        "SELECT COUNT(*) AS cnt FROM portfolio_slots WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT COUNT(*) AS cnt FROM portfolio_slots WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     count = rows[0]["cnt"]
     assert count == 1, (
@@ -86,7 +91,7 @@ async def test_portfolio_slots_unique_constraint(client, real_ea_id, test_db_pat
 
 
 @pytest.mark.asyncio
-async def test_confirm_clean_slate_actually_deletes(client, real_ea_id, test_db_path):
+async def test_confirm_clean_slate_actually_deletes(client, real_ea_id, test_db_url):
     """POST /portfolio/confirm replaces ALL existing slots with the new list.
 
     After seeding 3 slots and confirming only 1 player, exactly 1 row should
@@ -108,7 +113,7 @@ async def test_confirm_clean_slate_actually_deletes(client, real_ea_id, test_db_
     assert r.status_code == 201, f"Slot seed failed: {r.status_code}"
 
     # Verify 3 slots exist
-    rows_before = await query_db(test_db_path, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
+    rows_before = await query_db(test_db_url, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
     assert rows_before[0]["cnt"] == 3, f"Expected 3 rows before confirm, got {rows_before[0]['cnt']}"
 
     # Confirm with only 1 player — clean slate should delete the other 2
@@ -120,7 +125,7 @@ async def test_confirm_clean_slate_actually_deletes(client, real_ea_id, test_db_
     assert confirm_r.json()["confirmed"] == 1
 
     # Direct DB query — must have exactly 1 row total
-    rows_after = await query_db(test_db_path, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
+    rows_after = await query_db(test_db_url, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
     count_after = rows_after[0]["cnt"]
     assert count_after == 1, (
         f"Expected 1 row in portfolio_slots after confirm with 1 player, "
@@ -129,7 +134,7 @@ async def test_confirm_clean_slate_actually_deletes(client, real_ea_id, test_db_
 
 
 @pytest.mark.asyncio
-async def test_delete_preserves_trade_records(client, real_ea_id, test_db_path):
+async def test_delete_preserves_trade_records(client, real_ea_id, test_db_url):
     """DELETE /portfolio/{ea_id} preserves TradeRecords but removes PortfolioSlot.
 
     Per the architecture decision: trade history is preserved for analytics
@@ -160,9 +165,9 @@ async def test_delete_preserves_trade_records(client, real_ea_id, test_db_path):
 
     # Verify trade record exists
     records_before = await query_db(
-        test_db_path,
-        "SELECT COUNT(*) AS cnt FROM trade_records WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT COUNT(*) AS cnt FROM trade_records WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     assert records_before[0]["cnt"] >= 1, "Trade record not created before delete"
 
@@ -172,9 +177,9 @@ async def test_delete_preserves_trade_records(client, real_ea_id, test_db_path):
 
     # Trade records must still exist (preserved per D-DELETE)
     records_after = await query_db(
-        test_db_path,
-        "SELECT COUNT(*) AS cnt FROM trade_records WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT COUNT(*) AS cnt FROM trade_records WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     assert records_after[0]["cnt"] >= 1, (
         f"Trade records for ea_id={real_ea_id} were deleted along with the portfolio slot. "
@@ -183,9 +188,9 @@ async def test_delete_preserves_trade_records(client, real_ea_id, test_db_path):
 
     # Portfolio slot must be gone
     slot_after = await query_db(
-        test_db_path,
-        "SELECT COUNT(*) AS cnt FROM portfolio_slots WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT COUNT(*) AS cnt FROM portfolio_slots WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     assert slot_after[0]["cnt"] == 0, (
         f"Portfolio slot for ea_id={real_ea_id} still exists after DELETE. "
@@ -194,7 +199,7 @@ async def test_delete_preserves_trade_records(client, real_ea_id, test_db_path):
 
 
 @pytest.mark.asyncio
-async def test_delete_cancels_pending_actions(client, real_ea_id, test_db_path):
+async def test_delete_cancels_pending_actions(client, real_ea_id, test_db_url):
     """DELETE /portfolio/{ea_id} cancels all PENDING and IN_PROGRESS trade_actions.
 
     After claiming a BUY action (IN_PROGRESS) and deleting the player,
@@ -218,9 +223,9 @@ async def test_delete_cancels_pending_actions(client, real_ea_id, test_db_path):
 
     # Verify action is now IN_PROGRESS in DB
     actions_before = await query_db(
-        test_db_path,
-        "SELECT status FROM trade_actions WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT status FROM trade_actions WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     assert any(row["status"] == "IN_PROGRESS" for row in actions_before), (
         f"Expected IN_PROGRESS action for ea_id={real_ea_id}, "
@@ -233,9 +238,9 @@ async def test_delete_cancels_pending_actions(client, real_ea_id, test_db_path):
 
     # All actions for this ea_id must now be CANCELLED
     actions_after = await query_db(
-        test_db_path,
-        "SELECT status FROM trade_actions WHERE ea_id = ?",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT status FROM trade_actions WHERE ea_id = :ea_id",
+        {"ea_id": real_ea_id},
     )
     non_cancelled = [row["status"] for row in actions_after if row["status"] != "CANCELLED"]
     assert not non_cancelled, (
@@ -245,7 +250,7 @@ async def test_delete_cancels_pending_actions(client, real_ea_id, test_db_path):
 
 
 @pytest.mark.asyncio
-async def test_stale_action_reset(client, real_ea_id, test_db_path):
+async def test_stale_action_reset(client, real_ea_id, test_db_url):
     """Stale IN_PROGRESS actions (>5 min old) are reset to PENDING on next GET /pending.
 
     We manipulate claimed_at directly in the DB to simulate a 6-minute-old
@@ -273,25 +278,26 @@ async def test_stale_action_reset(client, real_ea_id, test_db_path):
 
     # Verify it's IN_PROGRESS
     rows = await query_db(
-        test_db_path,
-        "SELECT status, claimed_at FROM trade_actions WHERE id = ?",
-        (action_id,),
+        test_db_url,
+        "SELECT status, claimed_at FROM trade_actions WHERE id = :id",
+        {"id": action_id},
     )
     assert rows[0]["status"] == "IN_PROGRESS", (
         f"Expected IN_PROGRESS, got {rows[0]['status']}"
     )
 
     # Backdate claimed_at to 6 minutes ago (past the 5-minute STALE_TIMEOUT)
-    async with aiosqlite.connect(str(test_db_path), timeout=30) as db:
-        await db.execute(
-            """
-            UPDATE trade_actions
-            SET claimed_at = datetime(claimed_at, '-6 minutes')
-            WHERE id = ?
-            """,
-            (action_id,),
+    engine = create_async_engine(test_db_url)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE trade_actions "
+                "SET claimed_at = claimed_at - INTERVAL '6 minutes' "
+                "WHERE id = :id"
+            ),
+            {"id": action_id},
         )
-        await db.commit()
+    await engine.dispose()
 
     # GET /actions/pending — this triggers _reset_stale_actions which should
     # reset the stale IN_PROGRESS action back to PENDING and return it
@@ -310,9 +316,9 @@ async def test_stale_action_reset(client, real_ea_id, test_db_path):
 
     # Verify DB: action must now be IN_PROGRESS again (re-claimed after reset)
     rows_after = await query_db(
-        test_db_path,
-        "SELECT status FROM trade_actions WHERE id = ?",
-        (action_id,),
+        test_db_url,
+        "SELECT status FROM trade_actions WHERE id = :id",
+        {"id": action_id},
     )
     assert rows_after[0]["status"] == "IN_PROGRESS", (
         f"Expected action to be re-claimed as IN_PROGRESS after stale reset, "
@@ -321,7 +327,7 @@ async def test_stale_action_reset(client, real_ea_id, test_db_path):
 
 
 @pytest.mark.asyncio
-async def test_no_action_created_when_listed(client, real_ea_id, test_db_path):
+async def test_no_action_created_when_listed(client, real_ea_id, test_db_url):
     """No pending action when the latest trade record is 'listed' (card on market).
 
     Per lifecycle state machine: 'listed' outcome means the card is on market
@@ -370,9 +376,9 @@ async def test_no_action_created_when_listed(client, real_ea_id, test_db_path):
 
     # Direct DB check: no PENDING actions for this ea_id
     rows = await query_db(
-        test_db_path,
-        "SELECT COUNT(*) AS cnt FROM trade_actions WHERE ea_id = ? AND status = 'PENDING'",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT COUNT(*) AS cnt FROM trade_actions WHERE ea_id = :ea_id AND status = 'PENDING'",
+        {"ea_id": real_ea_id},
     )
     assert rows[0]["cnt"] == 0, (
         f"Expected 0 PENDING actions for listed ea_id={real_ea_id}, "
@@ -381,11 +387,11 @@ async def test_no_action_created_when_listed(client, real_ea_id, test_db_path):
 
 
 @pytest.mark.asyncio
-async def test_trade_record_id_monotonic(client, real_ea_id, test_db_path):
+async def test_trade_record_id_monotonic(client, real_ea_id, test_db_url):
     """Trade record ids are strictly monotonically increasing.
 
     After creating multiple trade records for the same ea_id, their IDs
-    must be in strictly increasing order (SQLite AUTOINCREMENT guarantees this,
+    must be in strictly increasing order (Postgres SERIAL guarantees this,
     but we verify it explicitly to catch any schema issues).
     """
     assert real_ea_id is not None, "real_ea_id is None — DB may be empty"
@@ -409,9 +415,9 @@ async def test_trade_record_id_monotonic(client, real_ea_id, test_db_path):
 
     # Query ids in insertion order
     rows = await query_db(
-        test_db_path,
-        "SELECT id FROM trade_records WHERE ea_id = ? ORDER BY id",
-        (real_ea_id,),
+        test_db_url,
+        "SELECT id FROM trade_records WHERE ea_id = :ea_id ORDER BY id",
+        {"ea_id": real_ea_id},
     )
     ids = [row["id"] for row in rows]
     assert len(ids) >= 3, f"Expected at least 3 trade records, got {len(ids)}"
@@ -424,7 +430,7 @@ async def test_trade_record_id_monotonic(client, real_ea_id, test_db_path):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_fixture_works(test_db_path):
+async def test_cleanup_fixture_works(test_db_url):
     """Verify that the cleanup_tables fixture starts each test with empty mutable tables.
 
     Per D-15: the autouse cleanup_tables fixture deletes all rows from
@@ -434,9 +440,9 @@ async def test_cleanup_fixture_works(test_db_path):
     (the previous test's cleanup ran). Then seeds data to leave something
     for the cleanup to remove after this test.
     """
-    rows_slots = await query_db(test_db_path, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
-    rows_actions = await query_db(test_db_path, "SELECT COUNT(*) AS cnt FROM trade_actions")
-    rows_records = await query_db(test_db_path, "SELECT COUNT(*) AS cnt FROM trade_records")
+    rows_slots = await query_db(test_db_url, "SELECT COUNT(*) AS cnt FROM portfolio_slots")
+    rows_actions = await query_db(test_db_url, "SELECT COUNT(*) AS cnt FROM trade_actions")
+    rows_records = await query_db(test_db_url, "SELECT COUNT(*) AS cnt FROM trade_records")
 
     assert rows_slots[0]["cnt"] == 0, (
         f"portfolio_slots not empty at test start: {rows_slots[0]['cnt']} rows. "
@@ -529,7 +535,7 @@ async def test_portfolio_confirm_preserves_prices(client):
 
 
 @pytest.mark.asyncio
-async def test_batch_records_single_commit(client, test_db_path):
+async def test_batch_records_single_commit(client, test_db_url):
     """POST /trade-records/batch inserts all records atomically.
 
     All records in a batch should be committed together. If the batch contains
@@ -585,14 +591,13 @@ async def test_batch_records_single_commit(client, test_db_path):
     )
 
     # Direct DB: verify all 3 records are there
-    placeholders = ",".join(["?" for _ in ea_ids])
     rows = await query_db(
-        test_db_path,
-        f"""
+        test_db_url,
+        """
         SELECT COUNT(*) AS cnt FROM trade_records
-        WHERE ea_id IN ({placeholders}) AND outcome = 'bought'
+        WHERE ea_id IN (:ea1, :ea2, :ea3) AND outcome = 'bought'
         """,
-        tuple(ea_ids),
+        {"ea1": ea_ids[0], "ea2": ea_ids[1], "ea3": ea_ids[2]},
     )
     assert rows[0]["cnt"] == 3, (
         f"Expected 3 trade_records in DB after batch insert, got {rows[0]['cnt']}. "
