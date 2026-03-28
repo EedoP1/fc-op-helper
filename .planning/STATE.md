@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Stopped at Task 3 checkpoint (07.2-02-PLAN.md) — visual verification pending
-last_updated: "2026-03-27T13:21:34.027Z"
-last_activity: 2026-03-27
+stopped_at: Completed 09-01-PLAN.md (real-server integration test harness)
+last_updated: "2026-03-28T10:04:02.617Z"
+last_activity: 2026-03-28
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 16
+  completed_plans: 14
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 07.2 — portfolio-dashboard-trade-tracking
+**Current focus:** Phase 09 — comprehensive-api-integration-performance-test-suite
 
 ## Current Position
 
-Phase: 07.2 (portfolio-dashboard-trade-tracking) — EXECUTING
-Plan: 2 of 2
+Phase: 09 (comprehensive-api-integration-performance-test-suite) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Plan: 2 of 2
 | Phase 07.1-trade-reporting P03 | 10 | 2 tasks | 8 files |
 | Phase 07.2-portfolio-dashboard-trade-tracking P01 | 206 | 1 tasks | 3 files |
 | Phase 07.2-portfolio-dashboard-trade-tracking P02 | 4 | 2 tasks | 5 files |
+| Phase 09-comprehensive-api-integration-performance-test-suite P01 | 222 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -98,11 +99,15 @@ Plan: 2 of 2
 - [Phase 07.2-portfolio-dashboard-trade-tracking]: Unrealized P&L null for PENDING/SOLD/EXPIRED statuses — only BOUGHT/LISTED are held positions
 - [Phase 07.2-portfolio-dashboard-trade-tracking]: jsdom normalizes hex colors to rgb() — dashboard tests assert rgb(58, 58, 94) not #3a3a5e for active tab
 - [Phase 07.2-portfolio-dashboard-trade-tracking]: renderPortfolioContent(parent) receives HTMLElement parent for tab slot rendering — decoupled from container
+- [Phase 09]: Synchronous live_server fixture avoids pytest-asyncio 1.3.0 session-scoped event loop bug
+- [Phase 09]: TEST_DB_PATH read lazily inside lifespan (not at module top level) so server_harness.py can be imported without the env var
+- [Phase 09]: httpx.ConnectTimeout caught in readiness poll (Windows raises ConnectTimeout not ConnectError on fast TCP timeouts)
 
 ### Roadmap Evolution
 
 - Phase 07.1 inserted after Phase 07: Trade Reporting — extension passively reads EA Web App DOM to detect and auto-report trade outcomes (user request — data pipeline for dashboard)
 - Phase 07.2 inserted after Phase 07.1: Portfolio Dashboard & Trade Tracking — dashboard UI consuming trade data from 07.1 (split from original 07.1 — DOM reading and dashboard UI are different work)
+- Phase 9 added: Comprehensive API Integration & Performance Test Suite
 
 ### Pending Todos
 
@@ -125,6 +130,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-27
-Stopped at: Stopped at Task 3 checkpoint (07.2-02-PLAN.md) — visual verification pending
+Last activity: 2026-03-28
+Stopped at: Completed 09-01-PLAN.md (real-server integration test harness)
 Resume file: None
