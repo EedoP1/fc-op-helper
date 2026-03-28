@@ -4,26 +4,27 @@ This module runs inside a FRESH subprocess spawned by conftest.py via:
 
     Popen(["uvicorn", "tests.integration.server_harness:app", ...], env=env)
 
-where `env` contains TEST_DB_PATH set by conftest before Popen is called.
+where `env` contains DATABASE_URL set by conftest before Popen is called.
 
 Isolation model:
-    Setting os.environ["DATABASE_URL"] at module load time here affects ONLY
-    this server subprocess — the test process (conftest, test files) is a
-    separate process and is not affected. This is why it is safe to mutate
-    os.environ at the top level: there is no shared state between the two
-    processes.
+    conftest.py passes DATABASE_URL (pointing to the testcontainers Postgres
+    instance) in the subprocess environment. src.config reads DATABASE_URL at
+    import time. So the harness does NOT need to set DATABASE_URL — it is
+    already in os.environ when uvicorn loads this module.
 
-The harness sets DATABASE_URL BEFORE importing anything from src.server,
-because src.config reads the env var at import time. Once DATABASE_URL is
-set, the REAL server components are imported and wired together in a lifespan
-that mirrors src.server.main.lifespan exactly, with one difference:
+    This is safe to rely on because this module runs inside a dedicated
+    subprocess. There is no shared state between the test process (conftest,
+    test files) and the server process.
+
+The harness uses the REAL server components, mirroring src.server.main exactly,
+with one difference:
 
     The bootstrap one-shot job (scanner.run_bootstrap_and_score) is NOT added.
 
-Why: the bootstrap downloads 1819+ players from fut.gg and holds the SQLite
-write lock for minutes, causing all concurrent API requests to time out. Tests
-use a pre-seeded DB with real player_records and player_scores — bootstrapping
-is unnecessary and disruptive to test isolation.
+Why: the bootstrap downloads 1819+ players from fut.gg and holds the write
+pool for minutes, causing all concurrent API requests to time out. Tests use
+a fresh Postgres container — bootstrapping is unnecessary and disruptive to
+test isolation.
 
 Everything else is identical to the production server:
     - Real ScannerService starts and connects to fut.gg
@@ -35,7 +36,7 @@ Everything else is identical to the production server:
 
 Per D-01: No MockScanner, no MockCircuitBreaker. If the scanner needs fut.gg
 API and it is unavailable, the test fails — that is a design issue to resolve.
-Per D-03: scanner errors cause test failures, not silent suppression.
+Per D-03: Single engine; Postgres MVCC handles concurrent scanner + API access.
 """
 import logging
 import os
@@ -44,11 +45,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Must be set before ANY import from src.server (src.config reads env at import time).
-_db_path = os.environ["TEST_DB_PATH"]
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_db_path}"
-
-from src.server.db import create_engine_and_tables, create_read_engine, create_api_write_engine, create_session_factory  # noqa: E402
+# DATABASE_URL is already in os.environ — set by conftest via subprocess env.
+# src.config reads it at import time. No override needed here.
+from src.server.db import create_engine_and_tables, create_session_factory  # noqa: E402
 from src.server.scanner import ScannerService  # noqa: E402
 from src.server.scheduler import create_scheduler  # noqa: E402
 from src.server.circuit_breaker import CircuitBreaker  # noqa: E402
@@ -67,7 +66,10 @@ async def lifespan(app: FastAPI):
     """Real server lifespan for integration tests.
 
     Identical to src.server.main.lifespan except the bootstrap one-shot job
-    is omitted to prevent the scanner from holding the write lock during tests.
+    is omitted to prevent the scanner from holding the write pool during tests.
+
+    Uses a single Postgres engine (not 3 SQLite engines) — Postgres MVCC
+    allows concurrent scanner and API reads/writes on one connection pool.
 
     See module docstring for full rationale.
     """
@@ -95,16 +97,9 @@ async def lifespan(app: FastAPI):
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
 
-    read_engine = create_read_engine()
-    read_session_factory = create_session_factory(read_engine)
-
-    api_write_engine = create_api_write_engine()
-    api_write_session_factory = create_session_factory(api_write_engine)
-
     app.state.engine = engine
-    app.state.session_factory = api_write_session_factory
-    app.state.scanner_session_factory = session_factory
-    app.state.read_session_factory = read_session_factory
+    app.state.session_factory = session_factory
+    app.state.read_session_factory = session_factory  # Same pool — Postgres MVCC
     app.state.scanner = scanner
     app.state.circuit_breaker = cb
 
@@ -114,8 +109,8 @@ async def lifespan(app: FastAPI):
 
     # NOTE: bootstrap job intentionally omitted — see module docstring.
     # Production server adds: scheduler.add_job(scanner.run_bootstrap_and_score, ...)
-    # Tests use a pre-seeded DB, so bootstrap is unnecessary and causes write-lock
-    # contention that times out all concurrent API requests.
+    # Tests use a fresh Postgres container, so bootstrap is unnecessary and causes
+    # write-pool contention that times out all concurrent API requests.
 
     logger.info("Test server started (scanner active, bootstrap skipped).")
 
@@ -124,8 +119,6 @@ async def lifespan(app: FastAPI):
     logger.info("Test server shutting down...")
     scheduler.shutdown(wait=False)
     await scanner.stop()
-    await api_write_engine.dispose()
-    await read_engine.dispose()
     await engine.dispose()
     logger.info("Test server stopped.")
 
