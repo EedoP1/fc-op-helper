@@ -142,3 +142,15 @@ Plans:
 - [x] 09-01-PLAN.md — Real server harness (no mocks), env-configurable DB, smoke tests for all 16 endpoints, performance thresholds
 - [x] 09-02-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST), concurrent remove duplicate bug, batch records, race conditions
 - [x] 09-03-PLAN.md — Edge cases (CORS, invalid input, 404s, boundary conditions), data integrity (unique constraints, clean slate, stale reset)
+
+### Phase 09.1: Migrate from SQLite to PostgreSQL (INSERTED)
+
+**Goal:** Migrate backend from SQLite (aiosqlite) to PostgreSQL (asyncpg) — swap DB engine, consolidate 3-engine split to single pool, replace all SQLite-specific code, fix DailyListingSummary upsert bug, rewrite test harness for Postgres, and create data migration script. Verification bar: all Phase 9 integration tests pass on Postgres.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13
+**Depends on:** Phase 9
+**Plans:** 3 plans
+
+Plans:
+- [ ] 09.1-01-PLAN.md — Docker Postgres setup, deps, config, db.py single-engine rewrite, main.py consolidation
+- [ ] 09.1-02-PLAN.md — Replace sqlite_insert with pg_insert (4 locations), fix DailyListingSummary upsert bug, rewrite health_check.py
+- [ ] 09.1-03-PLAN.md — Rewrite test conftest/harness for Postgres testcontainer, create data migration script
