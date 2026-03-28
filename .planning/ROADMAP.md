@@ -136,9 +136,9 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 **Goal:** Real-server integration test suite — starts a real uvicorn process with a real SQLite file, tests all 16 API endpoints via real HTTP calls, validates edge cases/error handling/CORS, runs cross-endpoint lifecycle flows, and measures real latency under realistic conditions
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
 **Depends on:** Phase 5 (tests current backend surface; does not require Phase 8)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 09-01-PLAN.md — Test infrastructure (real uvicorn + SQLite harness, conftest, fixtures) + fix health check + smoke test all 16 endpoints
+- [x] 09-01-PLAN.md — Test infrastructure (real uvicorn + SQLite harness, conftest, fixtures) + fix health check + smoke test all 16 endpoints
 - [ ] 09-02-PLAN.md — Edge case tests (boundaries, duplicates, idempotency) + error handling (bad input, CORS, 404s)
 - [ ] 09-03-PLAN.md — Cross-endpoint lifecycle flows (BUY->LIST->SOLD, EXPIRED->RELIST, multi-player) + performance latency + concurrent requests
