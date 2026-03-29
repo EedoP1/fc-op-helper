@@ -453,3 +453,67 @@ async def test_mid_window_spike_returns_to_baseline_is_flagged(volatile_db):
     async with session_factory() as session:
         volatile = await _get_volatile_ea_ids(session, [3010])
     assert 3010 in volatile, "60% MIN/MAX swing should be flagged as volatile"
+
+
+# ── Absolute volatility threshold tests ───────────────────────────────────────
+
+async def test_volatile_absolute_increase_above_threshold(volatile_db):
+    """Player with 15% pct increase but 15k absolute increase IS flagged.
+
+    15% < 30% percentage threshold, but 15000 > 10000 absolute threshold.
+    Both conditions independently flag as volatile — absolute threshold catches this.
+    """
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3020: 100k -> 115k (+15%, +15k) — pct below threshold, abs above threshold
+    await _seed_snapshots(session_factory, [
+        (3020, now - timedelta(days=2), 100_000),
+        (3020, now - timedelta(days=1), 107_000),
+        (3020, now, 115_000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3020])
+    assert 3020 in volatile, (
+        "15% pct is below 30% threshold, but 15k abs > 10k abs threshold — should be flagged"
+    )
+
+
+async def test_stable_below_both_thresholds(volatile_db):
+    """Player with 3% pct and 3k absolute increase is NOT flagged.
+
+    Both below their respective thresholds (30% pct and 10k abs).
+    """
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3021: 100k -> 103k (+3%, +3k) — below both thresholds
+    await _seed_snapshots(session_factory, [
+        (3021, now - timedelta(days=2), 100_000),
+        (3021, now - timedelta(days=1), 101_500),
+        (3021, now, 103_000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3021])
+    assert 3021 not in volatile, (
+        "3% / 3k swing is below both thresholds — should not be flagged"
+    )
+
+
+async def test_volatile_pct_above_abs_below(volatile_db):
+    """Player with 40% pct increase but only 8k absolute increase IS flagged.
+
+    40% > 30% percentage threshold, but 8k < 10k absolute threshold.
+    Percentage threshold alone is sufficient to flag.
+    """
+    engine, session_factory = volatile_db
+    now = datetime.utcnow()
+    # ea_id=3022: 20k -> 28k (+40%, +8k) — pct above threshold, abs below threshold
+    await _seed_snapshots(session_factory, [
+        (3022, now - timedelta(days=2), 20_000),
+        (3022, now - timedelta(days=1), 24_000),
+        (3022, now, 28_000),
+    ])
+    async with session_factory() as session:
+        volatile = await _get_volatile_ea_ids(session, [3022])
+    assert 3022 in volatile, (
+        "40% pct > 30% threshold — should be flagged even though 8k abs < 10k abs threshold"
+    )
