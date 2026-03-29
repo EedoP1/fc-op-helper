@@ -12,6 +12,7 @@ Public API:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -138,7 +139,7 @@ async def record_listings(
     now = _utcnow()
     fingerprints: list[str] = []
 
-    for entry in live_auctions_raw:
+    for i, entry in enumerate(live_auctions_raw):
         buy_now_price = entry.get("buyNowPrice", 0)
         if not buy_now_price:
             continue
@@ -173,6 +174,11 @@ async def record_listings(
             )
         )
         await session.execute(stmt)
+
+        # Yield to event loop every 20 upserts so API handlers aren't starved
+        # by rapid asyncpg I/O when multiple scan tasks run concurrently.
+        if i % 20 == 19:
+            await asyncio.sleep(0)
 
     return {"recorded": len(fingerprints), "fingerprints": fingerprints}
 
@@ -233,9 +239,10 @@ async def resolve_outcomes(
     # Only count sales that occurred AFTER the last resolution (avoid double-counting)
     # If last_resolved_at is None (first resolution), keep all sales -- bootstrap case
     if last_resolved_at is not None:
+        last_resolved_naive = last_resolved_at.replace(tzinfo=None) if last_resolved_at.tzinfo else last_resolved_at
         completed_sales = [
             sale for sale in completed_sales
-            if sale.sold_at.replace(tzinfo=None) > last_resolved_at
+            if sale.sold_at.replace(tzinfo=None) > last_resolved_naive
         ]
 
     logger.debug(
@@ -268,7 +275,7 @@ async def resolve_outcomes(
         # observed a listing at this price.  This prevents stale completedAuctions
         # entries (e.g. sales from hours before the scanner started) from being
         # attributed to newly-observed listings.
-        earliest_first_seen = min(obs.first_seen_at for obs in obs_list)
+        earliest_first_seen = min(obs.first_seen_at.replace(tzinfo=None) if obs.first_seen_at.tzinfo else obs.first_seen_at for obs in obs_list)
         all_times = sale_times_by_price.get(price, [])
         matching_sales = sum(1 for t in all_times if t >= earliest_first_seen)
         n_sold = min(matching_sales, len(obs_list))

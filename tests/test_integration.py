@@ -109,14 +109,14 @@ def test_pipeline_csv_contains_all_players():
 async def test_v2_scorer_writes_score():
     """Integration: scan_player with enough listing data produces v2 score.
 
-    Seeds enough resolved ListingObservation rows to exceed BOOTSTRAP_MIN_OBSERVATIONS,
+    Seeds enough resolved ListingObservation rows to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS,
     then calls scan_player and asserts the written PlayerScore has v2 fields populated.
     """
     from src.server.db import create_engine_and_tables
     from src.server.models_db import PlayerRecord, PlayerScore, ListingObservation
     from src.server.scanner import ScannerService
     from src.server.circuit_breaker import CircuitBreaker
-    from src.config import BOOTSTRAP_MIN_OBSERVATIONS, MIN_OP_OBSERVATIONS
+    from src.config import MIN_TOTAL_RESOLVED_OBSERVATIONS, MIN_OP_OBSERVATIONS
     from tests.mock_client import make_player
     from sqlalchemy import select
 
@@ -136,9 +136,9 @@ async def test_v2_scorer_writes_score():
             ))
             await session.commit()
 
-        # Seed enough resolved ListingObservations to exceed BOOTSTRAP_MIN_OBSERVATIONS
-        # Use 15 observations: 10 OP sold, 5 OP expired (all at 20% above market)
-        n_obs = max(BOOTSTRAP_MIN_OBSERVATIONS + 5, MIN_OP_OBSERVATIONS + 12)
+        # Seed enough resolved ListingObservations to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS
+        # Use observations: OP sold + OP expired (all at 20% above market)
+        n_obs = max(MIN_TOTAL_RESOLVED_OBSERVATIONS + 5, MIN_OP_OBSERVATIONS + 12)
         async with session_factory() as session:
             for i in range(n_obs):
                 hours_ago = i + 1

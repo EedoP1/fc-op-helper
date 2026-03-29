@@ -213,12 +213,17 @@ async def cleanup_tables(test_db_url):
 
     Only touches op_seller_test — production op_seller is never modified.
     Preserves read-only data (players, player_scores, market_snapshots, etc.)
+
+    Creates a fresh engine per cleanup to avoid cross-event-loop issues with
+    pytest-asyncio's function-scoped event loops. NullPool avoids accumulating
+    connections across tests.
     """
     yield
     from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
     from sqlalchemy import text
 
-    engine = create_async_engine(test_db_url)
+    engine = create_async_engine(test_db_url, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM trade_records"))
         await conn.execute(text("DELETE FROM trade_actions"))
