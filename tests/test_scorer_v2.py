@@ -4,7 +4,7 @@ Tests for scorer_v2: listing-observation-based scoring using D-10 formula.
 Tests verify:
 - expected_profit_per_hour formula correctness
 - Margin selection picks the one maximizing expected_profit_per_hour
-- Bootstrap threshold guard (BOOTSTRAP_MIN_OBSERVATIONS)
+- Quality threshold guard (MIN_TOTAL_RESOLVED_OBSERVATIONS)
 - No-observations guard
 - Insufficient OP observations guard
 - Return dict shape
@@ -19,7 +19,7 @@ from sqlalchemy import select
 from src.server.db import create_engine_and_tables
 from src.server.models_db import ListingObservation
 from src.server.scorer_v2 import score_player_v2
-from src.config import BOOTSTRAP_MIN_OBSERVATIONS, MIN_OP_OBSERVATIONS, MIN_TOTAL_RESOLVED_OBSERVATIONS, MIN_OBSERVATION_HISTORY_DAYS
+from src.config import MIN_OP_OBSERVATIONS, MIN_TOTAL_RESOLVED_OBSERVATIONS
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ async def test_expected_profit_per_hour(db):
     op_threshold = int(market_price * 1.10)  # 11000
 
     now = datetime.utcnow()
-    # Span 4 days to satisfy MIN_OBSERVATION_HISTORY_DAYS=3
+    # Span 4 days of observations
     t_start = now - timedelta(days=4)
 
     observations = []
@@ -150,7 +150,7 @@ async def test_margin_selection(db):
     market_price = 10_000
 
     now = datetime.utcnow()
-    # Span 4 days to satisfy MIN_OBSERVATION_HISTORY_DAYS=3
+    # Span 4 days of observations
     t_start = now - timedelta(days=4)
 
     observations = []
@@ -190,7 +190,7 @@ async def test_margin_selection(db):
             last_seen_at=t_start + timedelta(hours=15 + i, minutes=30),
             resolved_at=t_start + timedelta(hours=15 + i, minutes=30),
         ))
-    # Non-OP filler to reach BOOTSTRAP_MIN_OBSERVATIONS
+    # Non-OP filler to reach MIN_TOTAL_RESOLVED_OBSERVATIONS
     for i in range(5):
         observations.append(make_observation(
             ea_id=ea_id,
@@ -216,7 +216,7 @@ async def test_margin_selection(db):
 
 
 async def test_bootstrap_min(db):
-    """Given only 5 resolved observations (below BOOTSTRAP_MIN_OBSERVATIONS=10), returns None."""
+    """Given only 5 resolved observations (below MIN_TOTAL_RESOLVED_OBSERVATIONS=20), returns None."""
     _, session_factory = db
     ea_id = 1003
     buy_price = 10_000
@@ -315,7 +315,7 @@ async def test_return_dict_shape(db):
     buy_price = 10_000
     market_price = 10_000
     now = datetime.utcnow()
-    # Span 4 days to satisfy MIN_OBSERVATION_HISTORY_DAYS=3
+    # Span 4 days of observations
     t_start = now - timedelta(days=4)
 
     observations = []
@@ -444,7 +444,7 @@ async def test_above_min_total_resolved_observations(db):
     buy_price = 10_000
     market_price = 10_000
     now = datetime.utcnow()
-    # Span 5 days to satisfy MIN_OBSERVATION_HISTORY_DAYS=3
+    # Span 5 days of observations
     t_start = now - timedelta(days=5)
 
     observations = []
@@ -484,113 +484,3 @@ async def test_above_min_total_resolved_observations(db):
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
 
     assert result is not None, "Expected a score result for 25 observations with viable OP data"
-
-
-# ── Min-history-depth filter tests ────────────────────────────────────────────
-
-async def test_below_min_observation_history_days(db):
-    """
-    Player with 20+ resolved observations all within the last 24 hours
-    (below MIN_OBSERVATION_HISTORY_DAYS=3) returns None.
-    """
-    _, session_factory = db
-    ea_id = 2003
-    buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    # All observations within the last 23 hours — history depth < 3 days
-    t_start = now - timedelta(hours=23)
-
-    observations = []
-    # 5 OP sold
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"short-hist-op-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i * 2),
-            last_seen_at=t_start + timedelta(hours=i * 2, minutes=30),
-            resolved_at=t_start + timedelta(hours=i * 2, minutes=30),
-        ))
-    # 20 non-OP filler (total = 25 — above quality threshold)
-    for i in range(20):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"short-hist-fill-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(minutes=i * 60),
-            last_seen_at=t_start + timedelta(minutes=i * 60, seconds=30),
-            resolved_at=t_start + timedelta(minutes=i * 60, seconds=30),
-        ))
-
-    assert len(observations) == 25
-    assert MIN_OBSERVATION_HISTORY_DAYS == 3, "Sanity: threshold is 3 days"
-
-    async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
-        await session.commit()
-
-        result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
-
-    assert result is None, (
-        f"Expected None for observations spanning only 23h (below {MIN_OBSERVATION_HISTORY_DAYS}d threshold), "
-        f"got {result}"
-    )
-
-
-async def test_above_min_observation_history_days(db):
-    """
-    Player with 20+ resolved observations spanning 5 days
-    (above MIN_OBSERVATION_HISTORY_DAYS=3) is not None when OP data is viable.
-    """
-    _, session_factory = db
-    ea_id = 2004
-    buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    # Observations span 5 days — well above MIN_OBSERVATION_HISTORY_DAYS=3
-    t_start = now - timedelta(days=5)
-
-    observations = []
-    # 5 OP sold spread across 5 days
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"long-hist-op-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(days=i),
-            last_seen_at=t_start + timedelta(days=i, hours=1),
-            resolved_at=t_start + timedelta(days=i, hours=1),
-        ))
-    # 20 non-OP filler (total = 25)
-    for i in range(20):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"long-hist-fill-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=6 + i * 5),
-            last_seen_at=t_start + timedelta(hours=6 + i * 5, minutes=30),
-            resolved_at=t_start + timedelta(hours=6 + i * 5, minutes=30),
-        ))
-
-    assert len(observations) == 25
-
-    async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
-        await session.commit()
-
-        result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
-
-    assert result is not None, (
-        f"Expected a score result for observations spanning 5 days (above {MIN_OBSERVATION_HISTORY_DAYS}d threshold)"
-    )

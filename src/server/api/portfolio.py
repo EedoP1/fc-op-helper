@@ -399,6 +399,7 @@ async def confirm_portfolio(
         Dict with keys: confirmed (int), leftovers (int), status ("ok").
     """
     session_factory = request.app.state.session_factory
+    logger.warning("confirm_portfolio: ENTER with %d players", len(body.players))
 
     # Deduplicate by ea_id — last occurrence wins (prevents UNIQUE constraint violation)
     deduped: dict[int, ConfirmPlayer] = {}
@@ -406,10 +407,15 @@ async def confirm_portfolio(
         deduped[p.ea_id] = p
     new_ea_ids = set(deduped.keys())
 
+    logger.warning("confirm_portfolio: acquiring session...")
     async with session_factory() as session:
+        logger.warning("confirm_portfolio: session acquired")
         # Step 1: Load all existing slots
+        logger.warning("confirm_portfolio: executing SELECT PortfolioSlot...")
         old_slots_result = await session.execute(select(PortfolioSlot))
+        logger.warning("confirm_portfolio: SELECT done")
         old_slots = old_slots_result.scalars().all()
+        logger.warning("confirm_portfolio: %d old slots found", len(old_slots))
 
         # Step 2: For each old slot, check latest trade outcome to decide fate
         leftover_count = 0
@@ -583,6 +589,7 @@ async def get_confirmed_portfolio(request: Request):
         result = await session.execute(stmt)
         rows = result.all()
 
+    data = []
     portfolio = []
     leftovers = []
     for slot, record in rows:
@@ -596,12 +603,14 @@ async def get_confirmed_portfolio(request: Request):
             "futgg_url": record.futgg_url,
             "is_leftover": slot.is_leftover,
         }
+        data.append(entry)
         if slot.is_leftover:
             leftovers.append(entry)
         else:
             portfolio.append(entry)
 
     return {
+        "data": data,
         "portfolio": portfolio,
         "leftovers": leftovers,
         "count": len(portfolio),

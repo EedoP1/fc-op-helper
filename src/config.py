@@ -28,16 +28,15 @@ INITIAL_SCORING_BATCH_SIZE = 50   # players per batch to avoid overwhelming even
 
 # Price range for scanner discovery
 SCANNER_MIN_PRICE = 11_000
-SCANNER_MAX_PRICE = 200_000
+SCANNER_MAX_PRICE = 500_000
 
 # Market data retention
 MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
 
 # Listing tracking
 LISTING_RETENTION_DAYS = 7            # days to keep individual listing observations (per D-12)
-BOOTSTRAP_MIN_OBSERVATIONS = 10       # min resolved listings before v2 scorer activates per player
 MIN_TOTAL_RESOLVED_OBSERVATIONS = 20  # quality threshold: min total resolved observations for a trustworthy score
-MIN_OBSERVATION_HISTORY_DAYS = 3      # quality threshold: min days from earliest observation to now
+MIN_SALES_PER_HOUR = 7                # minimum real sales/hour from completedAuctions to be viable
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 

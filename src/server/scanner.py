@@ -30,6 +30,7 @@ from src.config import (
     INITIAL_SCORING_BATCH_SIZE,
     MARKET_DATA_RETENTION_DAYS,
     LISTING_RETENTION_DAYS,
+    MIN_SALES_PER_HOUR,
 )
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
@@ -38,6 +39,18 @@ from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, Snap
 from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_sales_per_hour(sales) -> float:
+    """Compute sales/hour from completedAuctions timestamps."""
+    if len(sales) < 2:
+        return 0.0
+    oldest = min(s.sold_at for s in sales)
+    newest = max(s.sold_at for s in sales)
+    span_hrs = (newest - oldest).total_seconds() / 3600
+    if span_hrs <= 0:
+        return 0.0
+    return len(sales) / span_hrs
 
 
 class ScannerService:
@@ -70,6 +83,10 @@ class ScannerService:
         self._active_tasks: set[asyncio.Task] = set()
         self._sync_client: Optional[httpx.Client] = None
         self._scan_executor = None
+        # Limit concurrent DB sessions from scanner so API handlers aren't starved.
+        # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
+        # much tighter to keep the connection pool available for API endpoints.
+        self._db_semaphore = asyncio.Semaphore(5)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -346,14 +363,14 @@ class ScannerService:
             self._scan_results_1h.append((datetime.now(timezone.utc), False))
             logger.error(f"scan_player({ea_id}) failed after retries: {exc}")
             # Reschedule so the player doesn't get stuck in the dispatch queue
-            async with self._session_factory() as session:
+            async with self._db_semaphore, self._session_factory() as session:
                 record = await session.get(PlayerRecord, ea_id)
                 if record is not None:
                     record.next_scan_at = datetime.utcnow() + timedelta(seconds=SCAN_INTERVAL_SECONDS * 2)
                 await session.commit()
             return
 
-        async with self._session_factory() as session:
+        async with self._db_semaphore, self._session_factory() as session:
             # --- Listing tracking (D-01, D-02) ---
             listing_result = None
             resolve_result = None
@@ -372,6 +389,11 @@ class ScannerService:
                     session=session,
                 )
 
+            # --- Compute real sales/hour from completedAuctions ---
+            sph = 0.0
+            if market_data is not None and market_data.sales:
+                sph = _compute_sales_per_hour(market_data.sales)
+
             # --- V2 scoring ---
             v2_result = None
             if market_data is not None and market_data.current_lowest_bin > 0:
@@ -383,6 +405,12 @@ class ScannerService:
 
             # Write PlayerScore row built entirely from v2 result
             if v2_result is not None:
+                viable = sph >= MIN_SALES_PER_HOUR
+                if not viable:
+                    logger.debug(
+                        "scan_player(%d): sales/hr %.1f below min %d — marking not viable",
+                        ea_id, sph, MIN_SALES_PER_HOUR,
+                    )
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
@@ -395,8 +423,8 @@ class ScannerService:
                     op_ratio=v2_result["op_sell_rate"],
                     expected_profit=v2_result["expected_profit_per_hour"],
                     efficiency=v2_result["expected_profit_per_hour"] / v2_result["buy_price"],
-                    sales_per_hour=0.0,
-                    is_viable=True,
+                    sales_per_hour=sph,
+                    is_viable=viable,
                     expected_profit_per_hour=v2_result["expected_profit_per_hour"],
                     scorer_version="v2",
                 )
@@ -413,7 +441,7 @@ class ScannerService:
                     op_ratio=0.0,
                     expected_profit=0.0,
                     efficiency=0.0,
-                    sales_per_hour=0.0,
+                    sales_per_hour=sph,
                     is_viable=False,
                     expected_profit_per_hour=None,
                 )
@@ -439,14 +467,14 @@ class ScannerService:
                     seen_sales.add(key)
                     session.add(SnapshotSale(
                         snapshot_id=snapshot.id,
-                        sold_at=sale.sold_at,
+                        sold_at=sale.sold_at.replace(tzinfo=None),
                         sold_price=sale.sold_price,
                     ))
 
                 for point in market_data.price_history:
                     session.add(SnapshotPricePoint(
                         snapshot_id=snapshot.id,
-                        recorded_at=point.recorded_at,
+                        recorded_at=point.recorded_at.replace(tzinfo=None),
                         lowest_bin=point.lowest_bin,
                     ))
 
@@ -512,7 +540,7 @@ class ScannerService:
                 await self.scan_player(ea_id)
 
         for p in due_players:
-            task = self._scanner_loop.create_task(_scan_with_sem(p.ea_id))
+            task = asyncio.get_running_loop().create_task(_scan_with_sem(p.ea_id))
             self._active_tasks.add(task)
 
     # ── Scheduled aggregation and cleanup jobs ──────────────────────────────

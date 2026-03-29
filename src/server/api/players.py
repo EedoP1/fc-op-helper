@@ -73,9 +73,13 @@ async def get_top_players(
     stale_cutoff = datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)
     players = []
     for score, player in rows:
+        last_scanned_at = player.last_scanned_at
+        # Strip timezone info for comparison (Postgres returns tz-aware, utcnow() is naive)
+        if last_scanned_at is not None and last_scanned_at.tzinfo is not None:
+            last_scanned_at = last_scanned_at.replace(tzinfo=None)
         is_stale = (
-            player.last_scanned_at is None
-            or player.last_scanned_at < stale_cutoff  # D-12, D-13
+            last_scanned_at is None
+            or last_scanned_at < stale_cutoff  # D-12, D-13
         )
         players.append(
             {
@@ -175,9 +179,13 @@ async def get_player(request: Request, ea_id: int):
     trend = _compute_trend(viable_history)
 
     # Staleness check (same as get_top_players)
+    last_scanned_at = record.last_scanned_at
+    # Strip timezone info for comparison (Postgres returns tz-aware, utcnow() is naive)
+    if last_scanned_at is not None and last_scanned_at.tzinfo is not None:
+        last_scanned_at = last_scanned_at.replace(tzinfo=None)
     is_stale = (
-        record.last_scanned_at is None
-        or record.last_scanned_at < datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)
+        last_scanned_at is None
+        or last_scanned_at < datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)
     )
 
     return {

@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from src.server.models_db import PortfolioSlot, TradeAction, TradeRecord
 
@@ -207,6 +208,10 @@ async def get_pending_action(request: Request):
     """
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        # Serialize action derivation to prevent MVCC race where two concurrent
+        # requests both see no PENDING action and both create one for the same slot.
+        await session.execute(text("SELECT pg_advisory_xact_lock(42)"))
+
         # Step 1: reset stale
         await _reset_stale_actions(session)
 
@@ -348,22 +353,22 @@ async def seed_portfolio_slots(payload: SeedSlotsPayload, request: Request):
 
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        now = datetime.utcnow()
         for entry in payload.slots:
-            result = await session.execute(
-                select(PortfolioSlot).where(PortfolioSlot.ea_id == entry.ea_id)
+            stmt = pg_insert(PortfolioSlot).values(
+                ea_id=entry.ea_id,
+                buy_price=entry.buy_price,
+                sell_price=entry.sell_price,
+                added_at=now,
             )
-            existing = result.scalar_one_or_none()
-
-            if existing is not None:
-                existing.buy_price = entry.buy_price
-                existing.sell_price = entry.sell_price
-            else:
-                session.add(PortfolioSlot(
-                    ea_id=entry.ea_id,
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["ea_id"],
+                set_=dict(
                     buy_price=entry.buy_price,
                     sell_price=entry.sell_price,
-                    added_at=datetime.utcnow(),
-                ))
+                ),
+            )
+            await session.execute(stmt)
 
         await session.commit()
 
@@ -456,11 +461,13 @@ async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request
     window, inserts all records in one commit. Much faster than N individual calls
     when the scanner holds the write lock.
     """
+    logger.warning("batch_trade_records: ENTER (%d records)", len(payload.records))
     session_factory = request.app.state.session_factory
     succeeded = []
     failed = []
 
     async with session_factory() as session:
+        logger.warning("batch_trade_records: session acquired")
         # Load all portfolio slots in one query (need is_leftover for auto-cleanup)
         all_ea_ids = [r.ea_id for r in payload.records]
         slot_result = await session.execute(
@@ -468,6 +475,7 @@ async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request
         )
         slot_map = {s.ea_id: s for s in slot_result.scalars().all()}
         valid_ea_ids = set(slot_map.keys())
+        logger.warning("batch_trade_records: valid_ea_ids=%s", valid_ea_ids)
 
         # Load latest outcome per player for dedup (mirrors client-side last-status logic)
         latest_subq = (

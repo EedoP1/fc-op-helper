@@ -127,6 +127,63 @@ class FutGGClient:
             futgg_url=defn.get("url"),
         )
 
+    def get_player_market_data_sync(
+        self, ea_id: int, sync_client: httpx.Client
+    ) -> Optional[PlayerMarketData]:
+        """Synchronous version of get_player_market_data for thread-pool use.
+
+        Uses the provided sync httpx.Client (not the async self.client) so it
+        can run in a ThreadPoolExecutor without needing an event loop. This
+        keeps scanner HTTP I/O off the main asyncio event loop.
+
+        Args:
+            ea_id: EA resource ID of the player.
+            sync_client: Synchronous httpx.Client for HTTP calls.
+
+        Returns:
+            PlayerMarketData or None if data is unavailable.
+        """
+        import time as _time
+
+        def _get_sync(path: str) -> Optional[dict]:
+            try:
+                resp = sync_client.get(path)
+                resp.raise_for_status()
+                _time.sleep(0.05)
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP {e.response.status_code} for {path}")
+                return None
+            except Exception as e:
+                logger.error(f"Request failed for {path}: {e}")
+                return None
+
+        defn_data = _get_sync(f"/api/fut/player-item-definitions/26/{ea_id}/")
+        prices_data = _get_sync(f"/api/fut/player-prices/26/{ea_id}/")
+
+        defn = defn_data["data"] if defn_data and "data" in defn_data else None
+        prices = prices_data["data"] if prices_data and "data" in prices_data else None
+
+        if not defn or not prices:
+            return None
+
+        player = self._build_player(defn)
+        current_bin = self._extract_current_bin(prices)
+        if not current_bin:
+            return None
+
+        raw_auctions = prices.get("liveAuctions", [])
+        return PlayerMarketData(
+            player=player,
+            current_lowest_bin=current_bin,
+            listing_count=len(raw_auctions),
+            price_history=self._parse_price_history(ea_id, prices),
+            sales=self._parse_sales(ea_id, prices),
+            live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
+            live_auctions_raw=raw_auctions,
+            futgg_url=defn.get("url"),
+        )
+
     async def get_batch_market_data(
         self, ea_ids: list[int], concurrency: int = 5,
     ) -> list[Optional[PlayerMarketData]]:

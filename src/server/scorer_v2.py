@@ -26,9 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import (
     EA_TAX_RATE,
     LISTING_RETENTION_DAYS,
-    BOOTSTRAP_MIN_OBSERVATIONS,
     MIN_TOTAL_RESOLVED_OBSERVATIONS,
-    MIN_OBSERVATION_HISTORY_DAYS,
     MARGINS,
     MIN_OP_OBSERVATIONS,
 )
@@ -57,7 +55,7 @@ async def score_player_v2(
 
     Returns:
         Scoring result dict on success, or None if:
-        - fewer than BOOTSTRAP_MIN_OBSERVATIONS resolved listings exist
+        - fewer than MIN_TOTAL_RESOLVED_OBSERVATIONS resolved listings exist
         - no margin tier has MIN_OP_OBSERVATIONS or more OP listings
         - net_profit is non-positive at every viable margin
     """
@@ -72,29 +70,11 @@ async def score_player_v2(
     )
     observations = result.scalars().all()
 
-    # ── 2. Bootstrap guard ────────────────────────────────────────────────────
-    if len(observations) < BOOTSTRAP_MIN_OBSERVATIONS:
-        logger.debug(
-            "score_player_v2: ea_id=%d skipped — only %d resolved observations (min %d)",
-            ea_id, len(observations), BOOTSTRAP_MIN_OBSERVATIONS,
-        )
-        return None
-
-    # ── 2b. Quality guard: minimum total observations ─────────────────────────
+    # ── 2. Quality guard: minimum total observations ───────────────────────────
     if len(observations) < MIN_TOTAL_RESOLVED_OBSERVATIONS:
         logger.debug(
             "score_player_v2: ea_id=%d skipped — only %d total resolved observations (quality min %d)",
             ea_id, len(observations), MIN_TOTAL_RESOLVED_OBSERVATIONS,
-        )
-        return None
-
-    # ── 2c. Quality guard: minimum observation history depth ──────────────────
-    earliest_seen = min(obs.first_seen_at for obs in observations)
-    history_age_days = (datetime.utcnow() - earliest_seen).total_seconds() / 86400
-    if history_age_days < MIN_OBSERVATION_HISTORY_DAYS:
-        logger.debug(
-            "score_player_v2: ea_id=%d skipped — observation history only %.1f days (min %d days)",
-            ea_id, history_age_days, MIN_OBSERVATION_HISTORY_DAYS,
         )
         return None
 

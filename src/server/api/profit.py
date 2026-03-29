@@ -65,7 +65,7 @@ async def get_profit_summary(request: Request):
     # Build per-player breakdown
     per_player = []
     for row in agg_rows:
-        total_earned = int(row.total_earned_gross * (1 - EA_TAX_RATE))
+        total_earned = int(float(row.total_earned_gross) * (1 - EA_TAX_RATE))
         net = total_earned - int(row.total_spent)
         per_player.append({
             "ea_id": row.ea_id,

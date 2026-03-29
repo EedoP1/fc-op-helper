@@ -544,8 +544,12 @@ async def test_batch_records_single_commit(client, test_db_url):
     Uses POST /portfolio/generate to get 3 real ea_ids instead of synthetic offsets.
     This avoids DB lock contention from seeding non-existent ea_ids.
     """
+    import time as _t
+    _t0 = _t.time()
     # Get 3 real ea_ids from generate
+    print(f"[batch_test] starting generate at {_t.time()-_t0:.1f}s", flush=True)
     gen_r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
+    print(f"[batch_test] generate done at {_t.time()-_t0:.1f}s status={gen_r.status_code}", flush=True)
     assert gen_r.status_code == 200, f"Generate failed: {gen_r.status_code}"
     gen_body = gen_r.json()
     assert gen_body["count"] >= 3, (
@@ -555,6 +559,7 @@ async def test_batch_records_single_commit(client, test_db_url):
     ea_ids = [p["ea_id"] for p in players]
 
     # Seed 3 slots via confirm (clean way to get 3 real slots)
+    print(f"[batch_test] starting confirm at {_t.time()-_t0:.1f}s", flush=True)
     confirm_r = await client.post(
         "/api/v1/portfolio/confirm",
         json={
@@ -564,9 +569,11 @@ async def test_batch_records_single_commit(client, test_db_url):
             ]
         },
     )
+    print(f"[batch_test] confirm done at {_t.time()-_t0:.1f}s status={confirm_r.status_code}", flush=True)
     assert confirm_r.status_code == 200, f"Confirm failed: {confirm_r.status_code}"
 
     # Batch insert 3 records — one per slot
+    print(f"[batch_test] starting batch at {_t.time()-_t0:.1f}s", flush=True)
     batch_r = await client.post(
         "/api/v1/trade-records/batch",
         json={
@@ -577,6 +584,7 @@ async def test_batch_records_single_commit(client, test_db_url):
             ]
         },
     )
+    print(f"[batch_test] batch done at {_t.time()-_t0:.1f}s status={batch_r.status_code}", flush=True)
     assert batch_r.status_code == 201, f"Batch insert failed: {batch_r.status_code}: {batch_r.text}"
     batch_body = batch_r.json()
     assert batch_body["status"] == "ok"
