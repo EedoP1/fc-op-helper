@@ -156,6 +156,7 @@ class PortfolioSlot(Base):
     buy_price: Mapped[int] = mapped_column(Integer)
     sell_price: Mapped[int] = mapped_column(Integer)
     added_at: Mapped[datetime] = mapped_column(DateTime)
+    is_leftover: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class TradeAction(Base):

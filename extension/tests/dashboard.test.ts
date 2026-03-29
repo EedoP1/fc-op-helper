@@ -60,6 +60,7 @@ const DASHBOARD_DATA: DashboardData = {
       buy_price: 50000,
       sell_price: 65000,
       current_bin: 51500,
+      is_leftover: false,
     },
   ],
 };
@@ -70,13 +71,29 @@ describe('dashboard tab', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     mockSendMessage.mockReset();
+    // Default mock: handle both Actions and Dashboard tab fetches
+    mockSendMessage.mockImplementation((msg: any) => {
+      if (msg.type === 'ACTIONS_NEEDED_REQUEST') {
+        return Promise.resolve({
+          type: 'ACTIONS_NEEDED_RESULT',
+          data: { actions: [], summary: { to_buy: 0, to_list: 0, to_relist: 0, waiting: 0 } },
+        });
+      }
+      if (msg.type === 'DASHBOARD_STATUS_REQUEST') {
+        return Promise.resolve({
+          type: 'DASHBOARD_STATUS_RESULT',
+          data: DASHBOARD_DATA,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('renders tab bar with Portfolio and Dashboard buttons in confirmed state', () => {
+  it('renders tab bar with Actions, Portfolio and Dashboard buttons in confirmed state', () => {
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -86,8 +103,10 @@ describe('dashboard tab', () => {
     expect(tabBar).toBeTruthy();
 
     const buttons = Array.from(tabBar!.querySelectorAll('button'));
+    const actionsBtn = buttons.find(b => b.textContent?.includes('Actions'));
     const portfolioBtn = buttons.find(b => b.textContent?.includes('Portfolio'));
     const dashboardBtn = buttons.find(b => b.textContent?.includes('Dashboard'));
+    expect(actionsBtn).toBeTruthy();
     expect(portfolioBtn).toBeTruthy();
     expect(dashboardBtn).toBeTruthy();
   });
@@ -116,7 +135,7 @@ describe('dashboard tab', () => {
     expect(tabBar).toBeNull();
   });
 
-  it('Portfolio tab is the default active tab with active background styling', () => {
+  it('Actions tab is the default active tab with active background styling', () => {
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -124,20 +143,17 @@ describe('dashboard tab', () => {
 
     const tabBar = panel.container.querySelector('.op-seller-tab-bar');
     const buttons = Array.from(tabBar!.querySelectorAll('button'));
+    const actionsBtn = buttons.find(b => b.textContent?.includes('Actions')) as HTMLButtonElement;
     const portfolioBtn = buttons.find(b => b.textContent?.includes('Portfolio')) as HTMLButtonElement;
     const dashboardBtn = buttons.find(b => b.textContent?.includes('Dashboard')) as HTMLButtonElement;
 
     // jsdom normalizes hex colors to rgb format
-    expect(portfolioBtn.style.background).toBe('rgb(58, 58, 94)'); // #3a3a5e
+    expect(actionsBtn.style.background).toBe('rgb(58, 58, 94)'); // #3a3a5e
+    expect(portfolioBtn.style.background).not.toBe('rgb(58, 58, 94)');
     expect(dashboardBtn.style.background).not.toBe('rgb(58, 58, 94)');
   });
 
   it('clicking Dashboard tab sends DASHBOARD_STATUS_REQUEST message', async () => {
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: DASHBOARD_DATA,
-    });
-
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -156,11 +172,6 @@ describe('dashboard tab', () => {
   });
 
   it('dashboard tab renders player status badges', async () => {
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: DASHBOARD_DATA,
-    });
-
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -181,11 +192,6 @@ describe('dashboard tab', () => {
   });
 
   it('dashboard tab renders cumulative stats with times sold and profit', async () => {
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: DASHBOARD_DATA,
-    });
-
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -204,11 +210,6 @@ describe('dashboard tab', () => {
   });
 
   it('dashboard tab renders summary bar with Realized and Unrealized labels', async () => {
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: DASHBOARD_DATA,
-    });
-
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
@@ -230,32 +231,39 @@ describe('dashboard tab', () => {
   });
 
   it('Refresh button triggers a second fetch', async () => {
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: DASHBOARD_DATA,
-    });
-
     const panel = createOverlayPanel();
     document.body.appendChild(panel.container);
 
     panel.setState('confirmed', CONFIRMED_DATA);
+
+    // Wait for initial Actions tab fetch
+    await new Promise(r => setTimeout(r, 10));
 
     const tabBar = panel.container.querySelector('.op-seller-tab-bar');
     const dashboardBtn = Array.from(tabBar!.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Dashboard')) as HTMLButtonElement;
     dashboardBtn.click();
 
-    // Wait for the first fetch to complete and render the refresh button
+    // Wait for the first dashboard fetch to complete and render the refresh button
     await new Promise(r => setTimeout(r, 10));
 
     const refreshBtn = panel.container.querySelector('.op-seller-dashboard-refresh') as HTMLButtonElement;
     expect(refreshBtn).toBeTruthy();
 
+    // Count calls before refresh
+    const callsBefore = mockSendMessage.mock.calls.filter(
+      (c: any[]) => c[0]?.type === 'DASHBOARD_STATUS_REQUEST'
+    ).length;
+
     refreshBtn.click();
     await new Promise(r => setTimeout(r, 10));
 
-    // sendMessage should have been called twice (initial + refresh)
-    expect(mockSendMessage).toHaveBeenCalledTimes(2);
+    const callsAfter = mockSendMessage.mock.calls.filter(
+      (c: any[]) => c[0]?.type === 'DASHBOARD_STATUS_REQUEST'
+    ).length;
+
+    // Should have one more DASHBOARD_STATUS_REQUEST after refresh
+    expect(callsAfter).toBe(callsBefore + 1);
   });
 
   it('negative profit values are rendered with red color', async () => {
@@ -269,9 +277,17 @@ describe('dashboard tab', () => {
       ],
     };
 
-    mockSendMessage.mockResolvedValue({
-      type: 'DASHBOARD_STATUS_RESULT',
-      data: negativeData,
+    mockSendMessage.mockImplementation((msg: any) => {
+      if (msg.type === 'ACTIONS_NEEDED_REQUEST') {
+        return Promise.resolve({
+          type: 'ACTIONS_NEEDED_RESULT',
+          data: { actions: [], summary: { to_buy: 0, to_list: 0, to_relist: 0, waiting: 0 } },
+        });
+      }
+      return Promise.resolve({
+        type: 'DASHBOARD_STATUS_RESULT',
+        data: negativeData,
+      });
     });
 
     const panel = createOverlayPanel();

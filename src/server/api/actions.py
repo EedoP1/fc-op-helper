@@ -90,11 +90,13 @@ async def _derive_next_action(session) -> TradeAction | None:
     """Derive the next needed action from portfolio_slots + trade_records.
 
     For each slot, determines lifecycle state from the most recent trade_record outcome:
-    - No records           -> BUY
+    - No records           -> BUY (active only; leftovers -> LIST)
     - Most recent "bought" -> LIST
     - Most recent "listed" -> waiting (card on market), skip
-    - Most recent "sold"   -> cycle complete, start new BUY
+    - Most recent "sold"   -> BUY (active only; leftovers auto-cleaned)
     - Most recent "expired"-> RELIST
+
+    Leftover slots never generate BUY actions — the player is already owned.
 
     Returns an unsaved TradeAction if work is needed, else None.
     """
@@ -102,6 +104,18 @@ async def _derive_next_action(session) -> TradeAction | None:
     slots = slots_result.scalars().all()
 
     for slot in slots:
+        # Double-check for existing active action (belt-and-suspenders with the lock).
+        existing_result = await session.execute(
+            select(TradeAction)
+            .where(
+                TradeAction.ea_id == slot.ea_id,
+                TradeAction.status.in_(["PENDING", "IN_PROGRESS"]),
+            )
+            .limit(1)
+        )
+        if existing_result.scalar_one_or_none() is not None:
+            continue
+
         # Get the most recent trade record for this slot
         records_result = await session.execute(
             select(TradeRecord)
@@ -115,9 +129,14 @@ async def _derive_next_action(session) -> TradeAction | None:
         target_price: int | None = None
 
         if latest_record is None:
-            # No records — need to BUY
-            action_type = "BUY"
-            target_price = slot.buy_price
+            if slot.is_leftover:
+                # Leftover with no records — player is in club, need to LIST
+                action_type = "LIST"
+                target_price = slot.sell_price
+            else:
+                # Active slot, no records — need to BUY
+                action_type = "BUY"
+                target_price = slot.buy_price
         elif latest_record.outcome == "bought":
             # Bought but not listed yet — need to LIST
             action_type = "LIST"
@@ -127,9 +146,15 @@ async def _derive_next_action(session) -> TradeAction | None:
             action_type = "RELIST"
             target_price = slot.sell_price
         elif latest_record.outcome == "sold":
-            # Cycle complete — restart with BUY
-            action_type = "BUY"
-            target_price = slot.buy_price
+            if slot.is_leftover:
+                # Leftover sold — auto-cleanup (delete slot), skip action
+                await session.delete(slot)
+                await session.flush()
+                continue
+            else:
+                # Active slot, cycle complete — restart with BUY
+                action_type = "BUY"
+                target_price = slot.buy_price
         else:
             # "listed" — card is on market, nothing to do yet
             continue
@@ -274,13 +299,29 @@ async def complete_action(action_id: int, payload: CompleteActionPayload, reques
 
         action.status = "DONE"
         action.completed_at = now
+
+        # Auto-cleanup: if a leftover player was sold, remove the slot
+        leftover_removed = False
+        if payload.outcome == "sold":
+            slot_result = await session.execute(
+                select(PortfolioSlot).where(
+                    PortfolioSlot.ea_id == action.ea_id,
+                    PortfolioSlot.is_leftover == True,  # noqa: E712
+                )
+            )
+            leftover_slot = slot_result.scalar_one_or_none()
+            if leftover_slot is not None:
+                await session.delete(leftover_slot)
+                leftover_removed = True
+
         await session.commit()
 
         record_id = record.id
 
     logger.info(
-        "Completed action id=%d outcome=%s price=%d record_id=%d",
+        "Completed action id=%d outcome=%s price=%d record_id=%d%s",
         action_id, payload.outcome, payload.price, record_id,
+        " (leftover removed)" if leftover_removed else "",
     )
     return {"status": "ok", "trade_record_id": record_id}
 
@@ -390,11 +431,19 @@ async def direct_trade_record(payload: DirectTradeRecordPayload, request: Reques
         session.add(record)
         await session.flush()
         record_id = record.id
+
+        # Auto-cleanup: if a leftover player was sold, remove the slot
+        leftover_removed = False
+        if payload.outcome == "sold" and slot.is_leftover:
+            await session.delete(slot)
+            leftover_removed = True
+
         await session.commit()
 
     logger.info(
-        "Direct trade record ea_id=%d outcome=%s price=%d record_id=%d",
+        "Direct trade record ea_id=%d outcome=%s price=%d record_id=%d%s",
         payload.ea_id, payload.outcome, payload.price, record_id,
+        " (leftover removed)" if leftover_removed else "",
     )
     return {"status": "ok", "trade_record_id": record_id}
 
@@ -412,12 +461,13 @@ async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request
     failed = []
 
     async with session_factory() as session:
-        # Load all portfolio ea_ids in one query
+        # Load all portfolio slots in one query (need is_leftover for auto-cleanup)
         all_ea_ids = [r.ea_id for r in payload.records]
         slot_result = await session.execute(
-            select(PortfolioSlot.ea_id).where(PortfolioSlot.ea_id.in_(all_ea_ids))
+            select(PortfolioSlot).where(PortfolioSlot.ea_id.in_(all_ea_ids))
         )
-        valid_ea_ids = {row.ea_id for row in slot_result.all()}
+        slot_map = {s.ea_id: s for s in slot_result.scalars().all()}
+        valid_ea_ids = set(slot_map.keys())
 
         # Load latest outcome per player for dedup (mirrors client-side last-status logic)
         latest_subq = (
@@ -433,6 +483,7 @@ async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request
         last_outcome: dict[int, str] = {r.ea_id: r.outcome for r in latest_result.all()}
 
         now = datetime.utcnow()
+        leftovers_removed = 0
         for record in payload.records:
             action_type = _OUTCOME_TO_ACTION_TYPE.get(record.outcome)
             if action_type is None or record.ea_id not in valid_ea_ids:
@@ -450,7 +501,16 @@ async def batch_trade_records(payload: BatchTradeRecordPayload, request: Request
             ))
             succeeded.append(record.ea_id)
 
+            # Auto-cleanup: if a leftover player was sold, remove the slot
+            slot = slot_map.get(record.ea_id)
+            if record.outcome == "sold" and slot is not None and slot.is_leftover:
+                await session.delete(slot)
+                leftovers_removed += 1
+
         await session.commit()
 
-    logger.info("Batch trade records: %d succeeded, %d failed", len(succeeded), len(failed))
+    logger.info(
+        "Batch trade records: %d succeeded, %d failed, %d leftovers removed",
+        len(succeeded), len(failed), leftovers_removed,
+    )
     return {"status": "ok", "succeeded": succeeded, "failed": failed}

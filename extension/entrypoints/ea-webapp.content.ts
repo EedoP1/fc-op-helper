@@ -68,6 +68,10 @@ export default defineContentScript({
         case 'DASHBOARD_STATUS_RESULT':
           // Response type — received as sendMessage return value, not via onMessage.
           return false;
+        case 'ACTIONS_NEEDED_REQUEST':
+          return false;
+        case 'ACTIONS_NEEDED_RESULT':
+          return false;
         default:
           assertNever(msg);
       }
