@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, MarketSnapshot
+from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, TradeRecord, MarketSnapshot
 from src.config import STALE_THRESHOLD_HOURS, VOLATILITY_MAX_PRICE_INCREASE_PCT, VOLATILITY_MAX_PRICE_INCREASE_ABS, VOLATILITY_LOOKBACK_DAYS
 from src.optimizer import optimize_portfolio
 
@@ -381,18 +381,22 @@ async def confirm_portfolio(
     request: Request,
     body: ConfirmRequest,
 ):
-    """Seed portfolio_slots with a confirmed player list (clean slate per D-06).
+    """Confirm a new portfolio, preserving unsold players from the old one as leftovers.
 
-    Clears ALL existing PortfolioSlot rows then inserts new ones from the
-    provided list. Supports calling confirm twice: the second call replaces
-    the first entirely.
+    For each old slot, checks the latest TradeRecord outcome:
+    - bought/listed/expired → player is still in your club, kept as is_leftover=True
+    - sold/None (never bought) → deleted
+
+    New portfolio players are inserted with is_leftover=False. If a new player
+    overlaps with a leftover (same ea_id), the leftover is promoted back to active
+    with updated prices.
 
     Args:
         request: FastAPI Request (app.state carries session_factory).
         body: ConfirmRequest with list of players (ea_id, buy_price, sell_price).
 
     Returns:
-        Dict with keys: confirmed (int), status ("ok").
+        Dict with keys: confirmed (int), leftovers (int), status ("ok").
     """
     session_factory = request.app.state.session_factory
 
@@ -400,25 +404,77 @@ async def confirm_portfolio(
     deduped: dict[int, ConfirmPlayer] = {}
     for p in body.players:
         deduped[p.ea_id] = p
+    new_ea_ids = set(deduped.keys())
 
     async with session_factory() as session:
-        # Clean slate: remove all existing slots before inserting new ones
-        await session.execute(delete(PortfolioSlot))
+        # Step 1: Load all existing slots
+        old_slots_result = await session.execute(select(PortfolioSlot))
+        old_slots = old_slots_result.scalars().all()
 
-        # Insert deduplicated slots
+        # Step 2: For each old slot, check latest trade outcome to decide fate
+        leftover_count = 0
+        for slot in old_slots:
+            if slot.ea_id in new_ea_ids:
+                # Overlap: new portfolio includes this player — promote to active
+                p = deduped[slot.ea_id]
+                slot.buy_price = p.buy_price
+                slot.sell_price = p.sell_price
+                slot.is_leftover = False
+                slot.added_at = datetime.utcnow()
+                # Remove from deduped so we don't double-insert
+                del deduped[slot.ea_id]
+                continue
+
+            # Check latest trade record for this player
+            latest_result = await session.execute(
+                select(TradeRecord.outcome)
+                .where(TradeRecord.ea_id == slot.ea_id)
+                .order_by(TradeRecord.id.desc())
+                .limit(1)
+            )
+            latest_outcome = latest_result.scalar_one_or_none()
+
+            if latest_outcome in ("bought", "listed", "expired"):
+                # Player is still in club — mark as leftover
+                slot.is_leftover = True
+                leftover_count += 1
+            else:
+                # sold or never bought (None) — safe to delete
+                await session.delete(slot)
+
+        # Step 3: Cancel pending/in-progress actions for players no longer in active portfolio
+        # (leftovers will get new actions derived from their trade state)
+        leftover_ea_ids = {s.ea_id for s in old_slots if s.ea_id not in new_ea_ids}
+        if leftover_ea_ids:
+            await session.execute(
+                update(TradeAction)
+                .where(
+                    TradeAction.ea_id.in_(leftover_ea_ids),
+                    TradeAction.status.in_(["PENDING", "IN_PROGRESS"]),
+                )
+                .values(status="CANCELLED")
+            )
+
+        # Step 4: Insert remaining new players (those that didn't overlap with old slots)
+        now = datetime.utcnow()
         for p in deduped.values():
             session.add(PortfolioSlot(
                 ea_id=p.ea_id,
                 buy_price=p.buy_price,
                 sell_price=p.sell_price,
-                added_at=datetime.utcnow(),
+                added_at=now,
+                is_leftover=False,
             ))
 
         await session.commit()
 
-    logger.info("Confirmed %d portfolio slots (clean slate)", len(deduped))
+    confirmed_count = len(new_ea_ids)
+    logger.info(
+        "Confirmed %d portfolio slots, %d leftovers preserved",
+        confirmed_count, leftover_count,
+    )
 
-    return {"confirmed": len(deduped), "status": "ok"}
+    return {"confirmed": confirmed_count, "leftovers": leftover_count, "status": "ok"}
 
 
 @router.post("/portfolio/swap-preview")
@@ -509,14 +565,14 @@ async def swap_preview(
 async def get_confirmed_portfolio(request: Request):
     """Return current portfolio_slots joined with PlayerRecord metadata.
 
-    No optimizer run — purely reads the confirmed portfolio from DB.
+    Separates active portfolio players from leftovers (unsold players from
+    previous portfolios).
 
     Args:
         request: FastAPI Request (app.state carries session_factory).
 
     Returns:
-        Dict with keys: data (list), count (int).
-        Each item has: ea_id, name, rating, position, buy_price, sell_price.
+        Dict with keys: portfolio (list), leftovers (list), count (int), leftover_count (int).
     """
     sf = _read_session_factory(request)
     async with sf() as session:
@@ -527,8 +583,10 @@ async def get_confirmed_portfolio(request: Request):
         result = await session.execute(stmt)
         rows = result.all()
 
-    data = [
-        {
+    portfolio = []
+    leftovers = []
+    for slot, record in rows:
+        entry = {
             "ea_id": slot.ea_id,
             "name": record.name,
             "rating": record.rating,
@@ -536,11 +594,145 @@ async def get_confirmed_portfolio(request: Request):
             "buy_price": slot.buy_price,
             "sell_price": slot.sell_price,
             "futgg_url": record.futgg_url,
+            "is_leftover": slot.is_leftover,
         }
-        for slot, record in rows
-    ]
+        if slot.is_leftover:
+            leftovers.append(entry)
+        else:
+            portfolio.append(entry)
 
-    return {"data": data, "count": len(data)}
+    return {
+        "portfolio": portfolio,
+        "leftovers": leftovers,
+        "count": len(portfolio),
+        "leftover_count": len(leftovers),
+    }
+
+
+@router.get("/portfolio/actions-needed")
+async def get_actions_needed(request: Request):
+    """Return a flat, prioritized list of exactly what to do for every player.
+
+    For each portfolio slot (active + leftover), derives the next needed action
+    from the latest TradeRecord outcome. Returns a single list sorted by priority:
+    LIST first (sell what you have), then RELIST, then BUY.
+
+    Players currently "listed" (on market, waiting) are included as WAIT entries
+    so the user has a complete picture.
+
+    Args:
+        request: FastAPI Request (app.state carries session_factory).
+
+    Returns:
+        Dict with keys:
+            actions: list of {ea_id, name, rating, position, action, target_price,
+                              is_leftover, futgg_url}
+            summary: {to_buy, to_list, to_relist, waiting}
+    """
+    sf = _read_session_factory(request)
+    async with sf() as session:
+        # Load all slots with player metadata
+        stmt = (
+            select(PortfolioSlot, PlayerRecord)
+            .join(PlayerRecord, PlayerRecord.ea_id == PortfolioSlot.ea_id)
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            return {
+                "actions": [],
+                "summary": {"to_buy": 0, "to_list": 0, "to_relist": 0, "waiting": 0},
+            }
+
+        # Get latest trade outcome per ea_id
+        ea_ids = [slot.ea_id for slot, _ in rows]
+        latest_subq = (
+            select(TradeRecord.ea_id, func.max(TradeRecord.id).label("max_id"))
+            .where(TradeRecord.ea_id.in_(ea_ids))
+            .group_by(TradeRecord.ea_id)
+            .subquery()
+        )
+        outcome_stmt = (
+            select(TradeRecord.ea_id, TradeRecord.outcome)
+            .join(
+                latest_subq,
+                (TradeRecord.ea_id == latest_subq.c.ea_id)
+                & (TradeRecord.id == latest_subq.c.max_id),
+            )
+        )
+        outcome_result = await session.execute(outcome_stmt)
+        outcome_map = {r.ea_id: r.outcome for r in outcome_result.all()}
+
+    # Derive action for each player
+    actions = []
+    summary = {"to_buy": 0, "to_list": 0, "to_relist": 0, "waiting": 0}
+
+    # Priority order for sorting: LIST=0, RELIST=1, BUY=2, WAIT=3
+    priority_order = {"LIST": 0, "RELIST": 1, "BUY": 2, "WAIT": 3}
+
+    for slot, record in rows:
+        latest_outcome = outcome_map.get(slot.ea_id)
+
+        if slot.is_leftover:
+            # Leftovers: never BUY — only LIST/RELIST/WAIT
+            if latest_outcome is None or latest_outcome == "bought":
+                action = "LIST"
+                target_price = slot.sell_price
+                summary["to_list"] += 1
+            elif latest_outcome == "expired":
+                action = "RELIST"
+                target_price = slot.sell_price
+                summary["to_relist"] += 1
+            elif latest_outcome == "listed":
+                action = "WAIT"
+                target_price = slot.sell_price
+                summary["waiting"] += 1
+            else:
+                # "sold" — shouldn't happen (auto-cleanup removes sold leftovers)
+                continue
+        else:
+            # Active portfolio: normal lifecycle
+            if latest_outcome is None:
+                action = "BUY"
+                target_price = slot.buy_price
+                summary["to_buy"] += 1
+            elif latest_outcome == "bought":
+                action = "LIST"
+                target_price = slot.sell_price
+                summary["to_list"] += 1
+            elif latest_outcome == "listed":
+                action = "WAIT"
+                target_price = slot.sell_price
+                summary["waiting"] += 1
+            elif latest_outcome == "expired":
+                action = "RELIST"
+                target_price = slot.sell_price
+                summary["to_relist"] += 1
+            elif latest_outcome == "sold":
+                action = "BUY"
+                target_price = slot.buy_price
+                summary["to_buy"] += 1
+            else:
+                continue
+
+        actions.append({
+            "ea_id": slot.ea_id,
+            "name": record.name,
+            "rating": record.rating,
+            "position": record.position,
+            "action": action,
+            "target_price": target_price,
+            "buy_price": slot.buy_price,
+            "sell_price": slot.sell_price,
+            "is_leftover": slot.is_leftover,
+            "futgg_url": record.futgg_url,
+        })
+
+    # Sort by priority: LIST first, then RELIST, then BUY, then WAIT
+    actions.sort(key=lambda x: priority_order.get(x["action"], 99))
+
+    return {"actions": actions, "summary": summary}
 
 
 class RebalanceRequest(BaseModel):
