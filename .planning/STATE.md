@@ -155,6 +155,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-28
-Stopped at: Completed 09.1-03-PLAN.md
+Last activity: 2026-03-29 - Completed quick task 260329-gtn: Add missing scorer filters
+Stopped at: Completed quick task 260329-gtn
 Resume file: None
