@@ -151,6 +151,7 @@ None yet.
 | 260326-wac | Build FUTBIN health monitor CLI with audit report | 2026-03-26 | f45f78d | [260326-wac-build-futbin-health-monitor-hourly-sched](./quick/260326-wac-build-futbin-health-monitor-hourly-sched/) |
 | 260327-gxd | Add volatility filter to exclude players with >30% price increase over 3 days | 2026-03-27 | c55dc80 | [260327-gxd-add-volatility-filter-to-exclude-players](./quick/260327-gxd-add-volatility-filter-to-exclude-players/) |
 | 260327-hus | Fix volatility filter to use SnapshotPricePoint MIN/MAX instead of MarketSnapshot earliest-vs-latest | 2026-03-27 | 8d4b8ea | [260327-hus-fix-volatility-filter-to-use-snapshotpri](./quick/260327-hus-fix-volatility-filter-to-use-snapshotpri/) |
+| 260329-gtn | Add min-total-observations, min-history-depth scorer filters and wire absolute volatility threshold | 2026-03-29 | 032431b | [260329-gtn-add-missing-scorer-filters-min-total-sal](./quick/260329-gtn-add-missing-scorer-filters-min-total-sal/) |
 
 ## Session Continuity
 
