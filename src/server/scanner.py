@@ -20,8 +20,10 @@ from tenacity import (
 )
 
 from src.config import (
+    DATABASE_URL,
     SCAN_INTERVAL_SECONDS,
     SCAN_CONCURRENCY,
+    SCAN_DISPATCH_BATCH_SIZE,
     SCANNER_MIN_PRICE,
     SCANNER_MAX_PRICE,
     INITIAL_SCORING_CONCURRENCY,
@@ -41,8 +43,15 @@ logger = logging.getLogger(__name__)
 class ScannerService:
     """Orchestrates player discovery, scoring, tier scheduling, and dispatch.
 
+    Scanner HTTP calls (to fut.gg) run in a ThreadPoolExecutor using a
+    synchronous httpx.Client. This isolates network I/O from the main FastAPI
+    event loop so 40 concurrent outbound connections don't starve API handlers.
+
+    DB writes remain on the main event loop via session_factory. The semaphore
+    + fire-and-forget dispatch pattern ensures DB writes are bounded.
+
     Args:
-        session_factory: Async session factory for DB writes.
+        session_factory: Async session factory for DB writes (main event loop).
         circuit_breaker: Shared circuit breaker for fut.gg API resilience.
     """
 
@@ -58,18 +67,57 @@ class ScannerService:
         self.last_scan_at: datetime | None = None
         self._scan_results_1h: list[tuple[datetime, bool]] = []
         self._queue_depth_cache: int = 0
+        self._active_tasks: set[asyncio.Task] = set()
+        self._sync_client: Optional[httpx.Client] = None
+        self._scan_executor = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start the FutGG HTTP client."""
+        """Start the scanner with HTTP calls offloaded to a thread pool.
+
+        Scanner HTTP calls (to fut.gg) run in a ThreadPoolExecutor using a
+        synchronous httpx.Client. This isolates scanner network I/O from the
+        main FastAPI event loop so 40 concurrent outbound connections don't
+        starve API request handlers.
+
+        DB writes remain on the main event loop via session_factory. The
+        fire-and-forget dispatch + semaphore ensures DB writes are bounded.
+
+        asyncpg can't create connections from background threads on Windows
+        (ProactorEventLoop limitation), so all DB access stays on the main loop.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._sync_client = httpx.Client(
+            base_url=self._client.BASE_URL,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/json",
+                "Referer": f"{self._client.BASE_URL}/players/",
+            },
+            timeout=30,
+            follow_redirects=True,
+        )
         await self._client.start()
+        self._scan_executor = ThreadPoolExecutor(
+            max_workers=SCAN_CONCURRENCY,
+            thread_name_prefix="scanner",
+        )
         self.is_running = True
-        logger.info("ScannerService started")
+        logger.info("ScannerService started (HTTP via thread pool)")
 
     async def stop(self) -> None:
-        """Stop the FutGG HTTP client."""
+        """Stop the scanner's HTTP client and thread pool."""
         await self._client.stop()
+        if self._sync_client:
+            self._sync_client.close()
+        if self._scan_executor:
+            self._scan_executor.shutdown(wait=False)
         self.is_running = False
         logger.info("ScannerService stopped")
 
@@ -274,6 +322,10 @@ class ScannerService:
 
         market_data = None
 
+        def _fetch_sync():
+            """Fetch market data using sync HTTP client (runs in thread pool)."""
+            return self._client.get_player_market_data_sync(ea_id, self._sync_client)
+
         @retry(
             retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
             stop=stop_after_attempt(3),
@@ -281,7 +333,8 @@ class ScannerService:
             reraise=True,
         )
         async def _fetch_with_retry():
-            return await self._client.get_player_market_data(ea_id)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(self._scan_executor, _fetch_sync)
 
         now = datetime.utcnow()
         try:
@@ -420,11 +473,19 @@ class ScannerService:
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
     async def dispatch_scans(self) -> None:
-        """Query due players and launch concurrent scan tasks.
+        """Query due players and launch concurrent scan tasks (fire-and-forget).
 
         Called every SCAN_DISPATCH_INTERVAL seconds by the APScheduler job.
-        Limits concurrency with an asyncio.Semaphore.
+        Returns immediately after creating tasks — does NOT await them.
+
+        HTTP calls are offloaded to the thread pool (via scan_player →
+        run_in_executor), so they don't compete with API handlers on the
+        main event loop. DB writes stay on the main loop but are bounded
+        by the semaphore (max SCAN_CONCURRENCY concurrent scan tasks).
         """
+        # Prune completed tasks from the previous cycle(s)
+        self._active_tasks = {t for t in self._active_tasks if not t.done()}
+
         now = datetime.utcnow()
         async with self._session_factory() as session:
             stmt = (
@@ -434,10 +495,12 @@ class ScannerService:
                     PlayerRecord.next_scan_at <= now,
                 )
                 .order_by(PlayerRecord.next_scan_at.asc())
+                .limit(SCAN_DISPATCH_BATCH_SIZE)
             )
             result = await session.execute(stmt)
             due_players = result.scalars().all()
 
+        logger.warning(f"dispatch_scans: found {len(due_players)} due players")
         if not due_players:
             return
 
@@ -448,11 +511,9 @@ class ScannerService:
             async with semaphore:
                 await self.scan_player(ea_id)
 
-        tasks = [
-            asyncio.create_task(_scan_with_sem(p.ea_id))
-            for p in due_players
-        ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for p in due_players:
+            task = self._scanner_loop.create_task(_scan_with_sem(p.ea_id))
+            self._active_tasks.add(task)
 
     # ── Scheduled aggregation and cleanup jobs ──────────────────────────────
 
