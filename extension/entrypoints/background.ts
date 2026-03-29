@@ -64,6 +64,9 @@ export default defineBackground({
         case 'DASHBOARD_STATUS_REQUEST':
           handleDashboardStatus().then(sendResponse);
           return true; // async response
+        case 'ACTIONS_NEEDED_REQUEST':
+          handleActionsNeeded().then(sendResponse);
+          return true;
         default:
           // PING/PONG and other types not handled here — content script handles those
           return false;
@@ -85,18 +88,21 @@ async function handlePortfolioLoad(): Promise<ExtensionMessage> {
     return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: stored };
   }
 
-  // Storage empty — try backend
+  // Storage empty — try backend (new shape: {portfolio, leftovers})
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/confirmed`);
     if (!res.ok) {
       return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null };
     }
     const json = await res.json();
-    if (!json.data || json.data.length === 0) {
+    // Handle both old (data) and new (portfolio) response shapes
+    const portfolioData = json.portfolio ?? json.data ?? [];
+    const leftoverData = json.leftovers ?? [];
+    if (portfolioData.length === 0 && leftoverData.length === 0) {
       return { type: 'PORTFOLIO_LOAD_RESULT', portfolio: null };
     }
 
-    const players = json.data.map(mapToPortfolioPlayer);
+    const players = portfolioData.map(mapToPortfolioPlayer);
     const portfolio: ConfirmedPortfolio = {
       players,
       budget: players.reduce((s: number, p: PortfolioPlayer) => s + p.price, 0),
@@ -299,6 +305,24 @@ async function handleDashboardStatus(): Promise<ExtensionMessage> {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return { type: 'DASHBOARD_STATUS_RESULT', data: null, error: message };
+  }
+}
+
+/**
+ * Fetch the unified actions-needed list from the backend.
+ * GET /api/v1/portfolio/actions-needed → ACTIONS_NEEDED_RESULT
+ */
+async function handleActionsNeeded(): Promise<ExtensionMessage> {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/v1/portfolio/actions-needed`);
+    if (!resp.ok) {
+      return { type: 'ACTIONS_NEEDED_RESULT', data: null, error: `Backend returned ${resp.status}` };
+    }
+    const data = await resp.json();
+    return { type: 'ACTIONS_NEEDED_RESULT', data, error: undefined };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return { type: 'ACTIONS_NEEDED_RESULT', data: null, error: message };
   }
 }
 
