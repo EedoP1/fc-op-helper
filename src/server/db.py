@@ -9,10 +9,11 @@ class Base(DeclarativeBase):
 
 
 def create_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
-    """Create a single async Postgres engine with asyncpg connection pool.
+    """Create a single async engine with appropriate pool configuration.
 
-    Postgres MVCC eliminates the need for separate read/write engines.
-    The connection pool handles concurrent scanner + API access.
+    For PostgreSQL, uses a sized asyncpg connection pool. For SQLite (used
+    in tests), pool_size and related params are omitted since StaticPool
+    does not support them.
 
     Args:
         db_url: SQLAlchemy database URL string.
@@ -20,6 +21,9 @@ def create_engine(db_url: str = DATABASE_URL) -> AsyncEngine:
     Returns:
         Configured AsyncEngine instance.
     """
+    is_sqlite = db_url.startswith("sqlite")
+    if is_sqlite:
+        return create_async_engine(db_url, echo=False)
     return create_async_engine(
         db_url,
         echo=False,
