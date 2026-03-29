@@ -435,18 +435,21 @@ async def test_generate_portfolio_excludes_volatile_player(volatility_integratio
     assert 4002 in ea_ids_in_response, "Stable player should be included"
 
 
-async def test_mid_window_spike_returns_to_baseline_not_flagged(volatile_db):
-    """Mid-window spike that returns to baseline is NOT flagged.
+async def test_mid_window_spike_returns_to_baseline_is_flagged(volatile_db):
+    """Mid-window spike that returns to baseline IS flagged.
 
-    Earliest=10000, latest=10500 — only +5% directional increase.
+    _get_volatile_ea_ids uses MIN/MAX over the lookback window, not
+    earliest/latest. A spike to 16000 from 10000 is a 60% absolute swing
+    even if the price later returned to 10500, so the player is correctly
+    flagged as volatile.
     """
     engine, session_factory = volatile_db
     now = datetime.utcnow()
     await _seed_snapshots(session_factory, [
         (3010, now - timedelta(days=2), 10000),
-        (3010, now - timedelta(days=1), 16000),  # spike (irrelevant — returned)
+        (3010, now - timedelta(days=1), 16000),  # 60% swing from min — volatile
         (3010, now, 10500),
     ])
     async with session_factory() as session:
         volatile = await _get_volatile_ea_ids(session, [3010])
-    assert 3010 not in volatile, "Price returned to baseline — not a sustained increase"
+    assert 3010 in volatile, "60% MIN/MAX swing should be flagged as volatile"

@@ -17,7 +17,9 @@ CB_RECOVERY_TIMEOUT = 60.0        # seconds before HALF_OPEN
 CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 
 # Scanner concurrency
-SCAN_CONCURRENCY = 40             # high concurrency to scan all ~1800 players every 5 min
+SCAN_CONCURRENCY = 40             # max concurrent scan tasks per dispatch cycle
+SCAN_DISPATCH_BATCH_SIZE = 200    # max players fetched per dispatch cycle (caps task burst)
+                                  # 200 * (300s / 30s) = 2000 scans/5min — enough for ~1800 players
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
 
 # Initial scoring (one-time after bootstrap)
@@ -34,6 +36,8 @@ MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
 # Listing tracking
 LISTING_RETENTION_DAYS = 7            # days to keep individual listing observations (per D-12)
 BOOTSTRAP_MIN_OBSERVATIONS = 10       # min resolved listings before v2 scorer activates per player
+MIN_TOTAL_RESOLVED_OBSERVATIONS = 20  # quality threshold: min total resolved observations for a trustworthy score
+MIN_OBSERVATION_HISTORY_DAYS = 3      # quality threshold: min days from earliest observation to now
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
