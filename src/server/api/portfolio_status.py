@@ -48,7 +48,7 @@ async def get_portfolio_status(request: Request):
     async with session_factory() as session:
         # Query 1 — All active portfolio slots
         slots_result = await session.execute(
-            select(PortfolioSlot.ea_id, PortfolioSlot.buy_price, PortfolioSlot.sell_price)
+            select(PortfolioSlot.ea_id, PortfolioSlot.buy_price, PortfolioSlot.sell_price, PortfolioSlot.is_leftover)
         )
         slots = slots_result.all()
 
@@ -207,6 +207,7 @@ async def get_portfolio_status(request: Request):
             "buy_price": buy_price,
             "sell_price": slot.sell_price,
             "current_bin": current_bin if status in HELD_STATUSES else None,
+            "is_leftover": slot.is_leftover,
         })
 
     return {

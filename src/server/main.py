@@ -44,6 +44,20 @@ async def lifespan(app: FastAPI):
 
     engine, session_factory = await create_engine_and_tables()
 
+    # Migrate: add is_leftover column to portfolio_slots if missing
+    async with engine.begin() as conn:
+        from sqlalchemy import text, inspect
+        def _check_column(connection):
+            insp = inspect(connection)
+            cols = [c["name"] for c in insp.get_columns("portfolio_slots")]
+            return "is_leftover" in cols
+        has_col = await conn.run_sync(_check_column)
+        if not has_col:
+            await conn.execute(text(
+                "ALTER TABLE portfolio_slots ADD COLUMN is_leftover BOOLEAN DEFAULT FALSE NOT NULL"
+            ))
+            logger.info("Migrated portfolio_slots: added is_leftover column")
+
     # Purge stale v1 scores that lack expected_profit_per_hour
     async with session_factory() as session:
         from sqlalchemy import delete
