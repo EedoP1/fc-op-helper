@@ -18,6 +18,7 @@ export type DashboardPlayer = {
   buy_price: number;
   sell_price: number;
   current_bin: number | null;
+  is_leftover: boolean;
 };
 
 /** Full response shape from GET /portfolio/status. */
@@ -28,6 +29,26 @@ export type DashboardData = {
     trade_counts: { bought: number; sold: number; expired: number };
   };
   players: DashboardPlayer[];
+};
+
+/** A single action item from GET /portfolio/actions-needed. */
+export type ActionNeeded = {
+  ea_id: number;
+  name: string;
+  rating: number;
+  position: string;
+  action: 'BUY' | 'LIST' | 'RELIST' | 'WAIT';
+  target_price: number;
+  buy_price: number;
+  sell_price: number;
+  is_leftover: boolean;
+  futgg_url: string | null;
+};
+
+/** Full response shape from GET /portfolio/actions-needed. */
+export type ActionsNeededData = {
+  actions: ActionNeeded[];
+  summary: { to_buy: number; to_list: number; to_relist: number; waiting: number };
 };
 
 export type ExtensionMessage =
@@ -49,7 +70,10 @@ export type ExtensionMessage =
   | { type: 'TRADE_REPORT_BATCH_RESULT'; succeeded: number[]; failed: number[]; error?: string }
   // Dashboard status (Phase 07.2: portfolio dashboard)
   | { type: 'DASHBOARD_STATUS_REQUEST' }
-  | { type: 'DASHBOARD_STATUS_RESULT'; data: DashboardData | null; error?: string };
+  | { type: 'DASHBOARD_STATUS_RESULT'; data: DashboardData | null; error?: string }
+  // Actions needed (unified buy/list/relist view)
+  | { type: 'ACTIONS_NEEDED_REQUEST' }
+  | { type: 'ACTIONS_NEEDED_RESULT'; data: ActionsNeededData | null; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.

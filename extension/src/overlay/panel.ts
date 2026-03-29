@@ -13,7 +13,7 @@
  */
 
 import type { PortfolioPlayer } from '../storage';
-import type { ExtensionMessage, DashboardData, DashboardPlayer } from '../messages';
+import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded } from '../messages';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ export function createOverlayPanel(): OverlayPanel {
   let draftBudgetRemaining = 0;
   let sortKey: SortKey = 'efficiency';
   let sortDir: SortDir = 'desc';
-  let activeTab: 'portfolio' | 'dashboard' = 'portfolio';
+  let activeTab: 'actions' | 'portfolio' | 'dashboard' = 'actions';
 
   // ── Container (panel) ──────────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ export function createOverlayPanel(): OverlayPanel {
    * Tab bar appears ONLY inside renderConfirmed (D-02).
    * @param onSwitch - called with the selected tab name when user clicks a tab
    */
-  function renderTabBar(onSwitch: (tab: 'portfolio' | 'dashboard') => void): HTMLDivElement {
+  function renderTabBar(onSwitch: (tab: 'actions' | 'portfolio' | 'dashboard') => void): HTMLDivElement {
     const bar = document.createElement('div');
     bar.className = 'op-seller-tab-bar';
     Object.assign(bar.style, {
@@ -189,9 +189,10 @@ export function createOverlayPanel(): OverlayPanel {
       borderBottom: '1px solid #444',
     });
 
-    (['portfolio', 'dashboard'] as const).forEach(tab => {
+    const tabLabels: Record<string, string> = { actions: 'Actions', portfolio: 'Portfolio', dashboard: 'Dashboard' };
+    (['actions', 'portfolio', 'dashboard'] as const).forEach(tab => {
       const btn = document.createElement('button');
-      btn.textContent = tab === 'portfolio' ? 'Portfolio' : 'Dashboard';
+      btn.textContent = tabLabels[tab];
       btn.dataset.tab = tab;
       const isActive = tab === activeTab;
       Object.assign(btn.style, {
@@ -481,6 +482,217 @@ export function createOverlayPanel(): OverlayPanel {
     });
 
     renderDashboardPlayerList();
+  }
+
+  // ── Actions tab ────────────────────────────────────────────────────────────
+
+  const ACTION_COLORS: Record<string, { bg: string; text: string }> = {
+    BUY:    { bg: '#1a3a1a', text: '#4CAF50' },
+    LIST:   { bg: '#1a2a3a', text: '#6cf' },
+    RELIST: { bg: '#3a2a00', text: '#FFB300' },
+    WAIT:   { bg: '#2a2a3e', text: '#888' },
+  };
+
+  /**
+   * Render the actions-needed content into the given parent element.
+   * Shows a summary bar + flat list of what to do for each player.
+   */
+  function renderActionsContent(parent: HTMLElement, data: ActionsNeededData): void {
+    // Summary bar
+    const summaryBar = document.createElement('div');
+    summaryBar.className = 'op-seller-actions-summary';
+    Object.assign(summaryBar.style, {
+      display: 'flex',
+      justifyContent: 'space-between',
+      background: '#2a2a3e',
+      padding: '10px',
+      borderRadius: '4px',
+      marginBottom: '12px',
+      fontSize: '12px',
+    });
+
+    const s = data.summary;
+    const items = [
+      { label: 'Buy', count: s.to_buy, color: '#4CAF50' },
+      { label: 'List', count: s.to_list, color: '#6cf' },
+      { label: 'Relist', count: s.to_relist, color: '#FFB300' },
+      { label: 'Waiting', count: s.waiting, color: '#888' },
+    ];
+    items.forEach(item => {
+      const el = document.createElement('div');
+      el.innerHTML = `<div style="color:#aaa">${item.label}</div><div style="color:${item.color};font-weight:bold">${item.count}</div>`;
+      summaryBar.appendChild(el);
+    });
+    parent.appendChild(summaryBar);
+
+    // Refresh button
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.className = 'op-seller-actions-refresh';
+    styleButton(refreshBtn, '#2196F3', { marginTop: '0', marginBottom: '8px', padding: '6px 12px', fontSize: '12px' });
+    refreshBtn.addEventListener('click', () => renderActions());
+    parent.appendChild(refreshBtn);
+
+    // Filter: hide WAIT by default
+    let showWaiting = false;
+    const toggleWaitBtn = document.createElement('button');
+    toggleWaitBtn.textContent = showWaiting ? 'Hide Waiting' : 'Show Waiting';
+    styleButton(toggleWaitBtn, '#444', { marginTop: '0', marginBottom: '8px', padding: '4px 10px', fontSize: '11px' });
+    parent.appendChild(toggleWaitBtn);
+
+    const listEl = document.createElement('div');
+    parent.appendChild(listEl);
+
+    function renderActionList(): void {
+      listEl.innerHTML = '';
+      toggleWaitBtn.textContent = showWaiting ? 'Hide Waiting' : `Show Waiting (${s.waiting})`;
+
+      const filtered = showWaiting ? data.actions : data.actions.filter(a => a.action !== 'WAIT');
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.textContent = 'Nothing to do right now.';
+        empty.style.color = '#aaa';
+        empty.style.fontSize = '12px';
+        empty.style.padding = '8px 0';
+        listEl.appendChild(empty);
+        return;
+      }
+
+      filtered.forEach((item: ActionNeeded) => {
+        const row = document.createElement('div');
+        row.className = 'op-seller-action-row';
+        Object.assign(row.style, {
+          background: '#2a2a3e',
+          padding: '8px 10px',
+          marginBottom: '4px',
+          borderRadius: '4px',
+          borderLeft: `3px solid ${(ACTION_COLORS[item.action] || ACTION_COLORS.WAIT).text}`,
+        });
+
+        // Line 1: Action badge + player name
+        const topLine = document.createElement('div');
+        topLine.style.display = 'flex';
+        topLine.style.justifyContent = 'space-between';
+        topLine.style.alignItems = 'center';
+        topLine.style.marginBottom = '2px';
+
+        const nameLink = document.createElement('a');
+        const nameLinkUrl = item.futgg_url
+          ? `https://www.fut.gg${item.futgg_url}`
+          : `https://www.fut.gg/players/?search=${encodeURIComponent(item.name)}`;
+        nameLink.href = nameLinkUrl;
+        nameLink.target = '_blank';
+        nameLink.rel = 'noopener';
+        nameLink.textContent = item.name;
+        Object.assign(nameLink.style, {
+          color: '#6cf',
+          textDecoration: 'none',
+          fontWeight: 'bold',
+          fontSize: '13px',
+          cursor: 'pointer',
+        });
+        nameLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.open(nameLinkUrl, '_blank', 'noopener');
+        });
+        nameLink.addEventListener('mouseenter', () => { nameLink.style.textDecoration = 'underline'; });
+        nameLink.addEventListener('mouseleave', () => { nameLink.style.textDecoration = 'none'; });
+        topLine.appendChild(nameLink);
+
+        const badgeContainer = document.createElement('div');
+        badgeContainer.style.display = 'flex';
+        badgeContainer.style.gap = '4px';
+        badgeContainer.style.alignItems = 'center';
+
+        // Leftover badge
+        if (item.is_leftover) {
+          const leftoverBadge = document.createElement('span');
+          leftoverBadge.textContent = 'OLD';
+          Object.assign(leftoverBadge.style, {
+            background: '#3a2a3a',
+            color: '#c8a',
+            padding: '2px 5px',
+            borderRadius: '3px',
+            fontSize: '9px',
+            fontWeight: 'bold',
+          });
+          badgeContainer.appendChild(leftoverBadge);
+        }
+
+        // Action badge
+        const badge = document.createElement('span');
+        badge.textContent = item.action;
+        const colors = ACTION_COLORS[item.action] || ACTION_COLORS.WAIT;
+        Object.assign(badge.style, {
+          background: colors.bg,
+          color: colors.text,
+          padding: '2px 6px',
+          borderRadius: '3px',
+          fontSize: '10px',
+          fontWeight: 'bold',
+        });
+        badgeContainer.appendChild(badge);
+        topLine.appendChild(badgeContainer);
+        row.appendChild(topLine);
+
+        // Line 2: Rating, position, target price
+        const detailLine = document.createElement('div');
+        detailLine.style.fontSize = '11px';
+        detailLine.style.color = '#aaa';
+        const priceLabel = item.action === 'BUY' ? 'Buy at' : 'Sell at';
+        detailLine.textContent = `${item.rating} ${item.position} \u2022 ${priceLabel}: ${fmt(item.target_price)}`;
+        row.appendChild(detailLine);
+
+        listEl.appendChild(row);
+      });
+    }
+
+    toggleWaitBtn.addEventListener('click', () => {
+      showWaiting = !showWaiting;
+      renderActionList();
+    });
+
+    renderActionList();
+  }
+
+  /**
+   * Render the actions tab: fetch from backend, show loading, then render content.
+   */
+  function renderActions(): void {
+    const contentArea = container.querySelector('.op-seller-tab-content') as HTMLElement | null;
+    const content = contentArea || container;
+
+    if (contentArea) contentArea.innerHTML = '';
+
+    const loading = document.createElement('div');
+    loading.textContent = 'Loading actions...';
+    loading.style.color = '#aaa';
+    loading.style.padding = '16px 0';
+    content.appendChild(loading);
+
+    chrome.runtime.sendMessage({ type: 'ACTIONS_NEEDED_REQUEST' } satisfies ExtensionMessage)
+      .then((res: ExtensionMessage) => {
+        if (res.type === 'ACTIONS_NEEDED_RESULT') {
+          content.innerHTML = '';
+          if (res.error || !res.data) {
+            const errEl = document.createElement('div');
+            errEl.textContent = `Error: ${res.error || 'No data'}`;
+            errEl.style.color = '#f44';
+            content.appendChild(errEl);
+            return;
+          }
+          renderActionsContent(content, res.data);
+        }
+      })
+      .catch((err: Error) => {
+        content.innerHTML = '';
+        const errEl = document.createElement('div');
+        errEl.textContent = `Error: ${err.message}`;
+        errEl.style.color = '#f44';
+        content.appendChild(errEl);
+      });
   }
 
   /**
@@ -953,7 +1165,9 @@ export function createOverlayPanel(): OverlayPanel {
         });
       });
 
-      if (activeTab === 'portfolio') {
+      if (activeTab === 'actions') {
+        renderActions();
+      } else if (activeTab === 'portfolio') {
         renderPortfolioContent(contentArea);
       } else {
         renderDashboard();

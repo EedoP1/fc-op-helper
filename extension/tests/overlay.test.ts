@@ -55,6 +55,22 @@ describe('overlay panel', () => {
     // Reset DOM between tests
     document.body.innerHTML = '';
     mockSendMessage.mockReset();
+    // Default: return empty actions-needed response (confirmed state opens Actions tab)
+    mockSendMessage.mockImplementation((msg: any) => {
+      if (msg.type === 'ACTIONS_NEEDED_REQUEST') {
+        return Promise.resolve({
+          type: 'ACTIONS_NEEDED_RESULT',
+          data: { actions: [], summary: { to_buy: 0, to_list: 0, to_relist: 0, waiting: 0 } },
+        });
+      }
+      if (msg.type === 'DASHBOARD_STATUS_REQUEST') {
+        return Promise.resolve({
+          type: 'DASHBOARD_STATUS_RESULT',
+          data: { summary: { realized_profit: 0, unrealized_pnl: 0, trade_counts: { bought: 0, sold: 0, expired: 0 } }, players: [] },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
   });
 
   afterEach(() => {
@@ -141,6 +157,11 @@ describe('overlay panel', () => {
       budget_used: 50000,
       budget_remaining: 50000,
     });
+
+    // Switch to Portfolio tab (Actions is default now)
+    const portfolioTab = Array.from(panel.container.querySelectorAll('button')).find(b => b.textContent === 'Portfolio') as HTMLButtonElement;
+    expect(portfolioTab).toBeTruthy();
+    portfolioTab.click();
 
     // No remove buttons in confirmed state
     const rows = panel.container.querySelectorAll('.op-seller-player-row');
@@ -255,6 +276,10 @@ describe('overlay panel', () => {
       budget_used: 50000,
       budget_remaining: 50000,
     });
+
+    // Switch to Portfolio tab first (Actions is default)
+    const portfolioTab = Array.from(panel.container.querySelectorAll('button')).find(b => b.textContent === 'Portfolio') as HTMLButtonElement;
+    portfolioTab.click();
 
     const allButtons = panel.container.querySelectorAll('button');
     const regenBtn = Array.from(allButtons).find(b => b.textContent?.includes('Regenerate')) as HTMLButtonElement;
