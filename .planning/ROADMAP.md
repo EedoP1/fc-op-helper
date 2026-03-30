@@ -159,9 +159,9 @@ Plans:
 **Goal:** Separate the scanner (background market scanning) and API server into independent processes to eliminate resource contention that causes production API timeouts. Scanner writes metrics to DB for health endpoint. Both processes share the same Postgres database.
 **Requirements**: SPLIT-01, SPLIT-02, SPLIT-03, SPLIT-04, SPLIT-05, SPLIT-06
 **Depends on:** Phase 09.1
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 10-01-PLAN.md — ScannerStatus DB model, scanner upsert in dispatch_scans, health endpoint rewrite to read from DB
 - [x] 10-02-PLAN.md — scanner_main.py entry point, strip scanner/scheduler from API main.py lifespan
-- [ ] 10-03-PLAN.md — Dockerfile, docker-compose.yml api+scanner services, integration test conftest rewrite
+- [x] 10-03-PLAN.md — Dockerfile, docker-compose.yml api+scanner services, integration test conftest rewrite

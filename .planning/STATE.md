@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Ready to execute
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-03-30T10:04:40.078Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 10-03-PLAN.md
+last_updated: "2026-03-30T10:08:31.203Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 22
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -71,6 +71,7 @@ Plan: 3 of 3
 | Phase 09.1-migrate-from-sqlite P03 | 3 | 2 tasks | 3 files |
 | Phase 10-split-scanner-and-api-into-separate-processes P01 | 5 | 2 tasks | 4 files |
 | Phase 10-split-scanner-and-api-into-separate-processes P02 | 2 | 2 tasks | 2 files |
+| Phase 10-split-scanner-and-api-into-separate-processes P03 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,8 @@ Plan: 3 of 3
 - [Phase 10-split-scanner-and-api-into-separate-processes]: ScannerStatus singleton row (id=1) upserted every dispatch cycle; startup race returns degraded 'unknown' state
 - [Phase 10-split-scanner-and-api-into-separate-processes]: scanner_main.py blocks via asyncio.Event().wait() — Docker SIGTERM triggers finally block for graceful shutdown
 - [Phase 10-split-scanner-and-api-into-separate-processes]: API lifespan retains inline migrations and v1 score purge — idempotent DB ops safe in API process
+- [Phase 10-split-scanner-and-api-into-separate-processes]: Integration tests use Docker Compose (not subprocess.Popen) — exact production parity (D-07)
+- [Phase 10-split-scanner-and-api-into-separate-processes]: docker-compose.test.yml uses postgres-test Docker DNS (not localhost:5433) — containers reach each other via internal service DNS on port 5432
 
 ### Roadmap Evolution
 
@@ -165,5 +168,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-30
-Stopped at: Completed 10-02-PLAN.md
+Stopped at: Completed 10-03-PLAN.md
 Resume file: None
