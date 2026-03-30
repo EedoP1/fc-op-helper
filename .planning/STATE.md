@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Milestone complete
-stopped_at: Phase 8 context gathered
-last_updated: "2026-03-30T14:47:29.928Z"
+status: Executing Phase 08
+stopped_at: "Phase 08 Plan 01: Task 2 complete (backend endpoints); Task 1 awaiting human DOM inspection"
+last_updated: "2026-03-30T18:08:53.790Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 27
+  completed_plans: 23
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 10 — split-scanner-and-api-into-separate-processes
+**Current focus:** Phase 08 — dom-automation-layer
 
 ## Current Position
 
-Phase: 10
-Plan: Not started
+Phase: 08 (dom-automation-layer) — EXECUTING
+Plan: 1 of 5
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Plan: Not started
 | Phase 10-split-scanner-and-api-into-separate-processes P01 | 5 | 2 tasks | 4 files |
 | Phase 10-split-scanner-and-api-into-separate-processes P02 | 2 | 2 tasks | 2 files |
 | Phase 10-split-scanner-and-api-into-separate-processes P03 | 5 | 2 tasks | 4 files |
+| Phase 08 P01 | 152 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,7 @@ Plan: Not started
 - [Phase 10-split-scanner-and-api-into-separate-processes]: API lifespan retains inline migrations and v1 score purge — idempotent DB ops safe in API process
 - [Phase 10-split-scanner-and-api-into-separate-processes]: Integration tests use Docker Compose (not subprocess.Popen) — exact production parity (D-07)
 - [Phase 10-split-scanner-and-api-into-separate-processes]: docker-compose.test.yml uses postgres-test Docker DNS (not localhost:5433) — containers reach each other via internal service DNS on port 5432
+- [Phase 08-01]: Raw SQL text() upsert for daily-cap increment — cross-dialect (PostgreSQL + SQLite test compat)
 
 ### Roadmap Evolution
 
@@ -170,5 +172,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-30
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-dom-automation-layer/08-CONTEXT.md
+Stopped at: Phase 08 Plan 01: Task 2 complete (backend endpoints); Task 1 awaiting human DOM inspection
+Resume file: None
