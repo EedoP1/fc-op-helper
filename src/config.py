@@ -18,8 +18,8 @@ CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 
 # Scanner concurrency
 SCAN_CONCURRENCY = 40             # max concurrent scan tasks per dispatch cycle
-SCAN_DISPATCH_BATCH_SIZE = 200    # max players fetched per dispatch cycle (caps task burst)
-                                  # 200 * (300s / 30s) = 2000 scans/5min — enough for ~1800 players
+SCAN_DISPATCH_BATCH_SIZE = 500    # max players fetched per dispatch cycle (caps task burst)
+                                  # 500 * (300s / 30s) = 5000 scans/5min — well above ~2014 players
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
 
 # Initial scoring (one-time after bootstrap)
@@ -42,11 +42,7 @@ MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consi
 
 # OP sell margin tiers (highest first)
 MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
-
-# Volatility filter — exclude players with large recent price spikes
-VOLATILITY_MAX_PRICE_INCREASE_PCT = 30  # percent; players with >30% increase are excluded
-VOLATILITY_MAX_PRICE_INCREASE_ABS = 10_000  # coins; players with >10k increase are excluded
-VOLATILITY_LOOKBACK_DAYS = 7            # how far back to check for the price spike
+MAX_OP_MARGIN_PCT = 44  # ignore listings priced above this margin (junk/troll listings)
 
 # Database
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://op_seller:op_seller@localhost:5432/op_seller")
