@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Executing Phase 08
-stopped_at: "Phase 08 Plan 01: Task 2 complete (backend endpoints); Task 1 awaiting human DOM inspection"
-last_updated: "2026-03-30T18:08:53.790Z"
+status: Ready to execute
+stopped_at: Completed Phase 08 Plan 01 — automation selectors and backend endpoints both done
+last_updated: "2026-03-30T19:20:56.841Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 9
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 08 (dom-automation-layer) — EXECUTING
-Plan: 1 of 5
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Plan: 1 of 5
 | Phase 10-split-scanner-and-api-into-separate-processes P02 | 2 | 2 tasks | 2 files |
 | Phase 10-split-scanner-and-api-into-separate-processes P03 | 5 | 2 tasks | 4 files |
 | Phase 08 P01 | 152 | 1 tasks | 4 files |
+| Phase 08 P01 | 300 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,10 @@ Plan: 1 of 5
 - [Phase 10-split-scanner-and-api-into-separate-processes]: Integration tests use Docker Compose (not subprocess.Popen) — exact production parity (D-07)
 - [Phase 10-split-scanner-and-api-into-separate-processes]: docker-compose.test.yml uses postgres-test Docker DNS (not localhost:5433) — containers reach each other via internal service DNS on port 5432
 - [Phase 08-01]: Raw SQL text() upsert for daily-cap increment — cross-dialect (PostgreSQL + SQLite test compat)
+- [Phase 08]: EA Web App ignores .click() — full PointerEvent+MouseEvent sequence (pointerdown, mousedown, pointerup, mouseup, click) required for automation, verified live
+- [Phase 08]: Dialog button ordering inconsistent — match by .primary class or text, never by :first-child/:last-child position
+- [Phase 08]: Quick list 'List for Transfer' button is btn-standard.primary NOT call-to-action (Enhancer uses call-to-action)
+- [Phase 08]: Filter dropdowns indexed 0-8 in DOM order: Quality=0, EvolutionStatus=1, Rarity=2, Position=3, ChemStyle=4, Country=5, League=6, Club=7, PlayStyles=8
 
 ### Roadmap Evolution
 
@@ -172,6 +177,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-30 - Completed quick task 260330-ujg: Factor OP sale count into portfolio scoring
-Stopped at: Phase 08 Plan 01: Task 2 complete (backend endpoints); Task 1 awaiting human DOM inspection
+Last activity: 2026-03-30
+Stopped at: Completed Phase 08 Plan 01 — automation selectors and backend endpoints both done
 Resume file: None
