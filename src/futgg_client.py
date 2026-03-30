@@ -116,6 +116,7 @@ class FutGGClient:
             return None
 
         raw_auctions = prices.get("liveAuctions", [])
+        max_price_range = prices.get("priceRange", {}).get("maxPrice")
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
@@ -125,6 +126,7 @@ class FutGGClient:
             live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
             live_auctions_raw=raw_auctions,  # preserve all fields for fingerprinting (D-04)
             futgg_url=defn.get("url"),
+            max_price_range=max_price_range,
         )
 
     def get_player_market_data_sync(
@@ -173,6 +175,7 @@ class FutGGClient:
             return None
 
         raw_auctions = prices.get("liveAuctions", [])
+        max_price_range = prices.get("priceRange", {}).get("maxPrice")
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
@@ -182,6 +185,7 @@ class FutGGClient:
             live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
             live_auctions_raw=raw_auctions,
             futgg_url=defn.get("url"),
+            max_price_range=max_price_range,
         )
 
     async def get_batch_market_data(
