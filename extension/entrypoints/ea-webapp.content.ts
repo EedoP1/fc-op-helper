@@ -72,6 +72,22 @@ export default defineContentScript({
           return false;
         case 'ACTIONS_NEEDED_RESULT':
           return false;
+        // Automation control — start/stop handled by AutomationEngine directly (Plan 05)
+        case 'AUTOMATION_START':
+        case 'AUTOMATION_STOP':
+        case 'AUTOMATION_STATUS_REQUEST':
+          // These will be handled by the automation engine directly (Plan 05)
+          return false;
+        case 'AUTOMATION_START_RESULT':
+        case 'AUTOMATION_STOP_RESULT':
+        case 'AUTOMATION_STATUS_RESULT':
+        case 'DAILY_CAP_REQUEST':
+        case 'DAILY_CAP_RESULT':
+        case 'DAILY_CAP_INCREMENT':
+        case 'DAILY_CAP_INCREMENT_RESULT':
+        case 'FRESH_PRICE_REQUEST':
+        case 'FRESH_PRICE_RESULT':
+          return false;
         default:
           assertNever(msg);
       }

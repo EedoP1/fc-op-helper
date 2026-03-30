@@ -80,3 +80,36 @@ export const reportedOutcomesItem = storage.defineItem<string[]>(
   'local:reportedOutcomesV2',
   { fallback: [] },
 );
+
+/**
+ * Automation engine state persisted across service worker termination.
+ * Written by AutomationEngine.persistStatus() on every state transition.
+ * Null until automation is first started.
+ */
+export type AutomationStatus = {
+  isRunning: boolean;
+  state: 'IDLE' | 'BUYING' | 'LISTING' | 'SCANNING' | 'RELISTING' | 'STOPPED' | 'ERROR';
+  currentAction: string | null;
+  lastEvent: string | null;
+  sessionProfit: number;
+  errorMessage: string | null;
+};
+
+export const automationStatusItem = storage.defineItem<AutomationStatus | null>(
+  'local:automationStatus',
+  { fallback: null },
+);
+
+/**
+ * Activity log entry — one line of human-readable automation event text.
+ * Capped at 200 entries by AutomationEngine.log() to prevent storage bloat.
+ */
+export type ActivityLogEntry = {
+  timestamp: string;  // ISO 8601
+  message: string;
+};
+
+export const activityLogItem = storage.defineItem<ActivityLogEntry[]>(
+  'local:activityLog',
+  { fallback: [] },
+);
