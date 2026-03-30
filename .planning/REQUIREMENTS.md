@@ -49,8 +49,8 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [x] **SPLIT-02**: API process starts without scanner, scheduler, FutGGClient, or CircuitBreaker in memory — only DB pool and FastAPI routers
 - [x] **SPLIT-03**: Scanner writes operational metrics (is_running, success_rate_1h, last_scan_at, queue_depth, circuit_breaker_state) to a `scanner_status` DB table every dispatch cycle
 - [x] **SPLIT-04**: Health endpoint (`/api/v1/health`) reads scanner metrics from the `scanner_status` DB table instead of in-memory `app.state.scanner`, returning degraded "unknown" state when scanner has not yet written
-- [ ] **SPLIT-05**: Both processes managed via Docker Compose — `docker compose up` starts postgres, api, and scanner services with auto-restart on failure
-- [ ] **SPLIT-06**: Integration tests use Docker Compose (docker-compose.test.yml override) to start api and scanner containers against the test database, matching production deployment exactly
+- [x] **SPLIT-05**: Both processes managed via Docker Compose — `docker compose up` starts postgres, api, and scanner services with auto-restart on failure
+- [x] **SPLIT-06**: Integration tests use Docker Compose (docker-compose.test.yml override) to start api and scanner containers against the test database, matching production deployment exactly
 
 ## v2 Requirements
 
@@ -117,8 +117,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SPLIT-02 | Phase 10 | Complete |
 | SPLIT-03 | Phase 10 | Complete |
 | SPLIT-04 | Phase 10 | Complete |
-| SPLIT-05 | Phase 10 | Pending |
-| SPLIT-06 | Phase 10 | Pending |
+| SPLIT-05 | Phase 10 | Complete |
+| SPLIT-06 | Phase 10 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 30 total
