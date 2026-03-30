@@ -18,11 +18,19 @@ import { createOverlayPanel } from '../src/overlay/panel';
 import { readTransferList, isTransferListPage } from '../src/trade-observer';
 import { portfolioItem, reportedOutcomesItem } from '../src/storage';
 import { TRANSFER_LIST_CONTAINER } from '../src/selectors';
+import { AutomationEngine } from '../src/automation';
+import { runAutomationLoop } from '../src/automation-loop';
 
 export default defineContentScript({
   matches: ['https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*'],
   runAt: 'document_idle',
   main(ctx) {
+    // ── Automation engine (Plan 05: instantiated before handleMessage so the
+    //    AUTOMATION_STATUS_REQUEST handler can reference it) ──────────────────
+    const automationEngine = new AutomationEngine(
+      (msg) => chrome.runtime.sendMessage(msg),
+    );
+
     /**
      * Handle incoming messages from the service worker.
      * Returns true to signal async response (required for Chrome MV3).
@@ -72,12 +80,15 @@ export default defineContentScript({
           return false;
         case 'ACTIONS_NEEDED_RESULT':
           return false;
-        // Automation control — start/stop handled by AutomationEngine directly (Plan 05)
+        // Automation control
         case 'AUTOMATION_START':
         case 'AUTOMATION_STOP':
-        case 'AUTOMATION_STATUS_REQUEST':
-          // These will be handled by the automation engine directly (Plan 05)
+          // These are request types sent TO the service worker — not received via onMessage.
           return false;
+        case 'AUTOMATION_STATUS_REQUEST':
+          // Return current engine status for external queries (e.g. service worker polling)
+          sendResponse({ type: 'AUTOMATION_STATUS_RESULT', status: automationEngine.getStatus() } satisfies ExtensionMessage);
+          return true;
         case 'AUTOMATION_START_RESULT':
         case 'AUTOMATION_STOP_RESULT':
         case 'AUTOMATION_STATUS_RESULT':
@@ -108,8 +119,27 @@ export default defineContentScript({
     document.body.appendChild(panel.container);
     document.body.appendChild(panel.toggle);
 
-    // Clean up on content script invalidation
-    ctx.onInvalidated(() => panel.destroy());
+    // Clean up on content script invalidation (panel + automation engine)
+    ctx.onInvalidated(() => {
+      panel.destroy();
+      automationEngine.stop();
+    });
+
+    // ── Automation event listeners (Plan 05: D-16, UI-04) ─────────────────
+    // Overlay panel dispatches custom events; content script wires them to the engine.
+
+    document.addEventListener('op-seller-automation-start', async () => {
+      const result = await automationEngine.start();
+      if (result.success) {
+        // Run the main loop — errors are funneled through engine.setError (AUTO-06)
+        runAutomationLoop(automationEngine, (msg) => chrome.runtime.sendMessage(msg))
+          .catch(err => automationEngine.setError(err instanceof Error ? err.message : String(err)));
+      }
+    });
+
+    document.addEventListener('op-seller-automation-stop', async () => {
+      await automationEngine.stop();
+    });
 
     // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────
     let tradeObserver: MutationObserver | null = null;
