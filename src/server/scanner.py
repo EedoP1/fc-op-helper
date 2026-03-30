@@ -430,6 +430,7 @@ class ScannerService:
                     ea_id=ea_id,
                     session=session,
                     buy_price=market_data.current_lowest_bin,
+                    max_price_range=market_data.max_price_range,
                 )
 
             t_score = time.monotonic()
