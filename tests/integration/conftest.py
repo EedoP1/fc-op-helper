@@ -97,7 +97,7 @@ def live_server(test_db_url, server_port):
             sys.executable,
             "-m",
             "uvicorn",
-            "tests.integration.server_harness:app",
+            "src.server.main:app",
             "--host",
             "127.0.0.1",
             "--port",
