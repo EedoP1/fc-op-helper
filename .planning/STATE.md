@@ -172,6 +172,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-30
+Last activity: 2026-03-30 - Completed quick task 260330-ujg: Factor OP sale count into portfolio scoring
 Stopped at: Phase 08 Plan 01: Task 2 complete (backend endpoints); Task 1 awaiting human DOM inspection
 Resume file: None
