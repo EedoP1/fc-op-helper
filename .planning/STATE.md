@@ -168,6 +168,7 @@ None yet.
 | 260330-gsm | Drop SnapshotSale/SnapshotPricePoint ORM models and all references (22GB dead tables) | 2026-03-30 | 02afbbb | [260330-gsm-drop-snapshot-sales-and-snapshot-price-p](./quick/260330-gsm-drop-snapshot-sales-and-snapshot-price-p/) |
 | 260330-nuv | Add filter to ignore base icon players in portfolio endpoints and scanner | 2026-03-30 | 599c9b9 | [260330-nuv-add-filter-to-ignore-base-icon-players](./quick/260330-nuv-add-filter-to-ignore-base-icon-players/) |
 | 260330-ocv | Filter margin tiers where sell_price exceeds EA max BIN range (priceRange.maxPrice) | 2026-03-30 | d8f9834 | [260330-ocv-filter-players-whose-sell-price-exceeds-](./quick/260330-ocv-filter-players-whose-sell-price-exceeds-/) |
+| 260330-ujg | Factor op_sales count into portfolio scoring via log confidence multiplier | 2026-03-30 | a8e86c9 | [260330-ujg-factor-op-sale-count-into-portfolio-scor](./quick/260330-ujg-factor-op-sale-count-into-portfolio-scor/) |
 
 ## Session Continuity
 

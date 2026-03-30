@@ -17,8 +17,9 @@ Algorithm:
 from __future__ import annotations
 
 import logging
+import math
 
-from src.config import TARGET_PLAYER_COUNT
+from src.config import TARGET_PLAYER_COUNT, MIN_OP_OBSERVATIONS
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,17 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
     ]
     logger.warning("OPTIMIZER v2: %d -> %d after EPPH + op_sell_rate filter", before, len(scored))
 
-    # Compute ranking values
+    # Compute ranking values with op_sales confidence boost.
+    # Confidence multiplier: log(1+op_sales) / log(1+MIN_OP_OBSERVATIONS)
+    # At minimum qualifying count (MIN_OP_OBSERVATIONS=3): multiplier = 1.0 (no boost)
+    # At 20 OP sales: ~2.2x, at 50: ~2.8x, at 100: ~3.3x
+    _log_min = math.log(1 + MIN_OP_OBSERVATIONS)
     for s in scored:
         epph = s.get("expected_profit_per_hour") or 0
         s["efficiency"] = epph / s["buy_price"] if s["buy_price"] > 0 else 0
-        s["_ranking_profit"] = epph
+        op_count = s.get("op_sales") or 0
+        confidence = math.log(1 + op_count) / _log_min if op_count > 0 else 1.0
+        s["_ranking_profit"] = epph * confidence
 
     # Sort by EPPH descending for greedy fill
     scored.sort(key=lambda s: s["_ranking_profit"], reverse=True)

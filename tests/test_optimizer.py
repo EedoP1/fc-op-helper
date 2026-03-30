@@ -4,7 +4,7 @@ from src.optimizer import optimize_portfolio
 from src.models import Player
 
 
-def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hour=None):
+def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hour=None, op_sales=10):
     """Helper to create a scored player dict.
 
     Args:
@@ -14,6 +14,7 @@ def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hou
         op_ratio: OP sale ratio (0.0–1.0).
         expected_profit_per_hour: v2 scorer metric (float). Defaults to
             net_profit * op_ratio when not provided.
+        op_sales: Absolute count of OP sales (confidence signal). Defaults to 10.
     """
     epph = expected_profit_per_hour if expected_profit_per_hour is not None else net_profit * op_ratio
     return {
@@ -27,7 +28,7 @@ def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hou
         "expected_profit": net_profit * op_ratio,
         "sell_price": int(buy_price * 1.40),
         "margin_pct": 40,
-        "op_sales": 10,
+        "op_sales": op_sales,
         "total_sales": 100,
         "op_sales_24h": 24,
         "sales_per_hour": 10,
@@ -159,3 +160,63 @@ def test_portfolio_with_varied_efficiency():
     # Verify _ranking_profit is stripped (all entries should still have expected_profit)
     for entry in result:
         assert "expected_profit" in entry
+
+
+# ── op_sales confidence boost tests ──────────────────────────────────────────
+
+def test_higher_op_sales_wins_same_epph():
+    """Player with 50 op_sales and EPPH=400 ranks above player with 3 op_sales and EPPH=400.
+
+    When EPPH is exactly equal, the confidence multiplier determines which player
+    the upgrade loop prefers — the high-volume player should win. We verify this by
+    giving the low-volume player a slightly higher buy_price so the upgrade loop
+    has a reason to swap it out.
+    """
+    # Budget fits exactly one of the expensive players; greedy fills high-epph first
+    # With confidence boost: high_volume ranking = 400 * 2.83 = 1132
+    #                        low_volume ranking  = 400 * 1.0  = 400
+    # Both EPPH=400 but high_volume has higher _ranking_profit → selected first
+    low_volume = _make_scored(1, 10000, 4000, 0.1, expected_profit_per_hour=400, op_sales=3)
+    high_volume = _make_scored(2, 10000, 4000, 0.1, expected_profit_per_hour=400, op_sales=50)
+    # Tight budget: fits exactly one of the two expensive players + fillers
+    result = optimize_portfolio([low_volume, high_volume] + _make_fillers(), budget=10081)
+    real = [s for s in result if s["player"].resource_id in (1, 2)]
+    assert len(real) == 1
+    assert real[0]["player"].resource_id == 2, "Higher op_sales player should be selected when budget is tight"
+
+
+def test_volume_boost_overcomes_small_epph_gap():
+    """Player with 50 op_sales and EPPH=350 is selected over player with 3 op_sales and EPPH=400.
+
+    With a budget tight enough for exactly one of the two expensive players,
+    the confidence-adjusted ranking should favour the high-volume player:
+      high_volume: 350 * log(51)/log(4) = ~990
+      min_volume:  400 * log(4)/log(4)  = 400
+    """
+    min_volume = _make_scored(1, 10000, 4000, 0.1, expected_profit_per_hour=400, op_sales=3)
+    high_volume = _make_scored(2, 10000, 3500, 0.1, expected_profit_per_hour=350, op_sales=50)
+    result = optimize_portfolio([min_volume, high_volume] + _make_fillers(), budget=10081)
+    real = [s for s in result if s["player"].resource_id in (1, 2)]
+    assert len(real) == 1
+    assert real[0]["player"].resource_id == 2, "High-volume player should overcome small EPPH gap"
+
+
+def test_large_epph_dominates_op_sales_count():
+    """Player with 3 op_sales and EPPH=2000 is selected over player with 50 op_sales and EPPH=100."""
+    low_count_high_epph = _make_scored(1, 10000, 2000, 0.1, expected_profit_per_hour=2000, op_sales=3)
+    high_count_low_epph = _make_scored(2, 10000, 1000, 0.1, expected_profit_per_hour=100, op_sales=50)
+    result = optimize_portfolio([low_count_high_epph, high_count_low_epph] + _make_fillers(), budget=10081)
+    real = [s for s in result if s["player"].resource_id in (1, 2)]
+    assert len(real) == 1
+    # low_count_high_epph: 2000 * 1.0  = 2000
+    # high_count_low_epph: 100  * ~2.83 = ~283
+    assert real[0]["player"].resource_id == 1, "Large EPPH should dominate over op_sales count boost"
+
+
+def test_minimum_op_sales_gets_no_boost():
+    """Both players at minimum qualifying op_sales (3) get 1.0x multiplier — both selected."""
+    p1 = _make_scored(1, 10000, 4000, 0.1, expected_profit_per_hour=400, op_sales=3)
+    p2 = _make_scored(2, 10000, 4000, 0.1, expected_profit_per_hour=400, op_sales=3)
+    result = optimize_portfolio([p1, p2] + _make_fillers(), budget=100080)
+    ids = {s["player"].resource_id for s in result}
+    assert 1 in ids and 2 in ids  # both selected, neither gets a boost over the other
