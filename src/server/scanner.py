@@ -35,7 +35,7 @@ from src.config import (
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.listing_tracker import record_listings, resolve_outcomes
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, SnapshotSale, SnapshotPricePoint, ListingObservation
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation
 from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class ScannerService:
         # Limit concurrent DB sessions from scanner so API handlers aren't starved.
         # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
         # much tighter to keep the connection pool available for API endpoints.
-        self._db_semaphore = asyncio.Semaphore(5)
+        self._db_semaphore = asyncio.Semaphore(15)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ class ScannerService:
                 nation="",
                 league="",
                 club="",
-                card_type="",
+                card_type=p.get("rarityName", ""),
                 scan_tier="",
                 next_scan_at=now,
                 is_active=True,
@@ -194,6 +194,7 @@ class ScannerService:
                             name=row["name"],
                             rating=row["rating"],
                             position=row["position"],
+                            card_type=row["card_type"],
                             is_active=True,
                             next_scan_at=now,
                         ),
@@ -289,7 +290,7 @@ class ScannerService:
                     nation="",
                     league="",
                     club="",
-                    card_type="",
+                    card_type=p.get("rarityName", ""),
                     scan_tier="",
                     next_scan_at=now,
                     is_active=True,
@@ -302,6 +303,7 @@ class ScannerService:
                         name=player_name,
                         rating=p.get("overall", 0),
                         position=p.get("position", "UNK"),
+                        card_type=p.get("rarityName", ""),
                         is_active=True,
                     ),
                 )
@@ -457,26 +459,6 @@ class ScannerService:
                     live_auction_prices=json.dumps(market_data.live_auction_prices),
                 )
                 session.add(snapshot)
-                await session.flush()  # get snapshot.id for FK references
-
-                seen_sales = set()
-                for sale in market_data.sales:
-                    key = (sale.sold_at, sale.sold_price)
-                    if key in seen_sales:
-                        continue
-                    seen_sales.add(key)
-                    session.add(SnapshotSale(
-                        snapshot_id=snapshot.id,
-                        sold_at=sale.sold_at.replace(tzinfo=None),
-                        sold_price=sale.sold_price,
-                    ))
-
-                for point in market_data.price_history:
-                    session.add(SnapshotPricePoint(
-                        snapshot_id=snapshot.id,
-                        recorded_at=point.recorded_at.replace(tzinfo=None),
-                        lowest_bin=point.lowest_bin,
-                    ))
 
             # Update PlayerRecord fields
             record = await session.get(PlayerRecord, ea_id)
