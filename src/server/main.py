@@ -16,6 +16,7 @@ from src.server.api.portfolio import router as portfolio_router
 from src.server.api.actions import router as actions_router
 from src.server.api.profit import router as profit_router
 from src.server.api.portfolio_status import router as status_router
+from src.server.api import automation
 
 logger = logging.getLogger(__name__)
 
@@ -101,3 +102,4 @@ app.include_router(portfolio_router)
 app.include_router(actions_router)
 app.include_router(profit_router)
 app.include_router(status_router)
+app.include_router(automation.router)

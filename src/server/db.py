@@ -57,7 +57,7 @@ async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEng
     """
     engine = create_engine(db_url)
     async with engine.begin() as conn:
-        from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus  # noqa: F401
+        from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus, DailyTransactionCount  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
     session_factory = create_session_factory(engine)
     return engine, session_factory

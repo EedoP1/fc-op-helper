@@ -176,3 +176,18 @@ class ScannerStatus(Base):
     queue_depth: Mapped[int] = mapped_column(Integer, default=0)
     circuit_breaker_state: Mapped[str] = mapped_column(String(20), default="closed")
     updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class DailyTransactionCount(Base):
+    """Daily automation transaction counter for EA daily cap enforcement (D-24, D-25, D-32).
+
+    One row per UTC calendar date. The extension increments this on every search
+    or buy attempt. When count >= cap, the automation stops for the day.
+    """
+
+    __tablename__ = "daily_transaction_count"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # "YYYY-MM-DD" UTC
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    cap: Mapped[int] = mapped_column(Integer, default=500)
