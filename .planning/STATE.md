@@ -152,9 +152,10 @@ None yet.
 | 260327-gxd | Add volatility filter to exclude players with >30% price increase over 3 days | 2026-03-27 | c55dc80 | [260327-gxd-add-volatility-filter-to-exclude-players](./quick/260327-gxd-add-volatility-filter-to-exclude-players/) |
 | 260327-hus | Fix volatility filter to use SnapshotPricePoint MIN/MAX instead of MarketSnapshot earliest-vs-latest | 2026-03-27 | 8d4b8ea | [260327-hus-fix-volatility-filter-to-use-snapshotpri](./quick/260327-hus-fix-volatility-filter-to-use-snapshotpri/) |
 | 260329-gtn | Add min-total-observations, min-history-depth scorer filters and wire absolute volatility threshold | 2026-03-29 | 032431b | [260329-gtn-add-missing-scorer-filters-min-total-sal](./quick/260329-gtn-add-missing-scorer-filters-min-total-sal/) |
+| 260330-g6d | Fix scanner throughput: remove SnapshotSale/PricePoint inserts, raise DB semaphore, batch listing upserts | 2026-03-30 | 9106250 | [260330-g6d-fix-scanner-throughput-bottleneck-skip-s](./quick/260330-g6d-fix-scanner-throughput-bottleneck-skip-s/) |
 
 ## Session Continuity
 
-Last activity: 2026-03-29 - Completed quick task 260329-gtn: Add missing scorer filters
-Stopped at: Completed quick task 260329-gtn
+Last activity: 2026-03-30 - Completed quick task 260330-g6d: Fix scanner throughput bottleneck
+Stopped at: Completed quick task 260330-g6d
 Resume file: None
