@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
-status: Phase complete — ready for verification
-stopped_at: Phase 10 context gathered
-last_updated: "2026-03-30T09:24:02.143Z"
-last_activity: "2026-03-30 - Completed quick task 260330-gsm: Drop SnapshotSale/SnapshotPricePoint ORM models"
+status: Ready to execute
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-03-30T10:00:47.446Z"
+last_activity: 2026-03-30
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 19
-  completed_plans: 19
+  total_plans: 22
+  completed_plans: 20
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-26)
 
 **Core value:** Always-fresh, data-driven OP sell recommendations — the server continuously scores every player in the 11k–200k range so you never miss a profitable opportunity.
-**Current focus:** Phase 09.1 — migrate-from-sqlite
+**Current focus:** Phase 10 — split-scanner-and-api-into-separate-processes
 
 ## Current Position
 
-Phase: 09.1 (migrate-from-sqlite) — EXECUTING
-Plan: 3 of 3
+Phase: 10 (split-scanner-and-api-into-separate-processes) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Plan: 3 of 3
 | Phase 09.1-migrate-from-sqlite P01 | 2 | 2 tasks | 6 files |
 | Phase 09.1-migrate-from-sqlite P02 | 8 | 3 tasks | 4 files |
 | Phase 09.1-migrate-from-sqlite P03 | 3 | 2 tasks | 3 files |
+| Phase 10-split-scanner-and-api-into-separate-processes P01 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,8 @@ Plan: 3 of 3
 - [Phase 09.1-migrate-from-sqlite]: health_check.py futbin_id caching removed — UPDATE players SET futbin_id is a no-op since column is being dropped (D-10)
 - [Phase 09.1-migrate-from-sqlite]: conftest passes DATABASE_URL via subprocess env; server_harness does not override it
 - [Phase 09.1-migrate-from-sqlite]: app.state.read_session_factory = session_factory preserves API endpoint attribute name; Postgres MVCC eliminates need for separate read engine
+- [Phase 10-split-scanner-and-api-into-separate-processes]: Health endpoint reads scanner metrics from scanner_status DB table (not app.state.scanner) — prerequisite for process split in Plan 02
+- [Phase 10-split-scanner-and-api-into-separate-processes]: ScannerStatus singleton row (id=1) upserted every dispatch cycle; startup race returns degraded 'unknown' state
 
 ### Roadmap Evolution
 
@@ -158,6 +161,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-30 - Completed quick task 260330-gsm: Drop SnapshotSale/SnapshotPricePoint ORM models
-Stopped at: Phase 10 context gathered
-Resume file: .planning/phases/10-split-scanner-and-api-into-separate-processes/10-CONTEXT.md
+Last activity: 2026-03-30
+Stopped at: Completed 10-01-PLAN.md
+Resume file: None
