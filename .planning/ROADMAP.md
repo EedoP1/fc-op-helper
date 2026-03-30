@@ -111,7 +111,7 @@ Plans:
   7. Status display shows current action, last event, and running/stopped/error state at all times
 **Plans**: 5 plans
 Plans:
-- [ ] 08-01-PLAN.md -- DOM exploration + backend daily-cap and fresh-price endpoints
+- [x] 08-01-PLAN.md -- DOM exploration + backend daily-cap and fresh-price endpoints
 - [ ] 08-02-PLAN.md -- Message types, storage items, automation engine core
 - [ ] 08-03-PLAN.md -- Buy cycle: search, price discovery, buy, list
 - [ ] 08-04-PLAN.md -- Transfer list cycle: scan, relist-all, clear sold, daily cap
@@ -134,14 +134,14 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
 | 07.1 Trade Reporting | v1.1 | 3/3 | Complete    | 2026-03-27 |
 | 07.2 Portfolio Dashboard | v1.1 | 2/2 | Complete   | 2026-03-27 |
-| 8. DOM Automation Layer | v1.1 | 0/5 | Not started | - |
+| 8. DOM Automation Layer | v1.1 | 1/5 | In Progress|  |
 
 ### Phase 9: Comprehensive API Integration & Performance Test Suite
 
 **Goal:** Real-server integration test suite that starts the REAL server (scanner, scheduler, circuit breaker) with a copy of the production DB, tests all 16 API endpoints via real HTTP, exercises real-world workflows (lifecycle flows, concurrent removes, rapid access), and enforces strict performance thresholds. Tests that fail = server bugs to fix.
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
 **Depends on:** Phase 5 (tests current backend surface; does not require Phase 8)
-**Plans:** 2/3 plans executed
+**Plans:** 1/5 plans executed
 
 Plans:
 - [x] 09-01-PLAN.md — Real server harness (no mocks), env-configurable DB, smoke tests for all 16 endpoints, performance thresholds
