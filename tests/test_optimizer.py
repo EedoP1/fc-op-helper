@@ -36,13 +36,25 @@ def _make_scored(ea_id, buy_price, net_profit, op_ratio, expected_profit_per_hou
     }
 
 
+def _make_fillers(count=80, start_id=1000):
+    """Generate cheap filler players to prevent the drop-and-backfill loop.
+
+    The optimizer's drop-and-backfill fires when selected < 80 players.
+    These fillers (1 coin, EPPH=0.001) pad the candidate pool so greedy
+    fill reaches 80+ without affecting budget or ranking assertions.
+    """
+    return [_make_scored(start_id + i, 1, 1, 0.10, expected_profit_per_hour=0.001)
+            for i in range(count)]
+
+
 def test_fills_budget():
     """Should select players up to the budget limit."""
-    scored = [_make_scored(i, 10000, 3000, 0.10) for i in range(20)]
-    result = optimize_portfolio(scored, budget=50000)
+    scored = [_make_scored(i, 10000, 3000, 0.10) for i in range(20)] + _make_fillers()
+    result = optimize_portfolio(scored, budget=50080)
     total = sum(s["buy_price"] for s in result)
-    assert total <= 50000
-    assert len(result) == 5  # 50k / 10k = 5 players
+    assert total <= 50080
+    real = [s for s in result if s["buy_price"] == 10000]
+    assert len(real) == 5  # 50k / 10k = 5 real players
 
 
 def test_respects_target_count():
@@ -54,30 +66,30 @@ def test_respects_target_count():
 
 def test_no_duplicates():
     """Should not select the same player twice."""
-    scored = [_make_scored(1, 10000, 3000, 0.10)] * 5  # same player 5 times
-    result = optimize_portfolio(scored, budget=100000)
-    assert len(result) == 1
+    scored = [_make_scored(1, 10000, 3000, 0.10)] * 5 + _make_fillers()
+    result = optimize_portfolio(scored, budget=100080)
+    dupes = [s for s in result if s["player"].resource_id == 1]
+    assert len(dupes) == 1
 
 
-def test_prefers_higher_efficiency():
-    """With limited budget, higher efficiency card should be picked over lower."""
-    expensive = _make_scored(1, 50000, 5000, 0.10)  # ep=500, eff=0.01
-    cheap = _make_scored(2, 10000, 2000, 0.10)       # ep=200, eff=0.02
-    # Budget only fits one
-    result = optimize_portfolio([expensive, cheap], budget=15000)
-    assert len(result) == 1
-    assert result[0]["player"].resource_id == 2  # cheap wins on efficiency
-
-
-def test_swap_replaces_expensive_with_cheaper():
-    """Swap loop should replace one 50k card with multiple 10k cards if better."""
-    expensive = _make_scored(1, 50000, 10000, 0.05)  # ep = 500
-    cheap = [_make_scored(i, 10000, 3000, 0.10) for i in range(2, 7)]  # ep = 300 each, 5 × 300 = 1500
-    result = optimize_portfolio([expensive] + cheap, budget=50000)
+def test_prefers_cheaper_when_budget_tight():
+    """With limited budget, only the affordable card should be selected."""
+    expensive = _make_scored(1, 50000, 5000, 0.10)  # EPPH=500 but too expensive
+    cheap = _make_scored(2, 10000, 2000, 0.10)       # EPPH=200, fits budget
+    result = optimize_portfolio([expensive, cheap] + _make_fillers(), budget=15080)
     ids = {s["player"].resource_id for s in result}
-    # Should have swapped out player 1 (500 ep) for 5 cheaper ones (1500 ep total)
-    assert 1 not in ids
-    assert len(result) == 5
+    assert 2 in ids      # cheap fits
+    assert 1 not in ids  # expensive doesn't fit budget
+
+
+def test_drop_and_backfill_replaces_expensive_with_cheaper():
+    """Drop-and-backfill should replace one expensive card with many cheap cards."""
+    expensive = _make_scored(1, 42500, 10000, 0.05)   # EPPH=500, expensive
+    cheap = [_make_scored(i, 500, 300, 0.10) for i in range(2, 87)]  # 85 cheap players
+    result = optimize_portfolio([expensive] + cheap, budget=43000)
+    ids = {s["player"].resource_id for s in result}
+    assert 1 not in ids       # expensive dropped and banned
+    assert len(result) >= 80  # cheap players backfilled
 
 
 def test_empty_scored_returns_empty():
@@ -95,29 +107,32 @@ def test_budget_too_small_for_any_player():
 
 def test_backfill_uses_remaining_budget():
     """After main fill, leftover budget should be used for additional players."""
-    big = _make_scored(1, 90000, 20000, 0.10)    # high efficiency, takes 90k
-    small = _make_scored(2, 9000, 1000, 0.10)     # fits in remaining 10k
-    result = optimize_portfolio([big, small], budget=100000)
-    assert len(result) == 2
+    big = _make_scored(1, 90000, 20000, 0.10)    # EPPH=2000, takes 90k
+    small = _make_scored(2, 9000, 1000, 0.10)     # EPPH=100, fits in remaining
+    result = optimize_portfolio([big, small] + _make_fillers(), budget=100080)
+    ids = {s["player"].resource_id for s in result}
+    assert 1 in ids  # big player selected
+    assert 2 in ids  # small player backfilled with remaining budget
     total = sum(s["buy_price"] for s in result)
-    assert total <= 100000
+    assert total <= 100080
 
 
 # ── v2 scorer ranking tests ───────────────────────────────────────────────────
 
 def test_ranks_by_expected_profit_per_hour():
-    """Player with high expected_profit_per_hour beats low-epph player on efficiency.
+    """Player with high expected_profit_per_hour ranks first in output.
 
-    low: expected_profit_per_hour = 100, buy_price=10000 → efficiency = 0.01
-    high: expected_profit_per_hour = 500, buy_price=2000 → efficiency = 0.25  (should rank first)
+    low: expected_profit_per_hour = 100, buy_price=10000
+    high: expected_profit_per_hour = 500, buy_price=2000 (should rank first)
     """
-    low = _make_scored(1, 10000, 1000, 0.1, expected_profit_per_hour=100)   # eff=0.01
-    high = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)    # eff=0.25
+    low = _make_scored(1, 10000, 1000, 0.1, expected_profit_per_hour=100)
+    high = _make_scored(2, 2000, 200, 1.0, expected_profit_per_hour=500)
 
-    # Budget fits both. high should rank first.
-    result = optimize_portfolio([low, high], budget=20000)
-    assert len(result) == 2
-    assert result[0]["player"].resource_id == 2, "Higher epph player should rank first"
+    result = optimize_portfolio([low, high] + _make_fillers(), budget=20080)
+    ids = {s["player"].resource_id for s in result}
+    assert 1 in ids and 2 in ids  # both selected
+    real = [s for s in result if s["player"].resource_id in (1, 2)]
+    assert real[0]["player"].resource_id == 2, "Higher EPPH player should rank first"
 
 
 def test_portfolio_with_varied_efficiency():
