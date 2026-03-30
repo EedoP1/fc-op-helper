@@ -161,3 +161,17 @@ class TradeRecord(Base):
         Index("ix_trade_records_ea_id_outcome", "ea_id", "outcome"),
         Index("ix_trade_records_recorded_at", "recorded_at"),
     )
+
+
+class ScannerStatus(Base):
+    """Scanner health metrics written every dispatch cycle (D-01, D-02)."""
+
+    __tablename__ = "scanner_status"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    is_running: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    success_rate_1h: Mapped[float] = mapped_column(Float, default=1.0)
+    queue_depth: Mapped[int] = mapped_column(Integer, default=0)
+    circuit_breaker_state: Mapped[str] = mapped_column(String(20), default="closed")
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
