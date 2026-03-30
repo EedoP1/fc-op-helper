@@ -558,17 +558,16 @@ class ScannerService:
     async def run_cleanup(self) -> None:
         """Delete market snapshots older than MARKET_DATA_RETENTION_DAYS.
 
-        FK cascade on SnapshotSale and SnapshotPricePoint ensures child
-        rows are deleted automatically. Also prunes old PlayerScore rows
-        beyond retention to keep the DB lean. Additionally purges old
-        resolved and orphaned ListingObservation rows (D-12).
+        Also prunes old PlayerScore rows beyond retention to keep the DB
+        lean. Additionally purges old resolved and orphaned
+        ListingObservation rows (D-12).
         """
         cutoff = datetime.utcnow() - timedelta(days=MARKET_DATA_RETENTION_DAYS)
         listing_cutoff = datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)
         async with self._session_factory() as session:
             from sqlalchemy import delete
 
-            # Delete old snapshots (cascades to sales + price points)
+            # Delete old snapshots
             result = await session.execute(
                 delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff)
             )

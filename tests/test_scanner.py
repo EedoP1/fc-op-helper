@@ -8,7 +8,7 @@ from sqlalchemy import select
 from src.server.db import create_engine_and_tables
 from src.server.models_db import (
     PlayerRecord, PlayerScore,
-    MarketSnapshot, SnapshotSale, SnapshotPricePoint,
+    MarketSnapshot,
     ListingObservation,
 )
 from src.server.circuit_breaker import CircuitBreaker, CBState
@@ -246,67 +246,6 @@ async def test_snapshot_created_on_scan(mock_score, scanner):
     assert len(prices) == 30
 
 
-@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
-    "ea_id": 101, "buy_price": 20000, "sell_price": 24000,
-    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
-    "op_total": 50, "op_sell_rate": 0.1,
-    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
-})
-async def test_snapshot_sales_created(mock_score, scanner):
-    """Test 16: scan_player creates SnapshotSale rows matching market data sales."""
-    svc, session_factory, mock_client = scanner
-    market_data = make_player(ea_id=101, price=20000, num_sales=50, num_listings=30)
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
-
-    async with session_factory() as session:
-        _seed_player_record(session, 101)
-        await session.commit()
-
-    await svc.scan_player(101)
-
-    async with session_factory() as session:
-        snap = (await session.execute(
-            select(MarketSnapshot).where(MarketSnapshot.ea_id == 101)
-        )).scalar_one()
-        sales = (await session.execute(
-            select(SnapshotSale).where(SnapshotSale.snapshot_id == snap.id)
-        )).scalars().all()
-
-    assert len(sales) == 50, f"Expected 50 SnapshotSale rows, got {len(sales)}"
-
-
-@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
-    "ea_id": 102, "buy_price": 20000, "sell_price": 24000,
-    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
-    "op_total": 50, "op_sell_rate": 0.1,
-    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
-})
-async def test_snapshot_price_points_created(mock_score, scanner):
-    """Test 17: scan_player creates SnapshotPricePoint rows matching price history."""
-    svc, session_factory, mock_client = scanner
-    market_data = make_player(
-        ea_id=102, price=20000, num_sales=50, num_listings=30, hours_of_data=10.0
-    )
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
-
-    async with session_factory() as session:
-        _seed_player_record(session, 102)
-        await session.commit()
-
-    await svc.scan_player(102)
-
-    async with session_factory() as session:
-        snap = (await session.execute(
-            select(MarketSnapshot).where(MarketSnapshot.ea_id == 102)
-        )).scalar_one()
-        points = (await session.execute(
-            select(SnapshotPricePoint).where(SnapshotPricePoint.snapshot_id == snap.id)
-        )).scalars().all()
-
-    # make_player creates int(hours_of_data) + 1 price points
-    assert len(points) == 11, f"Expected 11 SnapshotPricePoint rows, got {len(points)}"
-
-
 async def test_no_snapshot_on_none_market_data(scanner):
     """Test 18: scan_player with None market_data creates no snapshot rows."""
     svc, session_factory, mock_client = scanner
@@ -341,10 +280,6 @@ async def test_cleanup_deletes_old_snapshots(scanner):
             live_auction_prices="[10000]",
         )
         session.add(old_snap)
-        await session.flush()
-        session.add(SnapshotSale(
-            snapshot_id=old_snap.id, sold_at=old_time, sold_price=12000,
-        ))
 
         recent_snap = MarketSnapshot(
             ea_id=200, captured_at=recent_time,
@@ -352,21 +287,15 @@ async def test_cleanup_deletes_old_snapshots(scanner):
             live_auction_prices="[10000]",
         )
         session.add(recent_snap)
-        await session.flush()
-        session.add(SnapshotSale(
-            snapshot_id=recent_snap.id, sold_at=recent_time, sold_price=12000,
-        ))
         await session.commit()
 
     await svc.run_cleanup()
 
     async with session_factory() as session:
         snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
-        sales = (await session.execute(select(SnapshotSale))).scalars().all()
 
     assert len(snaps) == 1, f"Expected 1 snapshot after cleanup, got {len(snaps)}"
     assert snaps[0].captured_at == recent_time
-    assert len(sales) == 1, f"Expected 1 sale after cleanup (cascade), got {len(sales)}"
 
 
 async def test_cleanup_preserves_recent_snapshots(scanner):
@@ -487,40 +416,6 @@ async def test_listing_purge(scanner):
 
 
 # ── Deduplication and name population tests ──────────────────────────────────
-
-@patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
-    "ea_id": 400, "buy_price": 20000, "sell_price": 24000,
-    "net_profit": 2800, "margin_pct": 20, "op_sold": 5,
-    "op_total": 50, "op_sell_rate": 0.1,
-    "expected_profit_per_hour": 280.0, "efficiency": 0.014,
-})
-async def test_scan_player_deduplicates_snapshot_sales(mock_v2, scanner):
-    """scan_player deduplicates sales with identical (sold_at, sold_price) within a snapshot."""
-    svc, session_factory, mock_client = scanner
-
-    market_data = make_player(ea_id=400, name="Dedup Player", price=20000, num_sales=10, num_listings=30)
-    # Inject duplicate sales: copy the first 3 sales to create duplicates
-    original_sales = list(market_data.sales)
-    market_data.sales = original_sales + [original_sales[0], original_sales[1], original_sales[2]]
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
-
-    async with session_factory() as session:
-        _seed_player_record(session, 400)
-        await session.commit()
-
-    await svc.scan_player(400)
-
-    async with session_factory() as session:
-        snap = (await session.execute(
-            select(MarketSnapshot).where(MarketSnapshot.ea_id == 400)
-        )).scalar_one()
-        sales = (await session.execute(
-            select(SnapshotSale).where(SnapshotSale.snapshot_id == snap.id)
-        )).scalars().all()
-
-    # Should have 10 unique sales, not 13 (10 + 3 duplicates)
-    assert len(sales) == 10, f"Expected 10 unique SnapshotSale rows, got {len(sales)}"
-
 
 @patch("src.server.scanner.score_player_v2", new_callable=AsyncMock, return_value={
     "ea_id": 401, "buy_price": 20000, "sell_price": 24000,
