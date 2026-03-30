@@ -86,7 +86,7 @@ class ScannerService:
         # Limit concurrent DB sessions from scanner so API handlers aren't starved.
         # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
         # much tighter to keep the connection pool available for API endpoints.
-        self._db_semaphore = asyncio.Semaphore(15)
+        self._db_semaphore = asyncio.Semaphore(20)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -379,6 +379,9 @@ class ScannerService:
         async with self._db_semaphore, self._session_factory() as session:
             t_sem_acquired = time.monotonic()
 
+            # Load PlayerRecord early for last_resolved_at
+            record = await session.get(PlayerRecord, ea_id)
+
             # --- Listing tracking (D-01, D-02) ---
             listing_result = None
             resolve_result = None
@@ -395,7 +398,11 @@ class ScannerService:
                     current_fingerprints=listing_result["fingerprints"],
                     completed_sales=market_data.sales,
                     session=session,
+                    last_resolved_at=record.last_resolved_at if record else None,
                 )
+                # Store resolution timestamp for next scan
+                if resolve_result and resolve_result.get("resolved_at") and record:
+                    record.last_resolved_at = resolve_result["resolved_at"]
 
             t_listing = time.monotonic()
 
@@ -470,8 +477,7 @@ class ScannerService:
                 )
                 session.add(snapshot)
 
-            # Update PlayerRecord fields
-            record = await session.get(PlayerRecord, ea_id)
+            # Update PlayerRecord fields (record already loaded above)
             if record is not None:
                 record.last_scanned_at = now
                 if market_data is not None:

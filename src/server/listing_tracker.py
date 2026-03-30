@@ -164,25 +164,29 @@ async def record_listings(
             resolved_at=None,
         ))
 
-    # Execute in chunks of 50 with a single event-loop yield per chunk
+    # Deduplicate within the batch: multiple listings at the same price produce
+    # identical fallback fingerprints ({ea_id}:{price}:{bucket}), which Postgres
+    # rejects in a single INSERT ... ON CONFLICT statement.
+    deduped: dict[str, dict] = {}
+    for values in pending_values:
+        deduped[values["fingerprint"]] = values
+    unique_values = list(deduped.values())
+
+    # Batch upsert: one INSERT ... VALUES (...), (...), ... ON CONFLICT per chunk
+    # instead of one round-trip per row.
     chunk_size = 50
-    for i in range(0, len(pending_values), chunk_size):
-        chunk = pending_values[i:i + chunk_size]
-        for values in chunk:
-            stmt = (
-                pg_insert(ListingObservation)
-                .values(**values)
-                .on_conflict_do_update(
-                    index_elements=["fingerprint"],
-                    set_=dict(
-                        last_seen_at=now,
-                        expected_expiry_at=values["expected_expiry_at"],
-                        scan_count=ListingObservation.__table__.c.scan_count + 1,
-                    ),
-                )
-            )
-            await session.execute(stmt)
-        await asyncio.sleep(0)
+    for i in range(0, len(unique_values), chunk_size):
+        chunk = unique_values[i:i + chunk_size]
+        stmt = pg_insert(ListingObservation).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fingerprint"],
+            set_=dict(
+                last_seen_at=now,
+                expected_expiry_at=stmt.excluded.expected_expiry_at,
+                scan_count=ListingObservation.__table__.c.scan_count + 1,
+            ),
+        )
+        await session.execute(stmt)
 
     return {"recorded": len(fingerprints), "fingerprints": fingerprints}
 
@@ -192,6 +196,7 @@ async def resolve_outcomes(
     current_fingerprints: list[str],
     completed_sales: list[SaleRecord],
     session: AsyncSession,
+    last_resolved_at: datetime | None = None,
 ) -> dict:
     """Resolve outcomes for listings that have disappeared since last scan.
 
@@ -210,38 +215,50 @@ async def resolve_outcomes(
     Returns:
         Dict with ``sold`` and ``expired`` counts.
     """
+    import time as _time
     now = _utcnow()
 
     # Query unresolved observations not in current scan whose expected expiry has passed.
+    # Use lightweight column fetch (not full ORM) to avoid loading all columns.
     # Listings with NULL expected_expiry_at (created before migration) are excluded —
     # they will be cleaned up by the retention purge.
-    stmt = select(ListingObservation).where(
-        ListingObservation.ea_id == ea_id,
-        ListingObservation.outcome.is_(None),
-        ListingObservation.expected_expiry_at.isnot(None),
-        ListingObservation.expected_expiry_at < now,
+    from sqlalchemy import text, update
+
+    fp_filter = (
         ListingObservation.fingerprint.not_in(current_fingerprints)
         if current_fingerprints
-        else ListingObservation.fingerprint.isnot(None),
+        else ListingObservation.fingerprint.isnot(None)
     )
+    stmt = (
+        select(
+            ListingObservation.id,
+            ListingObservation.fingerprint,
+            ListingObservation.buy_now_price,
+            ListingObservation.first_seen_at,
+        )
+        .where(
+            ListingObservation.ea_id == ea_id,
+            ListingObservation.outcome.is_(None),
+            ListingObservation.expected_expiry_at.isnot(None),
+            ListingObservation.expected_expiry_at < now,
+            fp_filter,
+        )
+    )
+    _t0 = _time.monotonic()
     result = await session.execute(stmt)
-    disappeared = result.scalars().all()
+    disappeared = result.all()
+    _t_find = _time.monotonic()
 
     if not disappeared:
+        _t_total = _time.monotonic() - _t0
+        if _t_total > 1.0:
+            logger.warning("RESOLVE_TIMING ea_id=%d find=%.1fs (0 rows) total=%.1fs", ea_id, _t_find - _t0, _t_total)
         return {"sold": 0, "expired": 0}
 
-    # Query the most recent resolved_at for this ea_id to filter stale sales
-    last_resolved_stmt = select(
-        func.max(ListingObservation.resolved_at)
-    ).where(
-        ListingObservation.ea_id == ea_id,
-        ListingObservation.resolved_at.isnot(None),
-    )
-    last_resolved_result = await session.execute(last_resolved_stmt)
-    last_resolved_at = last_resolved_result.scalar()
-
-    # Only count sales that occurred AFTER the last resolution (avoid double-counting)
-    # If last_resolved_at is None (first resolution), keep all sales -- bootstrap case
+    # Filter stale sales using last_resolved_at from PlayerRecord (passed in by caller).
+    # This avoids the expensive MAX(resolved_at) query on the listing_observations table
+    # which took 11-56s under load due to heap scans on a 1.2GB table.
+    _t_max = _time.monotonic()
     if last_resolved_at is not None:
         last_resolved_naive = last_resolved_at.replace(tzinfo=None) if last_resolved_at.tzinfo else last_resolved_at
         completed_sales = [
@@ -254,15 +271,12 @@ async def resolve_outcomes(
         f"sales_after_filter={len(completed_sales)} disappeared={len(disappeared)}"
     )
 
-    # Group by price
-    by_price: dict[int, list[ListingObservation]] = {}
-    for obs in disappeared:
-        by_price.setdefault(obs.buy_now_price, []).append(obs)
+    # Group by price — use lightweight tuples instead of ORM objects
+    by_price: dict[int, list] = {}
+    for row in disappeared:
+        by_price.setdefault(row.buy_now_price, []).append(row)
 
     # Build per-price list of sale timestamps from completedAuctions.
-    # We keep sold_at values (sorted ascending) so each price bucket can filter
-    # by the earliest first_seen_at of the observations it is trying to match.
-    # Strip tzinfo so comparisons against naive-UTC first_seen_at are safe.
     sale_times_by_price: dict[int, list[datetime]] = {}
     for sale in completed_sales:
         price = sale.sold_price
@@ -271,29 +285,45 @@ async def resolve_outcomes(
     for times in sale_times_by_price.values():
         times.sort()
 
-    total_sold = 0
-    total_expired = 0
+    sold_ids: list[int] = []
+    expired_ids: list[int] = []
 
     for price, obs_list in by_price.items():
-        # Only count sales that happened at or after the earliest moment we first
-        # observed a listing at this price.  This prevents stale completedAuctions
-        # entries (e.g. sales from hours before the scanner started) from being
-        # attributed to newly-observed listings.
-        earliest_first_seen = min(obs.first_seen_at.replace(tzinfo=None) if obs.first_seen_at.tzinfo else obs.first_seen_at for obs in obs_list)
+        earliest_first_seen = min(
+            r.first_seen_at.replace(tzinfo=None) if r.first_seen_at.tzinfo else r.first_seen_at
+            for r in obs_list
+        )
         all_times = sale_times_by_price.get(price, [])
         matching_sales = sum(1 for t in all_times if t >= earliest_first_seen)
         n_sold = min(matching_sales, len(obs_list))
-        n_expired = len(obs_list) - n_sold
 
-        for i, obs in enumerate(obs_list):
-            outcome = "sold" if i < n_sold else "expired"
-            obs.outcome = outcome
-            obs.resolved_at = now
+        for i, row in enumerate(obs_list):
+            if i < n_sold:
+                sold_ids.append(row.id)
+            else:
+                expired_ids.append(row.id)
 
-        total_sold += n_sold
-        total_expired += n_expired
+    # Batch UPDATE instead of per-row ORM mutations
+    if sold_ids:
+        await session.execute(
+            update(ListingObservation)
+            .where(ListingObservation.id.in_(sold_ids))
+            .values(outcome="sold", resolved_at=now)
+        )
+    if expired_ids:
+        await session.execute(
+            update(ListingObservation)
+            .where(ListingObservation.id.in_(expired_ids))
+            .values(outcome="expired", resolved_at=now)
+        )
+    _t_update = _time.monotonic()
 
-    return {"sold": total_sold, "expired": total_expired}
+    logger.warning(
+        "RESOLVE_TIMING ea_id=%d find=%.1fs(%d rows) max_resolved=%.1fs update=%.1fs total=%.1fs",
+        ea_id, _t_find - _t0, len(disappeared), _t_max - _t_find, _t_update - _t_max, _t_update - _t0,
+    )
+
+    return {"sold": len(sold_ids), "expired": len(expired_ids), "resolved_at": now}
 
 
 async def aggregate_daily_summaries(
