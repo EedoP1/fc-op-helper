@@ -32,3 +32,27 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  api:
+    build: .
+    command: uvicorn src.server.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@postgres:5432/op_seller
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scanner:
+    build: .
+    command: python -m src.server.scanner_main
+    environment:
+      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@postgres:5432/op_seller
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
