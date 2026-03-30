@@ -138,8 +138,9 @@ async def record_listings(
     """
     now = _utcnow()
     fingerprints: list[str] = []
+    pending_values: list[dict] = []
 
-    for i, entry in enumerate(live_auctions_raw):
+    for entry in live_auctions_raw:
         buy_now_price = entry.get("buyNowPrice", 0)
         if not buy_now_price:
             continue
@@ -150,35 +151,38 @@ async def record_listings(
         remaining = _extract_remaining_seconds(entry)
         expected_expiry_at = now + timedelta(seconds=remaining)
 
-        stmt = (
-            pg_insert(ListingObservation)
-            .values(
-                fingerprint=fp,
-                ea_id=ea_id,
-                buy_now_price=buy_now_price,
-                market_price_at_obs=current_lowest_bin,
-                first_seen_at=now,
-                last_seen_at=now,
-                expected_expiry_at=expected_expiry_at,
-                scan_count=1,
-                outcome=None,
-                resolved_at=None,
-            )
-            .on_conflict_do_update(
-                index_elements=["fingerprint"],
-                set_=dict(
-                    last_seen_at=now,
-                    expected_expiry_at=expected_expiry_at,
-                    scan_count=ListingObservation.__table__.c.scan_count + 1,
-                ),
-            )
-        )
-        await session.execute(stmt)
+        pending_values.append(dict(
+            fingerprint=fp,
+            ea_id=ea_id,
+            buy_now_price=buy_now_price,
+            market_price_at_obs=current_lowest_bin,
+            first_seen_at=now,
+            last_seen_at=now,
+            expected_expiry_at=expected_expiry_at,
+            scan_count=1,
+            outcome=None,
+            resolved_at=None,
+        ))
 
-        # Yield to event loop every 20 upserts so API handlers aren't starved
-        # by rapid asyncpg I/O when multiple scan tasks run concurrently.
-        if i % 20 == 19:
-            await asyncio.sleep(0)
+    # Execute in chunks of 50 with a single event-loop yield per chunk
+    chunk_size = 50
+    for i in range(0, len(pending_values), chunk_size):
+        chunk = pending_values[i:i + chunk_size]
+        for values in chunk:
+            stmt = (
+                pg_insert(ListingObservation)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["fingerprint"],
+                    set_=dict(
+                        last_seen_at=now,
+                        expected_expiry_at=values["expected_expiry_at"],
+                        scan_count=ListingObservation.__table__.c.scan_count + 1,
+                    ),
+                )
+            )
+            await session.execute(stmt)
+        await asyncio.sleep(0)
 
     return {"recorded": len(fingerprints), "fingerprints": fingerprints}
 
