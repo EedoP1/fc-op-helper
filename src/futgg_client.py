@@ -35,8 +35,8 @@ POSITION_MAP = {
     18: "RW", 19: "ST", 20: "LW",
 }
 
-# Global rate limit: max 2 requests/second across all clients.
-_MIN_REQUEST_INTERVAL = 0.5  # seconds between requests
+# Global rate limit: max 10 requests/second across all clients.
+_MIN_REQUEST_INTERVAL = 0.1  # seconds between requests
 _last_request_time = 0.0
 _rate_lock = asyncio.Lock()
 _sync_rate_lock = None  # threading.Lock, created lazily
