@@ -132,7 +132,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
         JOIN players pr ON pr.ea_id = ps.ea_id
         WHERE ps.rn = 1
           AND pr.is_active = TRUE
-          AND pr.card_type != 'Icon'
+          AND pr.card_type NOT IN ('Icon', 'UT Heroes')
     """)
     result = await session.execute(sql)
     raw_rows = result.mappings().all()
