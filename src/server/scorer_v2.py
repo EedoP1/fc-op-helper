@@ -178,4 +178,10 @@ async def score_player_v2(
             "score_player_v2: ea_id=%d — no viable margin found (%d total obs)",
             ea_id, total_obs,
         )
+    else:
+        logger.debug(
+            "score_player_v2: ea_id=%d margin=%d%% op_sold=%d/%d rate=%.1f%% epph=%.2f",
+            ea_id, best["margin_pct"], best["op_sold"], best["op_total"],
+            best["op_sell_rate"] * 100, best["expected_profit_per_hour"],
+        )
     return best
