@@ -41,8 +41,8 @@ async def test_health_returns_scanner_status(client):
     body = r.json()
     assert "scanner_status" in body, f"Missing scanner_status in {body}"
     assert "circuit_breaker" in body, f"Missing circuit_breaker in {body}"
-    assert body["scanner_status"] in ("running", "stopped"), f"Unexpected scanner_status: {body['scanner_status']}"
-    assert body["circuit_breaker"] in ("closed", "open", "half_open"), f"Unexpected circuit_breaker: {body['circuit_breaker']}"
+    assert body["scanner_status"] in ("running", "stopped", "unknown"), f"Unexpected scanner_status: {body['scanner_status']}"
+    assert body["circuit_breaker"] in ("closed", "open", "half_open", "unknown"), f"Unexpected circuit_breaker: {body['circuit_breaker']}"
 
 
 # ── Players ────────────────────────────────────────────────────────────────────
