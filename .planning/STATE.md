@@ -132,6 +132,7 @@ Plan: 3 of 3
 - Phase 07.2 inserted after Phase 07.1: Portfolio Dashboard & Trade Tracking — dashboard UI consuming trade data from 07.1 (split from original 07.1 — DOM reading and dashboard UI are different work)
 - Phase 9 added: Comprehensive API Integration & Performance Test Suite
 - Phase 09.1 inserted after Phase 09: Migrate from SQLite (URGENT)
+- Phase 10 added: Split scanner and API into separate processes — fix production API timeouts caused by scanner resource contention
 
 ### Pending Todos
 

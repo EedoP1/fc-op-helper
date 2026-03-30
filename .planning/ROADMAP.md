@@ -154,3 +154,13 @@ Plans:
 - [x] 09.1-01-PLAN.md — Docker Postgres setup, deps, config, db.py single-engine rewrite, main.py consolidation
 - [x] 09.1-02-PLAN.md — Replace sqlite_insert with pg_insert (4 locations), fix DailyListingSummary upsert bug, rewrite health_check.py
 - [x] 09.1-03-PLAN.md — Rewrite test conftest/harness for Postgres testcontainer, create data migration script
+
+### Phase 10: Split scanner and API into separate processes
+
+**Goal:** Separate the scanner (background market scanning) and API server into independent processes to eliminate resource contention that causes production API timeouts. Scanner writes metrics to DB for health endpoint. Both processes share the same Postgres database.
+**Requirements**: TBD
+**Depends on:** Phase 09.1
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 10 to break down)
