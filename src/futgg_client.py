@@ -4,6 +4,9 @@ fut.gg API client.
 Uses fut.gg's internal JSON API endpoints to fetch player data, prices,
 sales history, and live listings. No scraping needed — direct HTTP calls.
 
+Uses curl_cffi to impersonate Chrome's TLS fingerprint, which is required
+to pass Cloudflare's bot detection on fut.gg.
+
 Endpoints:
   - /api/fut/players/v2/26/          → paginated player list (price filterable)
   - /api/fut/player-prices/26/{eaId}/ → prices, sales, listings, history
@@ -14,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
+from curl_cffi.requests import AsyncSession, Session
+from curl_cffi.requests.exceptions import HTTPError
 
 from src.models import Player, PlayerMarketData, PricePoint, SaleRecord
 
@@ -30,49 +35,61 @@ POSITION_MAP = {
     18: "RW", 19: "ST", 20: "LW",
 }
 
+# Global rate limit: max 2 requests/second across all clients.
+_MIN_REQUEST_INTERVAL = 0.5  # seconds between requests
+_last_request_time = 0.0
+_rate_lock = asyncio.Lock()
+_sync_rate_lock = None  # threading.Lock, created lazily
+
 
 class FutGGClient:
-    """HTTP client for fut.gg's internal API."""
+    """HTTP client for fut.gg's internal API using Chrome TLS impersonation."""
 
     BASE_URL = "https://www.fut.gg"
 
+    DEFAULT_HEADERS = {
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"{BASE_URL}/players/",
+    }
+
     def __init__(self):
-        self.client: Optional[httpx.AsyncClient] = None
+        self.client: Optional[AsyncSession] = None
 
     async def start(self) -> None:
         """Create the HTTP client."""
-        self.client = httpx.AsyncClient(
-            base_url=self.BASE_URL,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json",
-                "Referer": f"{self.BASE_URL}/players/",
-            },
+        self.client = AsyncSession(
+            impersonate="chrome",
+            headers=self.DEFAULT_HEADERS,
             timeout=30,
-            follow_redirects=True,
+            allow_redirects=True,
         )
-        logger.info("FutGG client started")
+        logger.info("FutGG client started (curl_cffi/chrome)")
 
     async def stop(self) -> None:
         """Close the HTTP client."""
         if self.client:
-            await self.client.aclose()
+            await self.client.close()
         logger.info("FutGG client stopped")
 
     async def _get(self, path: str) -> Optional[dict]:
-        """Make a GET request with minimal delay."""
+        """Make a GET request with rate limiting."""
+        global _last_request_time
         if not self.client:
             raise RuntimeError("Client not started. Call start() first.")
         try:
-            resp = await self.client.get(path)
+            async with _rate_lock:
+                now = asyncio.get_event_loop().time()
+                wait = _MIN_REQUEST_INTERVAL - (now - _last_request_time)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                _last_request_time = asyncio.get_event_loop().time()
+
+            url = f"{self.BASE_URL}{path}"
+            resp = await self.client.get(url)
             resp.raise_for_status()
-            await asyncio.sleep(0.05)
             return resp.json()
-        except httpx.HTTPStatusError as e:
+        except HTTPError as e:
             logger.error(f"HTTP {e.response.status_code} for {path}")
             return None
         except Exception as e:
@@ -124,36 +141,48 @@ class FutGGClient:
             price_history=self._parse_price_history(ea_id, prices),
             sales=self._parse_sales(ea_id, prices),
             live_auction_prices=[a["buyNowPrice"] for a in raw_auctions],
-            live_auctions_raw=raw_auctions,  # preserve all fields for fingerprinting (D-04)
+            live_auctions_raw=raw_auctions,
             futgg_url=defn.get("url"),
             max_price_range=max_price_range,
         )
 
     def get_player_market_data_sync(
-        self, ea_id: int, sync_client: httpx.Client
+        self, ea_id: int, sync_client: Session
     ) -> Optional[PlayerMarketData]:
         """Synchronous version of get_player_market_data for thread-pool use.
 
-        Uses the provided sync httpx.Client (not the async self.client) so it
-        can run in a ThreadPoolExecutor without needing an event loop. This
-        keeps scanner HTTP I/O off the main asyncio event loop.
+        Uses the provided sync curl_cffi Session (not the async self.client) so
+        it can run in a ThreadPoolExecutor without needing an event loop.
 
         Args:
             ea_id: EA resource ID of the player.
-            sync_client: Synchronous httpx.Client for HTTP calls.
+            sync_client: Synchronous curl_cffi Session for HTTP calls.
 
         Returns:
             PlayerMarketData or None if data is unavailable.
         """
-        import time as _time
+        import threading
+        global _sync_rate_lock
+        if _sync_rate_lock is None:
+            _sync_rate_lock = threading.Lock()
+
+        global _last_request_time
 
         def _get_sync(path: str) -> Optional[dict]:
+            global _last_request_time
             try:
-                resp = sync_client.get(path)
+                with _sync_rate_lock:
+                    now = time.monotonic()
+                    wait = _MIN_REQUEST_INTERVAL - (now - _last_request_time)
+                    if wait > 0:
+                        time.sleep(wait)
+                    _last_request_time = time.monotonic()
+
+                url = f"{self.BASE_URL}{path}"
+                resp = sync_client.get(url)
                 resp.raise_for_status()
-                _time.sleep(0.05)
                 return resp.json()
-            except httpx.HTTPStatusError as e:
+            except HTTPError as e:
                 logger.error(f"HTTP {e.response.status_code} for {path}")
                 return None
             except Exception as e:
