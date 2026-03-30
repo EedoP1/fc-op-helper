@@ -1,37 +1,62 @@
 """Session-scoped fixtures for integration tests.
 
-Starts a real uvicorn process on a free port backed by a pre-prepared test
-database (op_seller_test) in the same Postgres container. The test DB is a
-full clone of production — same data, same size, same performance profile.
+Starts api + scanner services via Docker Compose with a test override
+file that points both containers at the postgres-test database.
+
+This mirrors the EXACT production deployment (D-07): same Dockerfile,
+same docker-compose.yml, same service definitions. The only difference
+is docker-compose.test.yml overriding DATABASE_URL to use postgres-test.
 
 Setup (run once, before first test session):
+    docker compose up -d postgres-test
     python scripts/setup_test_db.py
 
-Mutable tables (portfolio_slots, trade_actions, trade_records) are cleaned
-after each test. Production data is never touched.
+Mutable tables (portfolio_slots, trade_actions, trade_records, scanner_status)
+are cleaned after each test. Production data is never touched.
 
 Uses synchronous live_server fixture to avoid pytest-asyncio 1.3.0 event loop
 scoping issues with session-scoped async fixtures.
 """
 import os
-import socket
 import subprocess
-import sys
 import time
 
 import httpx
 import pytest
 
 
-# ── Database URLs ────────────────────────────────────────────────────────────
+# -- Constants -----------------------------------------------------------------
 
-PROD_DB_URL = "postgresql+asyncpg://op_seller:op_seller@localhost:5432/op_seller"
+COMPOSE_PROJECT = "op_seller_test"
+# Resolve absolute paths for docker compose -f flags
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+COMPOSE_FILE = os.path.join(_REPO_ROOT, "docker-compose.yml")
+COMPOSE_TEST_OVERRIDE = os.path.join(_REPO_ROOT, "docker-compose.test.yml")
+
+# Test API is on port 8001 (mapped in docker-compose.test.yml to avoid prod conflict)
+TEST_API_PORT = 8001
+TEST_API_BASE = f"http://127.0.0.1:{TEST_API_PORT}"
+
+# For direct DB access in fixtures (from host, not from inside Docker)
 TEST_DB_URL = "postgresql+asyncpg://op_seller:op_seller@localhost:5433/op_seller"
+
+
+def _compose_cmd(*args):
+    """Build a docker compose command with project name and both compose files."""
+    return [
+        "docker", "compose",
+        "-f", COMPOSE_FILE,
+        "-f", COMPOSE_TEST_OVERRIDE,
+        "-p", COMPOSE_PROJECT,
+        *args,
+    ]
+
 
 def _check_test_db():
     """Skip integration tests if the pre-prepared test DB is not reachable.
 
     The test DB (op_seller_test) must be set up before running tests:
+        docker compose up -d postgres-test
         python scripts/setup_test_db.py
     """
     import asyncio
@@ -50,97 +75,105 @@ def _check_test_db():
         asyncio.run(_ping())
     except Exception:
         pytest.skip(
-            "Test DB not available -- run 'python scripts/setup_test_db.py' first"
+            "Test DB not available -- run 'docker compose up -d postgres-test' "
+            "and 'python scripts/setup_test_db.py' first"
         )
 
 
-# ── Port discovery ────────────────────────────────────────────────────────────
-
-@pytest.fixture(scope="session")
-def server_port():
-    """Find a free TCP port for the test server."""
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-
-# ── Test database ────────────────────────────────────────────────────────────
+# -- Test database -------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def test_db_url() -> str:
     """Return asyncpg URL for the pre-prepared test database.
 
-    The test DB (op_seller_test) must already exist — it's a full clone
+    The test DB (op_seller_test) must already exist -- it's a full clone
     of production, prepared once via scripts/setup_test_db.py.
     """
     _check_test_db()
     return TEST_DB_URL
 
 
-# ── Live server ───────────────────────────────────────────────────────────────
+# -- Live server (API + Scanner via Docker Compose) ----------------------------
 
 @pytest.fixture(scope="session", autouse=True)
-def live_server(test_db_url, server_port):
-    """Start a real uvicorn process serving the real server harness.
+def live_server(test_db_url):
+    """Start API and scanner via Docker Compose with test override (D-07, D-08).
 
     This fixture is SYNCHRONOUS (not async def) to avoid the pytest-asyncio 1.3.0
     event loop scoping issue where session-scoped async fixtures fail because
     pytest-asyncio defaults to function-scoped event loops.
 
-    Passes DATABASE_URL pointing to op_seller_test (not production) via env
-    to the subprocess, so the harness has full read-only data but mutable
-    tables are isolated.
+    Uses docker-compose.test.yml override which:
+    - Points DATABASE_URL at postgres-test service (Docker DNS, not localhost)
+    - Maps API to host port 8001 (avoids prod conflict)
+    - Sets restart: "no" (tests should not auto-restart on failure)
     """
-    env = {**os.environ, "DATABASE_URL": test_db_url}
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "src.server.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(server_port),
-            "--no-access-log",
-        ],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    # Build and start api + scanner containers (postgres-test should already be running)
+    subprocess.run(
+        _compose_cmd("up", "-d", "--build", "api", "scanner"),
+        check=True,
     )
 
-    base_url = f"http://127.0.0.1:{server_port}"
-    for _ in range(600):
+    # Phase 1: Wait for API HTTP health endpoint to respond with 200
+    for i in range(600):
         try:
-            r = httpx.get(f"{base_url}/api/v1/health", timeout=1.0)
+            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=1.0)
             if r.status_code == 200:
                 break
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException):
             pass
         time.sleep(0.1)
     else:
-        proc.kill()
-        stdout, stderr = proc.communicate(timeout=5)
+        # Dump logs for debugging before tearing down
+        subprocess.run(_compose_cmd("logs", "api", "scanner"))
+        subprocess.run(_compose_cmd("down"))
         raise RuntimeError(
-            f"Test server failed to start on port {server_port}\n"
-            f"stdout: {stdout.decode()}\nstderr: {stderr.decode()}"
+            f"Test API server failed to start (port {TEST_API_PORT}). "
+            "Check Docker Compose logs above."
         )
 
-    yield proc
+    # Phase 2: Wait for scanner to write first scanner_status row (Warning 2).
+    # The scanner needs ~30s to complete its first dispatch cycle and upsert
+    # scanner_status. Without this wait, tests checking health response fields
+    # would see scanner_status="unknown" intermittently.
+    for i in range(900):  # 90 seconds max
+        try:
+            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=1.0)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("scanner_status") != "unknown":
+                    break
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException):
+            pass
+        time.sleep(0.1)
+    else:
+        # Scanner didn't write status in 90s -- warn but don't fail.
+        # Tests that check scanner health fields may see "unknown".
+        import warnings
+        warnings.warn(
+            "Scanner did not write scanner_status within 90s. "
+            "Health endpoint may return 'unknown' for scanner fields.",
+            stacklevel=2,
+        )
 
-    proc.terminate()
-    proc.wait(timeout=5)
+    yield
+
+    # Tear down api + scanner containers (leave postgres-test running for next test run)
+    subprocess.run(
+        _compose_cmd("down", "--remove-orphans"),
+        check=True,
+    )
 
 
-# ── Base URL ──────────────────────────────────────────────────────────────────
+# -- Base URL ------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def base_url(server_port):
-    """Return the base URL for the running test server."""
-    return f"http://127.0.0.1:{server_port}"
+def base_url():
+    """Return the base URL for the running test API server."""
+    return TEST_API_BASE
 
 
-# ── HTTP client ───────────────────────────────────────────────────────────────
+# -- HTTP client ---------------------------------------------------------------
 
 @pytest.fixture
 async def client(base_url):
@@ -149,7 +182,7 @@ async def client(base_url):
         yield c
 
 
-# ── Real ea_id helper ─────────────────────────────────────────────────────────
+# -- Real ea_id helper ---------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def real_ea_id(test_db_url):
@@ -178,7 +211,7 @@ def real_ea_id(test_db_url):
     return asyncio.run(_query())
 
 
-# ── Seed helper (real ea_id) ──────────────────────────────────────────────────
+# -- Seed helper (real ea_id) --------------------------------------------------
 
 @pytest.fixture
 async def seed_real_portfolio_slot(client, real_ea_id):
@@ -205,13 +238,13 @@ async def seed_real_portfolio_slot(client, real_ea_id):
     return resp
 
 
-# ── Per-test cleanup ──────────────────────────────────────────────────────────
+# -- Per-test cleanup ----------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 async def cleanup_tables(test_db_url):
     """Delete all rows from mutable tables in the TEST database after each test.
 
-    Only touches op_seller_test — production op_seller is never modified.
+    Only touches op_seller_test -- production op_seller is never modified.
     Preserves read-only data (players, player_scores, market_snapshots, etc.)
 
     Creates a fresh engine per cleanup to avoid cross-event-loop issues with
@@ -228,4 +261,5 @@ async def cleanup_tables(test_db_url):
         await conn.execute(text("DELETE FROM trade_records"))
         await conn.execute(text("DELETE FROM trade_actions"))
         await conn.execute(text("DELETE FROM portfolio_slots"))
+        await conn.execute(text("DELETE FROM scanner_status"))
     await engine.dispose()
