@@ -1,20 +1,48 @@
-# Test override: points api + scanner at the test Postgres instance.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+# Test override: points api + scanner at the ALREADY-RUNNING postgres-test.
+#
+# Prereq: postgres-test must be running via `docker compose up -d postgres-test`
+# (from the main op-seller project). This override does NOT start new postgres.
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml -p op_seller_test up -d --build api scanner
 services:
+  # Keep postgres definitions but override to lightweight no-op containers
+  # so depends_on resolves without conflicting with already-running instances.
+  postgres:
+    image: busybox:latest
+    entrypoint: ["sh", "-c", "while true; do sleep 3600; done"]
+    command: []
+    ports: !override []
+    volumes: !override []
+    healthcheck:
+      test: ["CMD-SHELL", "true"]
+      interval: 2s
+      timeout: 2s
+      retries: 1
+
+  postgres-test:
+    image: busybox:latest
+    entrypoint: ["sh", "-c", "while true; do sleep 3600; done"]
+    command: []
+    ports: !override []
+    volumes: !override []
+    healthcheck:
+      test: ["CMD-SHELL", "true"]
+      interval: 2s
+      timeout: 2s
+      retries: 1
+
   api:
     environment:
-      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@postgres-test:5432/op_seller
-    ports:
-      - "8001:8000"  # Different host port to avoid conflict with prod
-    depends_on:
-      postgres-test:
-        condition: service_healthy
-    restart: "no"  # Don't auto-restart in tests
+      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@host.docker.internal:5433/op_seller
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports: !override
+      - "8001:8000"
+    restart: "no"
 
   scanner:
     environment:
-      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@postgres-test:5432/op_seller
-    depends_on:
-      postgres-test:
-        condition: service_healthy
-    restart: "no"  # Don't auto-restart in tests
+      DATABASE_URL: postgresql+asyncpg://op_seller:op_seller@host.docker.internal:5433/op_seller
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
