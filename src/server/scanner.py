@@ -159,6 +159,12 @@ class ScannerService:
         logger.info(
             f"Bootstrap discovered {len(players)} players in {discovery_elapsed:.1f}s"
         )
+
+        before = len(players)
+        players = [p for p in players if p.get("rarityName", "") != "Icon"]
+        if before - len(players):
+            logger.info(f"Bootstrap: filtered {before - len(players)} base icons")
+
         now = datetime.utcnow()
 
         # Build values list for bulk upsert
@@ -273,6 +279,12 @@ class ScannerService:
             max_price=SCANNER_MAX_PRICE,
         )
         logger.info(f"Discovery found {len(players)} players")
+
+        before = len(players)
+        players = [p for p in players if p.get("rarityName", "") != "Icon"]
+        if before - len(players):
+            logger.info(f"Discovery: filtered {before - len(players)} base icons")
+
         discovered_ids = {p["ea_id"] for p in players}
         now = datetime.utcnow()
         far_future = now + timedelta(hours=24)
