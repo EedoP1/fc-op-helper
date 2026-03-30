@@ -10,11 +10,11 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query, Request, Path, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, TradeRecord, MarketSnapshot
-from src.config import STALE_THRESHOLD_HOURS, VOLATILITY_MAX_PRICE_INCREASE_PCT, VOLATILITY_MAX_PRICE_INCREASE_ABS, VOLATILITY_LOOKBACK_DAYS
+from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, TradeRecord
+from src.config import STALE_THRESHOLD_HOURS
 from src.optimizer import optimize_portfolio
 
 logger = logging.getLogger(__name__)
@@ -94,61 +94,88 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
     }
 
 
-async def _get_volatile_ea_ids(session: AsyncSession, ea_ids: list[int]) -> set[int]:
-    """Return ea_ids whose price varied beyond either threshold over the lookback window.
+async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
+    """Fetch the latest viable PlayerScore + PlayerRecord for every active player.
 
-    Uses MarketSnapshot.current_lowest_bin (one row per scan, ~311K total) instead
-    of SnapshotPricePoint (45M+ rows). Both capture MIN/MAX price swings — scanner
-    runs every ~30s so MarketSnapshot has sufficient granularity for 3-day volatility.
+    Replaces the subquery+nested-loop ORM pattern
+    (JOIN (SELECT ea_id, MAX(scored_at) ... GROUP BY ea_id) ...) which degrades
+    to O(N) random index lookups on cold cache with 500k+ rows (~33s).
 
-    A player is flagged as volatile if EITHER condition holds:
-      - (max_bin - min_bin) / min_bin > VOLATILITY_MAX_PRICE_INCREASE_PCT (percentage)
-      - (max_bin - min_bin) > VOLATILITY_MAX_PRICE_INCREASE_ABS (absolute coins)
-
-    This catches large-cap players (e.g., 100k cards) with moderate percentage swings
-    that still represent significant coin risk (e.g., 15% of 100k = 15k coins).
-
-    Args:
-        session: Active async DB session.
-        ea_ids: List of ea_ids to check.
+    ROW_NUMBER() OVER (PARTITION BY ea_id ORDER BY scored_at DESC) lets
+    PostgreSQL use an incremental sort on the (ea_id, scored_at) index in a
+    single forward pass (~4s cold, ~1s warm).
 
     Returns:
-        Set of ea_ids considered volatile.
+        List of (PlayerScore, PlayerRecord) tuples, one per active+viable player.
     """
-    if not ea_ids:
-        return set()
+    sql = text("""
+        SELECT
+            ps.id, ps.ea_id, ps.scored_at,
+            ps.buy_price, ps.sell_price, ps.net_profit, ps.margin_pct,
+            ps.op_sales, ps.total_sales, ps.op_ratio, ps.expected_profit,
+            ps.efficiency, ps.sales_per_hour, ps.is_viable,
+            ps.expected_profit_per_hour, ps.scorer_version,
+            pr.ea_id   AS pr_ea_id, pr.name, pr.rating, pr.position,
+            pr.nation, pr.league, pr.club, pr.card_type, pr.scan_tier,
+            pr.last_scanned_at, pr.next_scan_at, pr.is_active,
+            pr.listing_count, pr.sales_per_hour AS pr_sales_per_hour,
+            pr.futgg_url
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ea_id
+                       ORDER BY scored_at DESC
+                   ) AS rn
+            FROM player_scores
+            WHERE is_viable = TRUE
+        ) ps
+        JOIN players pr ON pr.ea_id = ps.ea_id
+        WHERE ps.rn = 1
+          AND pr.is_active = TRUE
+    """)
+    result = await session.execute(sql)
+    raw_rows = result.mappings().all()
 
-    cutoff = datetime.utcnow() - timedelta(days=VOLATILITY_LOOKBACK_DAYS)
-    threshold = VOLATILITY_MAX_PRICE_INCREASE_PCT / 100.0
-
-    # Query MarketSnapshot directly — indexed on (ea_id, captured_at).
-    # ~311K rows vs 45M in snapshot_price_points.
-    stmt = (
-        select(
-            MarketSnapshot.ea_id,
-            func.min(MarketSnapshot.current_lowest_bin).label("min_bin"),
-            func.max(MarketSnapshot.current_lowest_bin).label("max_bin"),
+    # Reconstruct ORM-like objects so callers can use score.field / record.field
+    pairs = []
+    for row in raw_rows:
+        score = PlayerScore(
+            id=row["id"],
+            ea_id=row["ea_id"],
+            scored_at=row["scored_at"],
+            buy_price=row["buy_price"],
+            sell_price=row["sell_price"],
+            net_profit=row["net_profit"],
+            margin_pct=row["margin_pct"],
+            op_sales=row["op_sales"],
+            total_sales=row["total_sales"],
+            op_ratio=row["op_ratio"],
+            expected_profit=row["expected_profit"],
+            efficiency=row["efficiency"],
+            sales_per_hour=row["sales_per_hour"],
+            is_viable=row["is_viable"],
+            expected_profit_per_hour=row["expected_profit_per_hour"],
+            scorer_version=row["scorer_version"],
         )
-        .where(
-            MarketSnapshot.ea_id.in_(ea_ids),
-            MarketSnapshot.captured_at >= cutoff,
+        record = PlayerRecord(
+            ea_id=row["pr_ea_id"],
+            name=row["name"],
+            rating=row["rating"],
+            position=row["position"],
+            nation=row["nation"],
+            league=row["league"],
+            club=row["club"],
+            card_type=row["card_type"],
+            scan_tier=row["scan_tier"],
+            last_scanned_at=row["last_scanned_at"],
+            next_scan_at=row["next_scan_at"],
+            is_active=row["is_active"],
+            listing_count=row["listing_count"],
+            sales_per_hour=row["pr_sales_per_hour"],
+            futgg_url=row["futgg_url"],
         )
-        .group_by(MarketSnapshot.ea_id)
-        .having(func.count(MarketSnapshot.id) >= 2)
-    )
-
-    result = await session.execute(stmt)
-    rows = result.all()
-
-    volatile = set()
-    for row in rows:
-        if row.min_bin and row.min_bin > 0:
-            abs_increase = row.max_bin - row.min_bin
-            pct_increase = abs_increase / row.min_bin
-            if pct_increase > threshold or abs_increase > VOLATILITY_MAX_PRICE_INCREASE_ABS:
-                volatile.add(row.ea_id)
-
-    return volatile
+        pairs.append((score, record))
+    return pairs
 
 
 @router.get("/portfolio")
@@ -170,41 +197,14 @@ async def get_portfolio(
     """
     sf = _read_session_factory(request)
     async with sf() as session:
-        # Subquery: latest scored_at per player for viable scores only
-        latest_subq = (
-            select(
-                PlayerScore.ea_id,
-                func.max(PlayerScore.scored_at).label("max_scored_at"),
-            )
-            .where(PlayerScore.is_viable == True)  # noqa: E712
-            .group_by(PlayerScore.ea_id)
-            .subquery()
-        )
+        rows = await _fetch_latest_viable_scores(session)
 
-        # Join to get full score row + player record
-        stmt = (
-            select(PlayerScore, PlayerRecord)
-            .join(
-                latest_subq,
-                (PlayerScore.ea_id == latest_subq.c.ea_id)
-                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
-            )
-            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
-            .where(PlayerRecord.is_active == True)  # noqa: E712
-        )
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        # Apply volatility filter while session is still open
-        all_ea_ids = [score.ea_id for score, record in rows]
-        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
-        if volatile:
-            logger.info(
-                "Volatility filter removed %d of %d candidates (GET /portfolio)",
-                len(volatile), len(rows),
-            )
-        rows = [(s, r) for s, r in rows if s.ea_id not in volatile]
+        # Filter out base icons (rarityName exactly "Icon")
+        before_icon = len(rows)
+        rows = [(s, r) for s, r in rows if r.card_type != "Icon"]
+        icon_removed = before_icon - len(rows)
+        if icon_removed:
+            logger.info("Icon filter removed %d base icons from candidates", icon_removed)
 
     # Build fresh scored entries (never cache — optimizer mutates dicts)
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
@@ -288,40 +288,7 @@ async def generate_portfolio(
     """
     sf = _read_session_factory(request)
     async with sf() as session:
-        # Subquery: latest scored_at per player for viable scores only
-        latest_subq = (
-            select(
-                PlayerScore.ea_id,
-                func.max(PlayerScore.scored_at).label("max_scored_at"),
-            )
-            .where(PlayerScore.is_viable == True)  # noqa: E712
-            .group_by(PlayerScore.ea_id)
-            .subquery()
-        )
-
-        stmt = (
-            select(PlayerScore, PlayerRecord)
-            .join(
-                latest_subq,
-                (PlayerScore.ea_id == latest_subq.c.ea_id)
-                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
-            )
-            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
-            .where(PlayerRecord.is_active == True)  # noqa: E712
-        )
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        # Apply volatility filter while session is still open
-        all_ea_ids = [score.ea_id for score, record in rows]
-        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
-        if volatile:
-            logger.info(
-                "Volatility filter removed %d of %d candidates (POST /portfolio/generate)",
-                len(volatile), len(rows),
-            )
-        rows = [(s, r) for s, r in rows if s.ea_id not in volatile]
+        rows = await _fetch_latest_viable_scores(session)
 
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
 
@@ -399,7 +366,6 @@ async def confirm_portfolio(
         Dict with keys: confirmed (int), leftovers (int), status ("ok").
     """
     session_factory = request.app.state.session_factory
-    logger.warning("confirm_portfolio: ENTER with %d players", len(body.players))
 
     # Deduplicate by ea_id — last occurrence wins (prevents UNIQUE constraint violation)
     deduped: dict[int, ConfirmPlayer] = {}
@@ -407,15 +373,10 @@ async def confirm_portfolio(
         deduped[p.ea_id] = p
     new_ea_ids = set(deduped.keys())
 
-    logger.warning("confirm_portfolio: acquiring session...")
     async with session_factory() as session:
-        logger.warning("confirm_portfolio: session acquired")
         # Step 1: Load all existing slots
-        logger.warning("confirm_portfolio: executing SELECT PortfolioSlot...")
         old_slots_result = await session.execute(select(PortfolioSlot))
-        logger.warning("confirm_portfolio: SELECT done")
         old_slots = old_slots_result.scalars().all()
-        logger.warning("confirm_portfolio: %d old slots found", len(old_slots))
 
         # Step 2: For each old slot, check latest trade outcome to decide fate
         leftover_count = 0
@@ -504,41 +465,9 @@ async def swap_preview(
 
     sf = _read_session_factory(request)
     async with sf() as session:
-        latest_subq = (
-            select(
-                PlayerScore.ea_id,
-                func.max(PlayerScore.scored_at).label("max_scored_at"),
-            )
-            .where(PlayerScore.is_viable == True)  # noqa: E712
-            .group_by(PlayerScore.ea_id)
-            .subquery()
-        )
+        rows = await _fetch_latest_viable_scores(session)
 
-        stmt = (
-            select(PlayerScore, PlayerRecord)
-            .join(
-                latest_subq,
-                (PlayerScore.ea_id == latest_subq.c.ea_id)
-                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
-            )
-            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
-            .where(PlayerRecord.is_active == True)  # noqa: E712
-        )
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        # Apply volatility filter before excluded_ea_ids filter, while session is open
-        all_ea_ids = [score.ea_id for score, record in rows]
-        volatile = await _get_volatile_ea_ids(session, all_ea_ids)
-        if volatile:
-            logger.info(
-                "Volatility filter removed %d of %d candidates (POST /portfolio/swap-preview)",
-                len(volatile), len(rows),
-            )
-        excluded = excluded | volatile
-
-    # Filter out excluded ea_ids (includes volatile players) before running optimizer
+    # Filter out excluded ea_ids before running optimizer
     candidates = [
         _build_scored_entry(score, record)
         for score, record in rows
@@ -841,34 +770,10 @@ async def rebalance_portfolio(
     new_entries = []
     if remaining_budget > 0:
         async with sf() as session:
-            latest_subq = (
-                select(
-                    PlayerScore.ea_id,
-                    func.max(PlayerScore.scored_at).label("max_scored_at"),
-                )
-                .where(PlayerScore.is_viable == True)  # noqa: E712
-                .group_by(PlayerScore.ea_id)
-                .subquery()
-            )
-            stmt = (
-                select(PlayerScore, PlayerRecord)
-                .join(
-                    latest_subq,
-                    (PlayerScore.ea_id == latest_subq.c.ea_id)
-                    & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
-                )
-                .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
-                .where(PlayerRecord.is_active == True)  # noqa: E712
-            )
-            result = await session.execute(stmt)
-            rows = result.all()
+            rows = await _fetch_latest_viable_scores(session)
 
-            # Apply volatility filter
-            all_ea_ids = [score.ea_id for score, record in rows]
-            volatile = await _get_volatile_ea_ids(session, all_ea_ids)
-
-        # Exclude kept players and volatile players
-        excluded = kept_ea_ids | volatile | {e["ea_id"] for e in dropped}
+        # Exclude kept players
+        excluded = kept_ea_ids | {e["ea_id"] for e in dropped}
         candidates = [
             _build_scored_entry(score, record)
             for score, record in rows
@@ -964,7 +869,6 @@ async def delete_portfolio_player(
         await session.commit()
 
     # Phase 2: Read-only queries for replacement suggestions.
-    # Separate session so the heavy volatility GROUP BY doesn't hold write locks.
     sf = _read_session_factory(request)
     async with sf() as session:
         # 4. Get remaining portfolio ea_ids (for exclusion from candidates)
@@ -972,40 +876,10 @@ async def delete_portfolio_player(
         remaining_ea_ids = {row[0] for row in remaining_result.all()}
 
         # 5. Query viable candidates (same pattern as get_portfolio)
-        latest_subq = (
-            select(
-                PlayerScore.ea_id,
-                func.max(PlayerScore.scored_at).label("max_scored_at"),
-            )
-            .where(PlayerScore.is_viable == True)  # noqa: E712
-            .group_by(PlayerScore.ea_id)
-            .subquery()
-        )
+        rows = await _fetch_latest_viable_scores(session)
 
-        stmt = (
-            select(PlayerScore, PlayerRecord)
-            .join(
-                latest_subq,
-                (PlayerScore.ea_id == latest_subq.c.ea_id)
-                & (PlayerScore.scored_at == latest_subq.c.max_scored_at),
-            )
-            .join(PlayerRecord, PlayerRecord.ea_id == PlayerScore.ea_id)
-            .where(PlayerRecord.is_active == True)  # noqa: E712
-        )
-        rows_result = await session.execute(stmt)
-        rows = rows_result.all()
-
-        # 6. Apply volatility filter
-        all_candidate_ids = [score.ea_id for score, record in rows]
-        volatile = await _get_volatile_ea_ids(session, all_candidate_ids)
-        if volatile:
-            logger.info(
-                "Volatility filter removed %d of %d candidates (DELETE /portfolio/%d)",
-                len(volatile), len(rows), ea_id,
-            )
-
-    # 7. Build scored candidates excluding removed player, remaining slots, and volatile players
-    excluded = remaining_ea_ids | {ea_id} | volatile
+    # 6. Build scored candidates excluding removed player and remaining slots
+    excluded = remaining_ea_ids | {ea_id}
     scored_candidates = [
         _build_scored_entry(score, record)
         for score, record in rows
