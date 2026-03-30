@@ -43,6 +43,15 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [ ] **UI-04**: Start/stop automation toggle in overlay panel
 - [ ] **UI-05**: Status display showing current action, last event, and running/stopped/error state
 
+### Process Separation (Phase 10)
+
+- [ ] **SPLIT-01**: Scanner runs as an independent OS process via `python -m src.server.scanner_main`, with its own DB engine, ScannerService, CircuitBreaker, and APScheduler
+- [ ] **SPLIT-02**: API process starts without scanner, scheduler, FutGGClient, or CircuitBreaker in memory — only DB pool and FastAPI routers
+- [ ] **SPLIT-03**: Scanner writes operational metrics (is_running, success_rate_1h, last_scan_at, queue_depth, circuit_breaker_state) to a `scanner_status` DB table every dispatch cycle
+- [ ] **SPLIT-04**: Health endpoint (`/api/v1/health`) reads scanner metrics from the `scanner_status` DB table instead of in-memory `app.state.scanner`, returning degraded "unknown" state when scanner has not yet written
+- [ ] **SPLIT-05**: Both processes managed via Docker Compose — `docker compose up` starts postgres, api, and scanner services with auto-restart on failure
+- [ ] **SPLIT-06**: Integration tests use Docker Compose (docker-compose.test.yml override) to start api and scanner containers against the test database, matching production deployment exactly
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -104,12 +113,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UI-02 | Phase 8 | Pending |
 | UI-04 | Phase 8 | Pending |
 | UI-05 | Phase 8 | Pending |
+| SPLIT-01 | Phase 10 | Pending |
+| SPLIT-02 | Phase 10 | Pending |
+| SPLIT-03 | Phase 10 | Pending |
+| SPLIT-04 | Phase 10 | Pending |
+| SPLIT-05 | Phase 10 | Pending |
+| SPLIT-06 | Phase 10 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 24 total
-- Mapped to phases: 24
+- v1.1 requirements: 30 total
+- Mapped to phases: 30
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-26*
-*Last updated: 2026-03-26 after roadmap creation — traceability complete*
+*Last updated: 2026-03-30 after Phase 10 planning — SPLIT requirements added*

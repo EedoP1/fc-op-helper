@@ -38,14 +38,14 @@ created: 2026-03-30
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 10-01-01 | 01 | 1 | scanner_status table | unit | `pytest tests/ -k scanner_status` | ❌ W0 | ⬜ pending |
-| 10-01-02 | 01 | 1 | health endpoint DB read | integration | `pytest tests/ -k health` | ✅ | ⬜ pending |
-| 10-02-01 | 02 | 1 | scanner_main entry point | unit | `pytest tests/ -k scanner_main` | ❌ W0 | ⬜ pending |
-| 10-02-02 | 02 | 1 | API lifespan no scanner | integration | `pytest tests/ -k lifespan` | ❌ W0 | ⬜ pending |
-| 10-03-01 | 03 | 2 | Docker Compose config | integration | `docker compose config --quiet` | ❌ W0 | ⬜ pending |
-| 10-03-02 | 03 | 2 | Two-process integration | integration | `pytest tests/integration/ -v` | ✅ | ⬜ pending |
+| 10-01-01 | 01 | 1 | SPLIT-03 scanner_status table | unit | `pytest tests/ -k scanner_status` | No W0 | pending |
+| 10-01-02 | 01 | 1 | SPLIT-04 health endpoint DB read | integration | `pytest tests/ -k health` | Yes | pending |
+| 10-02-01 | 02 | 2 | SPLIT-01 scanner_main entry point | unit | `pytest tests/ -k scanner_main` | No W0 | pending |
+| 10-02-02 | 02 | 2 | SPLIT-02 API lifespan no scanner | integration | `pytest tests/ -k lifespan` | No W0 | pending |
+| 10-03-01 | 03 | 3 | SPLIT-05 Docker Compose config | integration | `docker compose config --quiet` | No W0 | pending |
+| 10-03-02 | 03 | 3 | SPLIT-06 Docker Compose integration tests | integration | `pytest tests/integration/ -v` | Yes | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
@@ -53,7 +53,7 @@ created: 2026-03-30
 
 - [ ] `tests/test_scanner_status.py` — scanner_status table model and upsert
 - [ ] `tests/test_scanner_main.py` — scanner_main entry point validation
-- [ ] Existing `tests/integration/conftest.py` — updated for two-process startup
+- [ ] Existing `tests/integration/conftest.py` — updated for Docker Compose startup
 
 *Existing test infrastructure covers framework and fixtures.*
 
@@ -63,8 +63,8 @@ created: 2026-03-30
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Docker Compose `docker-compose up` starts both services | D-04 | Requires Docker daemon | Run `docker compose up -d`, verify both containers healthy |
-| Auto-restart on failure | D-04 | Requires killing a container | `docker kill <scanner>`, verify it restarts within 10s |
+| Docker Compose `docker-compose up` starts both services | SPLIT-05 | Requires Docker daemon | Run `docker compose up -d`, verify both containers healthy |
+| Auto-restart on failure | SPLIT-05 | Requires killing a container | `docker kill <scanner>`, verify it restarts within 10s |
 
 ---
 
