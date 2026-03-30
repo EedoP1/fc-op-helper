@@ -132,6 +132,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
         JOIN players pr ON pr.ea_id = ps.ea_id
         WHERE ps.rn = 1
           AND pr.is_active = TRUE
+          AND pr.card_type != 'Icon'
     """)
     result = await session.execute(sql)
     raw_rows = result.mappings().all()
@@ -198,13 +199,6 @@ async def get_portfolio(
     sf = _read_session_factory(request)
     async with sf() as session:
         rows = await _fetch_latest_viable_scores(session)
-
-        # Filter out base icons (rarityName exactly "Icon")
-        before_icon = len(rows)
-        rows = [(s, r) for s, r in rows if r.card_type != "Icon"]
-        icon_removed = before_icon - len(rows)
-        if icon_removed:
-            logger.info("Icon filter removed %d base icons from candidates", icon_removed)
 
     # Build fresh scored entries (never cache — optimizer mutates dicts)
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
