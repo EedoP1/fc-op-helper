@@ -115,12 +115,13 @@ def live_server(test_db_url):
     )
 
     # Phase 1: Wait for API HTTP health endpoint to respond with 200
-    for i in range(600):
+    # Allow up to 180s — Docker build can take 60-90s before the container starts
+    for i in range(1800):
         try:
-            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=1.0)
+            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=2.0)
             if r.status_code == 200:
                 break
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException):
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException, httpx.RemoteProtocolError):
             pass
         time.sleep(0.1)
     else:
@@ -138,12 +139,12 @@ def live_server(test_db_url):
     # would see scanner_status="unknown" intermittently.
     for i in range(900):  # 90 seconds max
         try:
-            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=1.0)
+            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=2.0)
             if r.status_code == 200:
                 data = r.json()
                 if data.get("scanner_status") != "unknown":
                     break
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException):
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException, httpx.RemoteProtocolError):
             pass
         time.sleep(0.1)
     else:
