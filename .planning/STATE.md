@@ -164,9 +164,10 @@ None yet.
 | 260329-gtn | Add min-total-observations, min-history-depth scorer filters and wire absolute volatility threshold | 2026-03-29 | 032431b | [260329-gtn-add-missing-scorer-filters-min-total-sal](./quick/260329-gtn-add-missing-scorer-filters-min-total-sal/) |
 | 260330-g6d | Fix scanner throughput: remove SnapshotSale/PricePoint inserts, raise DB semaphore, batch listing upserts | 2026-03-30 | 9106250 | [260330-g6d-fix-scanner-throughput-bottleneck-skip-s](./quick/260330-g6d-fix-scanner-throughput-bottleneck-skip-s/) |
 | 260330-gsm | Drop SnapshotSale/SnapshotPricePoint ORM models and all references (22GB dead tables) | 2026-03-30 | 02afbbb | [260330-gsm-drop-snapshot-sales-and-snapshot-price-p](./quick/260330-gsm-drop-snapshot-sales-and-snapshot-price-p/) |
+| 260330-nuv | Add filter to ignore base icon players in portfolio endpoints and scanner | 2026-03-30 | 599c9b9 | [260330-nuv-add-filter-to-ignore-base-icon-players](./quick/260330-nuv-add-filter-to-ignore-base-icon-players/) |
 
 ## Session Continuity
 
 Last activity: 2026-03-30
-Stopped at: Completed 10-03-PLAN.md
+Stopped at: Completed quick/260330-nuv-PLAN.md
 Resume file: None
