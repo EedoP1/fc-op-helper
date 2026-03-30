@@ -87,6 +87,7 @@ class FutGGClient:
 
             url = f"{self.BASE_URL}{path}"
             resp = await self.client.get(url)
+            logger.debug(f"HTTP {resp.status_code} for {path}")
             resp.raise_for_status()
             return resp.json()
         except HTTPError as e:
@@ -180,6 +181,7 @@ class FutGGClient:
 
                 url = f"{self.BASE_URL}{path}"
                 resp = sync_client.get(url)
+                logger.debug(f"HTTP {resp.status_code} for {path}")
                 resp.raise_for_status()
                 return resp.json()
             except HTTPError as e:
