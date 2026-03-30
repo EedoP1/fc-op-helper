@@ -109,7 +109,13 @@ Plans:
   5. When automation encounters a CAPTCHA, it stops immediately and alerts the user; when any DOM element is missing, it fails loudly with the selector name rather than silently continuing
   6. User clicks Confirm to start the automated cycle; start/stop toggle halts automation mid-cycle and resumes from the correct next action
   7. Status display shows current action, last event, and running/stopped/error state at all times
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 08-01-PLAN.md -- DOM exploration + backend daily-cap and fresh-price endpoints
+- [ ] 08-02-PLAN.md -- Message types, storage items, automation engine core
+- [ ] 08-03-PLAN.md -- Buy cycle: search, price discovery, buy, list
+- [ ] 08-04-PLAN.md -- Transfer list cycle: scan, relist-all, clear sold, daily cap
+- [ ] 08-05-PLAN.md -- Automation loop, start/stop UI, status display, activity log
 **UI hint**: yes
 
 ## Progress
@@ -128,7 +134,7 @@ Phases execute in numeric order: 5 → 6 → 7 → 07.1 → 07.2 → 8
 | 7. Portfolio Management | v1.1 | 3/3 | Complete   | 2026-03-27 |
 | 07.1 Trade Reporting | v1.1 | 3/3 | Complete    | 2026-03-27 |
 | 07.2 Portfolio Dashboard | v1.1 | 2/2 | Complete   | 2026-03-27 |
-| 8. DOM Automation Layer | v1.1 | 0/TBD | Not started | - |
+| 8. DOM Automation Layer | v1.1 | 0/5 | Not started | - |
 
 ### Phase 9: Comprehensive API Integration & Performance Test Suite
 
