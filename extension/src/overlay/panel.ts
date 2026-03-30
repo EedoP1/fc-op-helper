@@ -14,6 +14,7 @@
 
 import type { PortfolioPlayer } from '../storage';
 import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded } from '../messages';
+import { automationStatusItem, activityLogItem } from '../storage';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1131,6 +1132,232 @@ export function createOverlayPanel(): OverlayPanel {
     });
   }
 
+  // ── Automation controls ────────────────────────────────────────────────────
+
+  /**
+   * Render the automation start/stop button, status display, and activity log
+   * into the given parent element.
+   *
+   * D-16: Start Automation button is separate from portfolio confirm — only
+   * appears after portfolio is confirmed (inside renderConfirmed).
+   * UI-04: Start button dispatches custom event; content script listens.
+   * D-20 / UI-02: Status display shows state badge, current action, last event.
+   * D-21 / UI-05: Activity log is collapsible with timestamped entries.
+   * AUTO-06: window.alert() on ERROR state so user is notified even if panel collapsed.
+   */
+  function renderAutomationControls(parent: HTMLElement): void {
+    // ── Styles ──────────────────────────────────────────────────────────────
+    const styleId = 'op-seller-automation-styles';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        .op-seller-automation-controls { padding: 8px 0; border-top: 1px solid #444; margin-top: 8px; }
+        .op-seller-automation-btn { width: 100%; padding: 10px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 14px; }
+        .op-seller-automation-status { padding: 8px 0; }
+        .op-seller-status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: white; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+        .op-seller-current-action { margin-top: 4px; font-size: 13px; color: #ccc; }
+        .op-seller-last-event { margin-top: 2px; font-size: 12px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .op-seller-session-profit { margin-top: 4px; font-size: 13px; color: #2ecc71; }
+        .op-seller-log-toggle { background: none; border: 1px solid #555; color: #aaa; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-top: 6px; }
+        .op-seller-activity-log { margin-top: 4px; background: #1a1a2e; border-radius: 4px; padding: 4px; max-height: 200px; overflow-y: auto; }
+        .op-seller-log-entry { font-size: 11px; color: #888; padding: 1px 4px; }
+        .op-seller-log-entry .op-seller-log-timestamp { color: #666; margin-right: 6px; }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // ── Controls section ─────────────────────────────────────────────────────
+    const automationSection = document.createElement('div');
+    automationSection.className = 'op-seller-automation-controls';
+    parent.appendChild(automationSection);
+
+    // ── Start/Stop button (D-16, UI-04) ──────────────────────────────────────
+    const startStopBtn = document.createElement('button');
+    startStopBtn.className = 'op-seller-automation-btn';
+
+    // ── Status display (D-20, UI-02) ─────────────────────────────────────────
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'op-seller-automation-status';
+
+    const badgeEl = document.createElement('span');
+    badgeEl.className = 'op-seller-status-badge';
+
+    const currentActionEl = document.createElement('div');
+    currentActionEl.className = 'op-seller-current-action';
+
+    const lastEventEl = document.createElement('div');
+    lastEventEl.className = 'op-seller-last-event';
+
+    const sessionProfitEl = document.createElement('div');
+    sessionProfitEl.className = 'op-seller-session-profit';
+
+    statusDiv.appendChild(badgeEl);
+    statusDiv.appendChild(currentActionEl);
+    statusDiv.appendChild(lastEventEl);
+    statusDiv.appendChild(sessionProfitEl);
+
+    // ── Activity log toggle and container (D-21, UI-05) ──────────────────────
+    const logToggle = document.createElement('button');
+    logToggle.textContent = 'Activity Log';
+    logToggle.className = 'op-seller-log-toggle';
+
+    const logContainer = document.createElement('div');
+    logContainer.className = 'op-seller-activity-log';
+    logContainer.style.display = 'none'; // Collapsed by default
+
+    automationSection.appendChild(startStopBtn);
+    automationSection.appendChild(statusDiv);
+    automationSection.appendChild(logToggle);
+    automationSection.appendChild(logContainer);
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Get badge background color based on automation state */
+    function getBadgeColor(state: string): string {
+      switch (state) {
+        case 'BUYING':
+        case 'LISTING':
+        case 'SCANNING':
+        case 'RELISTING':
+          return '#2ecc71';
+        case 'ERROR':
+          return '#e74c3c';
+        default:
+          return '#666';
+      }
+    }
+
+    /** Extract HH:MM:SS from ISO timestamp */
+    function formatTime(iso: string): string {
+      try {
+        return new Date(iso).toLocaleTimeString('en-US', {
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+      } catch {
+        return iso.slice(11, 19) || iso;
+      }
+    }
+
+    /** Render current automation status into the status DOM elements */
+    function updateStatusDisplay(isRunning: boolean, state: string, currentAction: string | null, lastEvent: string | null, sessionProfit: number): void {
+      // Update start/stop button
+      if (isRunning) {
+        startStopBtn.textContent = 'Stop Automation';
+        (startStopBtn.style as CSSStyleDeclaration).background = '#e74c3c';
+      } else {
+        startStopBtn.textContent = 'Start Automation';
+        (startStopBtn.style as CSSStyleDeclaration).background = '#2ecc71';
+      }
+
+      // Update badge
+      badgeEl.textContent = state;
+      (badgeEl.style as CSSStyleDeclaration).background = getBadgeColor(state);
+
+      // Update current action
+      currentActionEl.textContent = currentAction || 'Idle';
+
+      // Update last event
+      lastEventEl.textContent = lastEvent || 'No events yet';
+
+      // Update session profit
+      sessionProfitEl.textContent = `Session profit: ${sessionProfit.toLocaleString()}`;
+    }
+
+    /** Re-render log entries into the log container */
+    function renderLogEntries(entries: Array<{ timestamp: string; message: string }>): void {
+      logContainer.innerHTML = '';
+      for (const entry of entries) {
+        const row = document.createElement('div');
+        row.className = 'op-seller-log-entry';
+        const ts = document.createElement('span');
+        ts.className = 'op-seller-log-timestamp';
+        ts.textContent = formatTime(entry.timestamp);
+        row.appendChild(ts);
+        row.appendChild(document.createTextNode(entry.message));
+        logContainer.appendChild(row);
+      }
+      // Auto-scroll to bottom on new entries
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    // ── Initial render from storage ───────────────────────────────────────────
+    automationStatusItem.getValue().then(status => {
+      if (status) {
+        updateStatusDisplay(status.isRunning, status.state, status.currentAction, status.lastEvent, status.sessionProfit);
+      } else {
+        updateStatusDisplay(false, 'IDLE', null, null, 0);
+      }
+    }).catch(() => {
+      updateStatusDisplay(false, 'IDLE', null, null, 0);
+    });
+
+    activityLogItem.getValue().then(entries => {
+      renderLogEntries(entries);
+    }).catch(() => {});
+
+    // ── Reactive updates via storage watch ────────────────────────────────────
+
+    // Track last error message to avoid duplicate alerts
+    let lastAlertedError: string | null = null;
+
+    automationStatusItem.watch((newStatus) => {
+      if (!newStatus) return;
+      updateStatusDisplay(
+        newStatus.isRunning,
+        newStatus.state,
+        newStatus.currentAction,
+        newStatus.lastEvent,
+        newStatus.sessionProfit,
+      );
+
+      // AUTO-06: Prominent window.alert() on CAPTCHA/DOM failure (D-22, D-23)
+      // Alert even if panel is collapsed so the user is immediately notified.
+      if (newStatus.state === 'ERROR' && newStatus.errorMessage && newStatus.errorMessage !== lastAlertedError) {
+        lastAlertedError = newStatus.errorMessage;
+        window.alert('[OP Seller] Automation stopped: ' + newStatus.errorMessage);
+      }
+    });
+
+    activityLogItem.watch((entries) => {
+      if (!entries) return;
+      renderLogEntries(entries);
+    });
+
+    // ── Button click handlers ─────────────────────────────────────────────────
+
+    startStopBtn.addEventListener('click', () => {
+      automationStatusItem.getValue().then(status => {
+        if (status && status.isRunning) {
+          // Dispatch stop event — content script listens (UI-04)
+          document.dispatchEvent(new CustomEvent('op-seller-automation-stop'));
+        } else {
+          // Dispatch start event — content script listens (UI-04)
+          document.dispatchEvent(new CustomEvent('op-seller-automation-start'));
+        }
+      }).catch(() => {
+        // Default to start if status unavailable
+        document.dispatchEvent(new CustomEvent('op-seller-automation-start'));
+      });
+    });
+
+    // ── Activity log toggle ───────────────────────────────────────────────────
+    logToggle.addEventListener('click', () => {
+      if (logContainer.style.display === 'none') {
+        logContainer.style.display = 'block';
+        logToggle.textContent = 'Hide Activity Log';
+        // Scroll to bottom when expanding
+        logContainer.scrollTop = logContainer.scrollHeight;
+      } else {
+        logContainer.style.display = 'none';
+        logToggle.textContent = 'Activity Log';
+      }
+    });
+  }
+
   /** Render CONFIRMED state: tab bar (Portfolio / Dashboard) + content area (D-01, D-02, D-03) */
   function renderConfirmed(): void {
     container.innerHTML = '';
@@ -1175,6 +1402,9 @@ export function createOverlayPanel(): OverlayPanel {
     }
 
     renderTabContent();
+
+    // Automation controls — persistent footer visible in all confirmed tabs (D-16)
+    renderAutomationControls(container);
   }
 
   /** Render an inline error message inside the panel */
