@@ -125,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-27 after Phase 6 (Extension Architecture Foundation) complete*
+*Last updated: 2026-03-30 after Phase 10 (Split Scanner and API into Separate Processes) complete*
