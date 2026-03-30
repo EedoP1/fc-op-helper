@@ -67,6 +67,26 @@ export default defineBackground({
         case 'ACTIONS_NEEDED_REQUEST':
           handleActionsNeeded().then(sendResponse);
           return true;
+        case 'DAILY_CAP_REQUEST':
+          handleDailyCap().then(sendResponse);
+          return true;
+        case 'DAILY_CAP_INCREMENT':
+          handleDailyCapIncrement().then(sendResponse);
+          return true;
+        case 'FRESH_PRICE_REQUEST':
+          handleFreshPrice(msg.ea_id).then(sendResponse);
+          return true;
+        case 'AUTOMATION_STATUS_REQUEST':
+        case 'AUTOMATION_START':
+        case 'AUTOMATION_STOP':
+        case 'AUTOMATION_START_RESULT':
+        case 'AUTOMATION_STOP_RESULT':
+        case 'AUTOMATION_STATUS_RESULT':
+        case 'DAILY_CAP_RESULT':
+        case 'DAILY_CAP_INCREMENT_RESULT':
+        case 'FRESH_PRICE_RESULT':
+          // Automation control handled by content script directly; result types not received here
+          return false;
         default:
           // PING/PONG and other types not handled here — content script handles those
           return false;
@@ -323,6 +343,58 @@ async function handleActionsNeeded(): Promise<ExtensionMessage> {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return { type: 'ACTIONS_NEEDED_RESULT', data: null, error: message };
+  }
+}
+
+/**
+ * Fetch the current daily transaction cap status from the backend.
+ * GET /api/v1/automation/daily-cap → DAILY_CAP_RESULT
+ */
+async function handleDailyCap(): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/automation/daily-cap`);
+    if (!res.ok) {
+      return { type: 'DAILY_CAP_RESULT', count: 0, cap: 500, capped: false, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'DAILY_CAP_RESULT', count: data.count, cap: data.cap, capped: data.capped };
+  } catch (e) {
+    return { type: 'DAILY_CAP_RESULT', count: 0, cap: 500, capped: false, error: String(e) };
+  }
+}
+
+/**
+ * Increment the daily transaction cap counter by 1.
+ * POST /api/v1/automation/daily-cap/increment → DAILY_CAP_INCREMENT_RESULT
+ */
+async function handleDailyCapIncrement(): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/automation/daily-cap/increment`, { method: 'POST' });
+    if (!res.ok) {
+      return { type: 'DAILY_CAP_INCREMENT_RESULT', count: 0, cap: 500, capped: false, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'DAILY_CAP_INCREMENT_RESULT', count: data.count, cap: data.cap, capped: data.capped };
+  } catch (e) {
+    return { type: 'DAILY_CAP_INCREMENT_RESULT', count: 0, cap: 500, capped: false, error: String(e) };
+  }
+}
+
+/**
+ * Fetch the latest buy and sell prices for a player from the backend.
+ * GET /api/v1/portfolio/player-price/{ea_id} → FRESH_PRICE_RESULT
+ * Used by the automation engine's price guard (skip if BIN > expected buy price).
+ */
+async function handleFreshPrice(ea_id: number): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/player-price/${ea_id}`);
+    if (!res.ok) {
+      return { type: 'FRESH_PRICE_RESULT', ea_id, buy_price: 0, sell_price: 0, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'FRESH_PRICE_RESULT', ea_id, buy_price: data.buy_price, sell_price: data.sell_price };
+  } catch (e) {
+    return { type: 'FRESH_PRICE_RESULT', ea_id, buy_price: 0, sell_price: 0, error: String(e) };
   }
 }
 
