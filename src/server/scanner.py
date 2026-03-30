@@ -8,7 +8,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import httpx
+from curl_cffi.requests import Session as CffiSession
+from curl_cffi.requests.exceptions import HTTPError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -57,7 +58,7 @@ class ScannerService:
     """Orchestrates player discovery, scoring, tier scheduling, and dispatch.
 
     Scanner HTTP calls (to fut.gg) run in a ThreadPoolExecutor using a
-    synchronous httpx.Client. This isolates network I/O from the main FastAPI
+    synchronous curl_cffi Session. This isolates network I/O from the main FastAPI
     event loop so 40 concurrent outbound connections don't starve API handlers.
 
     DB writes remain on the main event loop via session_factory. The semaphore
@@ -81,7 +82,7 @@ class ScannerService:
         self._scan_results_1h: list[tuple[datetime, bool]] = []
         self._queue_depth_cache: int = 0
         self._active_tasks: set[asyncio.Task] = set()
-        self._sync_client: Optional[httpx.Client] = None
+        self._sync_client: Optional[CffiSession] = None
         self._scan_executor = None
         # Limit concurrent DB sessions from scanner so API handlers aren't starved.
         # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
@@ -94,7 +95,7 @@ class ScannerService:
         """Start the scanner with HTTP calls offloaded to a thread pool.
 
         Scanner HTTP calls (to fut.gg) run in a ThreadPoolExecutor using a
-        synchronous httpx.Client. This isolates scanner network I/O from the
+        synchronous curl_cffi Session. This isolates scanner network I/O from the
         main FastAPI event loop so 40 concurrent outbound connections don't
         starve API request handlers.
 
@@ -106,19 +107,11 @@ class ScannerService:
         """
         from concurrent.futures import ThreadPoolExecutor
 
-        self._sync_client = httpx.Client(
-            base_url=self._client.BASE_URL,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json",
-                "Referer": f"{self._client.BASE_URL}/players/",
-            },
+        self._sync_client = CffiSession(
+            impersonate="chrome",
+            headers=self._client.DEFAULT_HEADERS,
             timeout=30,
-            follow_redirects=True,
+            allow_redirects=True,
         )
         await self._client.start()
         self._scan_executor = ThreadPoolExecutor(
@@ -358,7 +351,7 @@ class ScannerService:
             return self._client.get_player_market_data_sync(ea_id, self._sync_client)
 
         @retry(
-            retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
+            retry=retry_if_exception_type((HTTPError, ConnectionError, TimeoutError)),
             stop=stop_after_attempt(3),
             wait=wait_exponential_jitter(initial=2, max=60, jitter=10),
             reraise=True,

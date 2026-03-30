@@ -17,7 +17,7 @@ CB_RECOVERY_TIMEOUT = 60.0        # seconds before HALF_OPEN
 CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 
 # Scanner concurrency
-SCAN_CONCURRENCY = 40             # max concurrent scan tasks per dispatch cycle
+SCAN_CONCURRENCY = 10             # max concurrent scan tasks per dispatch cycle
 SCAN_DISPATCH_BATCH_SIZE = 500    # max players fetched per dispatch cycle (caps task burst)
                                   # 500 * (300s / 30s) = 5000 scans/5min — well above ~2014 players
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
