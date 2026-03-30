@@ -161,9 +161,9 @@ class ScannerService:
         )
 
         before = len(players)
-        players = [p for p in players if p.get("rarityName", "") != "Icon"]
+        players = [p for p in players if p.get("rarityName", "") not in ("Icon", "UT Heroes")]
         if before - len(players):
-            logger.info(f"Bootstrap: filtered {before - len(players)} base icons")
+            logger.info(f"Bootstrap: filtered {before - len(players)} base icons/heroes")
 
         now = datetime.utcnow()
 
@@ -281,9 +281,9 @@ class ScannerService:
         logger.info(f"Discovery found {len(players)} players")
 
         before = len(players)
-        players = [p for p in players if p.get("rarityName", "") != "Icon"]
+        players = [p for p in players if p.get("rarityName", "") not in ("Icon", "UT Heroes")]
         if before - len(players):
-            logger.info(f"Discovery: filtered {before - len(players)} base icons")
+            logger.info(f"Discovery: filtered {before - len(players)} base icons/heroes")
 
         discovered_ids = {p["ea_id"] for p in players}
         now = datetime.utcnow()
