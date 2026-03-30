@@ -35,7 +35,7 @@ from src.config import (
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.listing_tracker import record_listings, resolve_outcomes
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, ScannerStatus
 from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
@@ -355,6 +355,7 @@ class ScannerService:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(self._scan_executor, _fetch_sync)
 
+        t_start = time.monotonic()
         now = datetime.utcnow()
         try:
             market_data = await _fetch_with_retry()
@@ -372,7 +373,12 @@ class ScannerService:
                 await session.commit()
             return
 
+        t_http = time.monotonic()
+
+        t_sem_wait_start = time.monotonic()
         async with self._db_semaphore, self._session_factory() as session:
+            t_sem_acquired = time.monotonic()
+
             # --- Listing tracking (D-01, D-02) ---
             listing_result = None
             resolve_result = None
@@ -391,6 +397,8 @@ class ScannerService:
                     session=session,
                 )
 
+            t_listing = time.monotonic()
+
             # --- Compute real sales/hour from completedAuctions ---
             sph = 0.0
             if market_data is not None and market_data.sales:
@@ -404,6 +412,8 @@ class ScannerService:
                     session=session,
                     buy_price=market_data.current_lowest_bin,
                 )
+
+            t_score = time.monotonic()
 
             # Write PlayerScore row built entirely from v2 result
             if v2_result is not None:
@@ -476,7 +486,20 @@ class ScannerService:
             if record is not None:
                 record.next_scan_at = datetime.utcnow() + timedelta(seconds=SCAN_INTERVAL_SECONDS)
 
+            t_pre_commit = time.monotonic()
             await session.commit()
+
+        t_end = time.monotonic()
+        logger.warning(
+            "SCAN_TIMING ea_id=%d total=%.1fs http=%.1fs sem_wait=%.1fs listing=%.1fs score=%.1fs write+commit=%.1fs",
+            ea_id,
+            t_end - t_start,
+            t_http - t_start,
+            t_sem_acquired - t_sem_wait_start,
+            t_listing - t_sem_acquired,
+            t_score - t_listing,
+            t_end - t_pre_commit,
+        )
 
         self.last_scan_at = datetime.utcnow()
 
@@ -497,6 +520,35 @@ class ScannerService:
         self._active_tasks = {t for t in self._active_tasks if not t.done()}
 
         now = datetime.utcnow()
+
+        # Write scanner metrics to DB for health endpoint (D-01, D-02)
+        try:
+            async with self._session_factory() as session:
+                stmt = pg_insert(ScannerStatus).values(
+                    id=1,
+                    is_running=self.is_running,
+                    last_scan_at=self.last_scan_at,
+                    success_rate_1h=self.success_rate_1h(),
+                    queue_depth=self._queue_depth_cache,
+                    circuit_breaker_state=self._circuit_breaker.state.value,
+                    updated_at=now,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_=dict(
+                        is_running=stmt.excluded.is_running,
+                        last_scan_at=stmt.excluded.last_scan_at,
+                        success_rate_1h=stmt.excluded.success_rate_1h,
+                        queue_depth=stmt.excluded.queue_depth,
+                        circuit_breaker_state=stmt.excluded.circuit_breaker_state,
+                        updated_at=stmt.excluded.updated_at,
+                    ),
+                )
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as exc:
+            logger.error(f"Failed to upsert scanner_status: {exc}")
+
         async with self._session_factory() as session:
             stmt = (
                 select(PlayerRecord)
