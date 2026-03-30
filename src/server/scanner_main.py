@@ -32,6 +32,20 @@ async def main():
 
     engine, session_factory = await create_engine_and_tables()
 
+    # Migrate: add last_resolved_at column to players if missing
+    async with engine.begin() as conn:
+        from sqlalchemy import text, inspect as sa_inspect
+        def _check_resolved_col(connection):
+            insp = sa_inspect(connection)
+            cols = [c["name"] for c in insp.get_columns("players")]
+            return "last_resolved_at" in cols
+        has_resolved = await conn.run_sync(_check_resolved_col)
+        if not has_resolved:
+            await conn.execute(text(
+                "ALTER TABLE players ADD COLUMN last_resolved_at TIMESTAMP"
+            ))
+            logger.info("Migrated players: added last_resolved_at column")
+
     cb = CircuitBreaker()
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
