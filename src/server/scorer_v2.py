@@ -72,6 +72,7 @@ async def score_player_v2(
     ea_id: int,
     session: AsyncSession,
     buy_price: int,
+    max_price_range: int | None = None,
 ) -> dict | None:
     """
     Score a player for OP selling using SQL-aggregated listing observation data.
@@ -84,6 +85,10 @@ async def score_player_v2(
         ea_id: The player's EA numeric ID.
         session: Active async SQLAlchemy session.
         buy_price: Current BIN price to use as the buy cost basis.
+        max_price_range: EA's maximum BIN price for this card (from
+            priceRange.maxPrice). Margin tiers whose sell_price exceeds this
+            value are skipped — those prices cannot be listed on the market.
+            None disables the filter (no data = no restriction).
 
     Returns:
         Scoring result dict on success, or None if insufficient data.
@@ -132,6 +137,12 @@ async def score_player_v2(
         op_sell_rate = op_sold / op_total
         margin = margin_pct / 100.0
         sell_price = int(buy_price * (1 + margin))
+
+        # Skip margins that produce a sell_price above EA's max BIN cap —
+        # those listings cannot physically be placed on the transfer market.
+        if max_price_range is not None and sell_price > max_price_range:
+            continue
+
         ea_tax = int(sell_price * EA_TAX_RATE)
         net_profit = sell_price - ea_tax - buy_price
 
