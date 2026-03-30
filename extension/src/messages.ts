@@ -3,6 +3,7 @@
  * Phase 6 defines PING/PONG to prove the channel works.
  * Phase 7 adds PORTFOLIO_* types for generate, confirm, swap, and load operations.
  * Phase 07.2 adds DASHBOARD_STATUS_* types for the portfolio dashboard panel.
+ * Phase 08 adds AUTOMATION_*, DAILY_CAP_*, FRESH_PRICE_* types for the automation engine.
  */
 import type { PortfolioPlayer, ConfirmedPortfolio } from './storage';
 
@@ -29,6 +30,19 @@ export type DashboardData = {
     trade_counts: { bought: number; sold: number; expired: number };
   };
   players: DashboardPlayer[];
+};
+
+/**
+ * Automation engine status snapshot.
+ * Returned by AUTOMATION_STATUS_RESULT and stored in automationStatusItem.
+ */
+export type AutomationStatusData = {
+  isRunning: boolean;
+  state: 'IDLE' | 'BUYING' | 'LISTING' | 'SCANNING' | 'RELISTING' | 'STOPPED' | 'ERROR';
+  currentAction: string | null;
+  lastEvent: string | null;
+  sessionProfit: number;
+  errorMessage: string | null;
 };
 
 /** A single action item from GET /portfolio/actions-needed. */
@@ -73,7 +87,22 @@ export type ExtensionMessage =
   | { type: 'DASHBOARD_STATUS_RESULT'; data: DashboardData | null; error?: string }
   // Actions needed (unified buy/list/relist view)
   | { type: 'ACTIONS_NEEDED_REQUEST' }
-  | { type: 'ACTIONS_NEEDED_RESULT'; data: ActionsNeededData | null; error?: string };
+  | { type: 'ACTIONS_NEEDED_RESULT'; data: ActionsNeededData | null; error?: string }
+  // Automation control (overlay panel -> content script -> service worker)
+  | { type: 'AUTOMATION_START' }
+  | { type: 'AUTOMATION_START_RESULT'; success: boolean; error?: string }
+  | { type: 'AUTOMATION_STOP' }
+  | { type: 'AUTOMATION_STOP_RESULT'; success: boolean }
+  | { type: 'AUTOMATION_STATUS_REQUEST' }
+  | { type: 'AUTOMATION_STATUS_RESULT'; status: AutomationStatusData }
+  // Daily cap (content script -> service worker -> backend)
+  | { type: 'DAILY_CAP_REQUEST' }
+  | { type: 'DAILY_CAP_RESULT'; count: number; cap: number; capped: boolean; error?: string }
+  | { type: 'DAILY_CAP_INCREMENT' }
+  | { type: 'DAILY_CAP_INCREMENT_RESULT'; count: number; cap: number; capped: boolean; error?: string }
+  // Fresh price lookup (content script -> service worker -> backend)
+  | { type: 'FRESH_PRICE_REQUEST'; ea_id: number }
+  | { type: 'FRESH_PRICE_RESULT'; ea_id: number; buy_price: number; sell_price: number; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.
