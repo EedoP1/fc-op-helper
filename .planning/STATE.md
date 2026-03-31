@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed Phase 08 Plan 01 — automation selectors and backend endpoints both done
-last_updated: "2026-03-30T19:20:56.841Z"
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-03-30T19:52:22.810Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 27
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 08 (dom-automation-layer) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Plan: 2 of 5
 | Phase 10-split-scanner-and-api-into-separate-processes P03 | 5 | 2 tasks | 4 files |
 | Phase 08 P01 | 152 | 1 tasks | 4 files |
 | Phase 08 P01 | 300 | 2 tasks | 5 files |
+| Phase 08-dom-automation-layer P04 | 120 | 1 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,8 @@ Plan: 2 of 5
 - [Phase 08]: Dialog button ordering inconsistent — match by .primary class or text, never by :first-child/:last-child position
 - [Phase 08]: Quick list 'List for Transfer' button is btn-standard.primary NOT call-to-action (Enhancer uses call-to-action)
 - [Phase 08]: Filter dropdowns indexed 0-8 in DOM order: Quality=0, EvolutionStatus=1, Rarity=2, Position=3, ChemStyle=4, Country=5, League=6, Club=7, PlayStyles=8
+- [Phase 08-dom-automation-layer]: Button discrimination by .primary class — Relist All has .primary on .section-header-btn, Clear Sold does not
+- [Phase 08-dom-automation-layer]: ea_id deferred to main loop (Plan 05) — TRADE_REPORT_BATCH sends ea_id=0 for relisted items, resolved by name+rating in caller
 
 ### Roadmap Evolution
 
@@ -178,5 +181,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-30
-Stopped at: Completed Phase 08 Plan 01 — automation selectors and backend endpoints both done
+Stopped at: Completed 08-04-PLAN.md
 Resume file: None

@@ -427,6 +427,11 @@ export async function executeBuyCycle(
       let actualBinPaid = binPrice;
 
       while (retries < MAX_RETRIES) {
+        // Attempt to buy: click card → Buy Now → confirm dialog → check result.
+        // Any failure at any step = sniped. Use a flag to track and fall through
+        // to the shared retry logic at the bottom.
+        let attemptFailed = false;
+
         // Click the first result item to select it
         await clickElement(cheapestItem);
         await jitter();
@@ -434,64 +439,62 @@ export async function executeBuyCycle(
         // Click Buy Now button — may be missing if card was sniped
         const buyNowBtn = document.querySelector<HTMLElement>(SELECTORS.BUY_NOW_BUTTON);
         if (!buyNowBtn) {
-          // Card sniped before we could click Buy Now — treat as failed attempt
-          retries++;
-          break; // fall through to retry logic below
-        }
-        await clickElement(buyNowBtn);
-        await jitter();
-
-        // Wait for confirmation dialog — may not appear if card was sniped
-        try {
-          await waitForElement(
-            'EA_DIALOG_PRIMARY_BUTTON',
-            SELECTORS.EA_DIALOG_PRIMARY_BUTTON,
-            document,
-            5_000,
-          );
-        } catch {
-          // Dialog didn't appear — card likely sniped during purchase
-          retries++;
-          break; // fall through to retry logic below
+          attemptFailed = true;
         }
 
-        // Click the primary confirm button in the dialog
-        const confirmBtn = document.querySelector<HTMLElement>(SELECTORS.EA_DIALOG_PRIMARY_BUTTON);
-        if (!confirmBtn) {
-          retries++;
-          break;
-        }
-        await clickElement(confirmBtn);
-        await jitter(1000, 2000);
+        // Wait for and click confirmation dialog
+        if (!attemptFailed) {
+          await clickElement(buyNowBtn!);
+          await jitter();
 
-        // Determine if buy succeeded: check for the list accordion (only appears
-        // on the post-buy screen). If it's not there, the buy failed — either the
-        // card was sniped (.expired class) or EA rejected the purchase silently.
-        const hasListAccordion =
-          document.querySelector(SELECTORS.LIST_ON_MARKET_ACCORDION) !== null;
-
-        if (hasListAccordion) {
-          // Buy succeeded — list accordion is visible on the post-buy screen
-          bought = true;
-          break;
+          try {
+            await waitForElement(
+              'EA_DIALOG_PRIMARY_BUTTON',
+              SELECTORS.EA_DIALOG_PRIMARY_BUTTON,
+              document,
+              5_000,
+            );
+          } catch {
+            attemptFailed = true;
+          }
         }
 
-        // Buy failed — treat as sniped (D-10: retry up to 3 times)
+        if (!attemptFailed) {
+          const confirmBtn = document.querySelector<HTMLElement>(SELECTORS.EA_DIALOG_PRIMARY_BUTTON);
+          if (!confirmBtn) {
+            attemptFailed = true;
+          } else {
+            await clickElement(confirmBtn);
+            await jitter(1000, 2000);
+
+            // Determine if buy succeeded: check for the list accordion (only appears
+            // on the post-buy screen). If it's not there, the buy failed.
+            const hasListAccordion =
+              document.querySelector(SELECTORS.LIST_ON_MARKET_ACCORDION) !== null;
+
+            if (hasListAccordion) {
+              bought = true;
+              break;
+            }
+            // No accordion = buy failed silently
+            attemptFailed = true;
+          }
+        }
+
+        // ── Shared retry logic (D-10: up to 3 attempts) ───────────────────
         retries++;
         if (retries >= MAX_RETRIES) {
           return { outcome: 'skipped', reason: 'Sniped 3 times' };
         }
 
-        // Navigate back to search results to retry
-        // If we're still on the results page (expired card visible), re-search directly.
-        // Otherwise press back first.
+        // Navigate back to search form to retry
         const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
         if (backBtn) {
           await clickElement(backBtn);
           await jitter(1000, 2000);
         }
 
-        // Cache-bust before re-searching (D-09: EA caches results without a value change)
+        // Cache-bust before re-searching (D-09)
         cacheBustBid += 50;
         if (cacheBustBid > 1000) cacheBustBid = 50;
         const retryPriceInputs = getPriceInputs();
