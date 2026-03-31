@@ -586,7 +586,17 @@ export async function executeBuyCycle(
         return { outcome: 'error', reason: 'List for Transfer button not found' };
       }
       await clickElement(listBtn);
-      await jitter(1000, 2000);
+      await jitter(1500, 3000);
+
+      // Verify listing succeeded: the quick list panel disappears on success.
+      // If still present, EA silently rejected the listing (e.g., TL full).
+      const panelStillVisible = document.querySelector(SELECTORS.QUICK_LIST_PANEL) !== null;
+      if (panelStillVisible) {
+        // Navigate away to avoid stuck state — the card is in unassigned pile
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) await clickElement(backBtn);
+        return { outcome: 'error', reason: 'Listing failed — card may be in unassigned pile (TL full?)' };
+      }
 
       return { outcome: 'bought', buyPrice: actualBinPaid };
     }
