@@ -79,6 +79,12 @@ export const TILE_SEARCH_MARKET = '.ut-tile-transfer-market';
 /** "Transfer List" tile on the Transfers hub page */
 export const TILE_TRANSFER_LIST = '.ut-tile-transfer-list';
 
+/** "Unassigned Items" tile on the Transfers hub page */
+export const TILE_UNASSIGNED = '.ut-tile-unassigned-items';
+
+/** Badge showing the count of unassigned items */
+export const UNASSIGNED_COUNT = '.ut-tile-unassigned-items .badge';
+
 // ── Transfer Market Search (Phase 8 — verified live) ─────────────────
 
 /** Player name text input on the search page */

@@ -17,7 +17,7 @@
  *   D-35: Out of coins degrades to relist-only mode
  *   D-38: Session expiry detected and automation stopped with alert
  */
-import { AutomationEngine, AutomationError, jitter } from './automation';
+import { AutomationEngine, AutomationError, jitter, clickElement, waitForElement } from './automation';
 import { executeBuyCycle, type BuyCycleResult } from './buy-cycle';
 import {
   executeTransferListCycle,
@@ -25,6 +25,7 @@ import {
   type TransferListCycleResult,
 } from './transfer-list-cycle';
 import type { ActionNeeded, ExtensionMessage } from './messages';
+import * as SELECTORS from './selectors';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,65 @@ export async function runAutomationLoop(
 ): Promise<void> {
   try {
     while (!engine.isStopping) {
+      // ── Phase 0: Sweep unassigned pile for orphaned cards ────────────
+      // Cards end up here when listing fails silently (TL full, EA glitch).
+      // Check the unassigned badge count on the Transfers hub — if > 0,
+      // navigate in and try to list each card.
+      try {
+        const transfersBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_TRANSFERS);
+        if (transfersBtn) {
+          await clickElement(transfersBtn);
+          await jitter(1000, 2000);
+
+          const badge = document.querySelector(SELECTORS.UNASSIGNED_COUNT);
+          const unassignedCount = parseInt(badge?.textContent?.trim() ?? '0', 10);
+
+          if (unassignedCount > 0) {
+            await engine.log(`Found ${unassignedCount} unassigned items — attempting to list`);
+
+            const unassignedTile = document.querySelector<HTMLElement>(SELECTORS.TILE_UNASSIGNED);
+            if (unassignedTile) {
+              await clickElement(unassignedTile);
+              await jitter(1000, 2000);
+
+              // For each item in the unassigned pile, click it and try to list
+              const items = document.querySelectorAll<HTMLElement>(SELECTORS.TRANSFER_LIST_ITEM);
+              for (const item of Array.from(items)) {
+                if (engine.isStopping) return;
+                await clickElement(item);
+                await jitter();
+
+                // Try to open the list accordion and list at default price
+                const accordion = document.querySelector<HTMLElement>(SELECTORS.LIST_ON_MARKET_ACCORDION);
+                if (accordion) {
+                  await clickElement(accordion);
+                  await jitter();
+
+                  // Wait for quick list panel then click List for Transfer
+                  try {
+                    await waitForElement('QUICK_LIST_PANEL', SELECTORS.QUICK_LIST_PANEL, document, 5_000);
+                    const confirmBtn = document.querySelector<HTMLButtonElement>(
+                      `${SELECTORS.QUICK_LIST_PANEL} button.btn-standard.primary`,
+                    );
+                    if (confirmBtn) {
+                      await clickElement(confirmBtn);
+                      await jitter(1500, 3000);
+                      await engine.log('Listed orphaned card from unassigned pile');
+                    }
+                  } catch {
+                    await engine.log('Could not list unassigned item — skipping');
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        await engine.log(`Unassigned sweep error: ${err instanceof Error ? err.message : String(err)} — continuing`);
+      }
+
+      if (engine.isStopping) return;
+
       // ── Phase A: Scan transfer list + relist + clear sold (D-02, D-03) ───
       // Runs FIRST so expired cards get relisted immediately, sold cards are
       // cleared, and trade reports are sent before fetching actions_needed.
