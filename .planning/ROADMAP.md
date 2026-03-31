@@ -114,7 +114,7 @@ Plans:
 - [x] 08-01-PLAN.md -- DOM exploration + backend daily-cap and fresh-price endpoints
 - [ ] 08-02-PLAN.md -- Message types, storage items, automation engine core
 - [ ] 08-03-PLAN.md -- Buy cycle: search, price discovery, buy, list
-- [ ] 08-04-PLAN.md -- Transfer list cycle: scan, relist-all, clear sold, daily cap
+- [x] 08-04-PLAN.md -- Transfer list cycle: scan, relist-all, clear sold, daily cap
 - [ ] 08-05-PLAN.md -- Automation loop, start/stop UI, status display, activity log
 **UI hint**: yes
 

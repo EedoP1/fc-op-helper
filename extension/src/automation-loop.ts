@@ -181,8 +181,21 @@ export async function runAutomationLoop(
       if (!isCapped && !transferListFull && buyPlayers.length > 0) {
         await engine.setState('BUYING', 'Starting buy cycle');
 
+        let consecutiveFailures = 0;
+        const CAPTCHA_THRESHOLD = 3;  // D-22: 3 consecutive failures = possible CAPTCHA
+
         for (const player of buyPlayers) {
           if (engine.isStopping) return; // D-17: graceful stop between actions
+
+          // D-22: Too many consecutive failures — likely CAPTCHA or blocked UI
+          if (consecutiveFailures >= CAPTCHA_THRESHOLD) {
+            if (isSessionExpired()) {
+              await engine.setError('EA session expired — please log in and restart automation');
+              return;
+            }
+            await engine.setError(`${consecutiveFailures} consecutive buy failures — possible CAPTCHA or UI block. Please check the EA Web App.`);
+            return;
+          }
 
           // D-36: Stop buying if transfer list is full
           if (transferListCount >= EA_TRANSFER_LIST_MAX) {
@@ -233,6 +246,7 @@ export async function runAutomationLoop(
           const result: BuyCycleResult = await executeBuyCycle(freshPlayer, sendMessage);
 
           if (result.outcome === 'bought') {
+            consecutiveFailures = 0;  // D-22: reset on success
             transferListCount++;  // D-36: track new listing
             await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
 
@@ -268,22 +282,23 @@ export async function runAutomationLoop(
             } catch { /* ignore */ }
 
           } else if (result.outcome === 'skipped') {
+            // D-22: Count snipe-related skips toward CAPTCHA detection.
+            // "Price above guard" is a normal skip — don't count it.
+            const isSnipeSkip = result.reason.includes('Sniped')
+              || result.reason.includes('snipe')
+              || result.reason.includes('search button not found');
+            if (isSnipeSkip) {
+              consecutiveFailures++;
+            } else {
+              consecutiveFailures = 0;
+            }
             await engine.setLastEvent(`Skipped ${player.name}: ${result.reason}`);
           } else if (result.outcome === 'error') {
-            // Check for AutomationError-level failures (DOM mismatch, CAPTCHA, etc.) — D-22
-            // The buy-cycle wraps AutomationError into { outcome: 'error' }; detect by message pattern
-            const isAutomationFailure =
-              result.reason.includes('DOM mismatch') ||
-              result.reason.includes('CAPTCHA') ||
-              result.reason.includes('Timeout waiting');
+            consecutiveFailures++;
 
-            if (isAutomationFailure) {
-              // D-38: Check for session expiry before raising as hard error
-              if (isSessionExpired()) {
-                await engine.setError('EA session expired — please log in and restart automation');
-                return;
-              }
-              await engine.setError(result.reason);
+            // D-38: Check for session expiry
+            if (isSessionExpired()) {
+              await engine.setError('EA session expired — please log in and restart automation');
               return;
             }
 

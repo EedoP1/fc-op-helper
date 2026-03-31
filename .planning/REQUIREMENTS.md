@@ -34,7 +34,7 @@ Requirements for Chrome Extension — Automated OP Sell Cycle. Each maps to road
 - [ ] **AUTO-01**: Extension searches transfer market for target player and executes Buy Now when BIN is at or below expected buy price
 - [ ] **AUTO-02**: Extension skips player if current BIN exceeds backend buy price (price guard)
 - [ ] **AUTO-03**: Extension auto-lists purchased cards at the locked OP price from the portfolio
-- [ ] **AUTO-04**: Extension auto-relists expired cards at the same locked OP price they were originally listed at (price does not change)
+- [x] **AUTO-04**: Extension auto-relists expired cards at the same locked OP price they were originally listed at (price does not change)
 - [x] **AUTO-05**: All DOM interactions use human-like delays with randomized jitter (800-2500ms)
 - [ ] **AUTO-06**: Extension detects CAPTCHA and stops automation immediately, alerting the user
 - [ ] **AUTO-07**: Extension fails loudly on DOM mismatch (missing elements) rather than silently continuing
@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTO-01 | Phase 8 | Pending |
 | AUTO-02 | Phase 8 | Pending |
 | AUTO-03 | Phase 8 | Pending |
-| AUTO-04 | Phase 8 | Pending |
+| AUTO-04 | Phase 8 | Complete |
 | AUTO-05 | Phase 8 | Complete |
 | AUTO-06 | Phase 8 | Pending |
 | AUTO-07 | Phase 8 | Pending |
