@@ -14,7 +14,7 @@ from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot, TradeAction, TradeRecord
-from src.config import STALE_THRESHOLD_HOURS
+from src.config import STALE_THRESHOLD_HOURS, TARGET_PLAYER_COUNT
 from src.optimizer import optimize_portfolio
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,17 @@ class SwapPreviewRequest(BaseModel):
 
     freed_budget: int = Field(..., gt=0, description="Budget freed by removing a player")
     excluded_ea_ids: list[int]
+    current_count: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Draft player count AFTER the removed player has been spliced out. "
+            "The server uses this to compute how many replacement slots are needed: "
+            "needed = TARGET_PLAYER_COUNT - current_count. Passing the post-splice "
+            "count means rapid sequential removals each report the correct draft size "
+            "and receive the right number of replacements."
+        ),
+    )
 
 
 class _PlayerProxy:
@@ -128,6 +139,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
                    ) AS rn
             FROM player_scores
             WHERE is_viable = TRUE
+              AND scored_at >= NOW() - INTERVAL '4 hours'
         ) ps
         JOIN players pr ON pr.ea_id = ps.ea_id
         WHERE ps.rn = 1
@@ -365,6 +377,20 @@ async def confirm_portfolio(
     deduped: dict[int, ConfirmPlayer] = {}
     for p in body.players:
         deduped[p.ea_id] = p
+
+    # Server-side safety cap: active (non-leftover) slots must never exceed TARGET_PLAYER_COUNT.
+    # The client is authoritative about which players to keep, but it cannot create more than
+    # TARGET_PLAYER_COUNT active slots. Truncate to the cap so a buggy or replayed request
+    # cannot inflate the portfolio regardless of what the client sends.
+    if len(deduped) > TARGET_PLAYER_COUNT:
+        # Keep the first TARGET_PLAYER_COUNT in original submission order
+        ordered = list(dict.fromkeys(p.ea_id for p in body.players if p.ea_id in deduped))
+        deduped = {ea_id: deduped[ea_id] for ea_id in ordered[:TARGET_PLAYER_COUNT]}
+        logger.warning(
+            "confirm_portfolio: client sent %d players, capped to %d",
+            len(body.players), TARGET_PLAYER_COUNT,
+        )
+
     new_ea_ids = set(deduped.keys())
 
     async with session_factory() as session:
@@ -469,6 +495,23 @@ async def swap_preview(
     ]
 
     replacements_raw = optimize_portfolio(candidates, body.freed_budget) if candidates else []
+
+    # Cap replacements to the number of open slots in the draft.
+    #
+    # current_count is the draft size AFTER the client removed the player (post-splice).
+    # needed = how many players the draft still needs to reach TARGET_PLAYER_COUNT.
+    #
+    # Examples:
+    #   Remove 1 player from 100 → current_count=99, needed=1 → up to 1 replacement.
+    #   Remove 5 players rapidly → last request has current_count=95, needed=5 → up to 5.
+    #   A 30k card replaced by multiple 10k cards → optimizer returns several, but only
+    #   needed are kept. Budget is maximised within the freed amount AND the slot cap.
+    #
+    # The confirm endpoint enforces TARGET_PLAYER_COUNT server-side as a final safety net,
+    # so even if concurrent rapid removals cause transient overshoot in the draft, the
+    # confirmed portfolio will never exceed TARGET_PLAYER_COUNT.
+    needed = max(0, TARGET_PLAYER_COUNT - body.current_count)
+    replacements_raw = replacements_raw[:needed]
 
     replacements = [
         {
@@ -653,6 +696,7 @@ async def get_actions_needed(request: Request):
             "name": record.name,
             "rating": record.rating,
             "position": record.position,
+            "card_type": record.card_type,
             "action": action,
             "target_price": target_price,
             "buy_price": slot.buy_price,
@@ -816,6 +860,14 @@ async def delete_portfolio_player(
     deletes the PortfolioSlot, then runs the optimizer with the freed budget
     to suggest replacement players.
 
+    The remaining slot count is read inside the same write transaction,
+    immediately after the DELETE and before commit. This makes the count
+    atomic with the deletion: two concurrent removes each commit their own
+    delete and observe the correct post-delete count, so neither overshoots
+    TARGET_PLAYER_COUNT when the caller adds the suggested replacements.
+
+    Replacements returned = min(needed_to_reach_100, optimizer_output).
+
     Trade history (TradeRecord rows) is preserved — only the active slot and
     pending actions are removed.
 
@@ -825,15 +877,17 @@ async def delete_portfolio_player(
         budget: Total portfolio budget used to compute freed_budget context.
 
     Returns:
-        Dict with keys: removed_ea_id, freed_budget, replacements (list).
+        Dict with keys: removed_ea_id, freed_budget, replacements (list),
+        remaining_count (int).
 
     Raises:
         HTTPException 404: If ea_id is not in portfolio_slots.
     """
     session_factory = request.app.state.session_factory
 
-    # Phase 1: Fast write transaction — cancel actions, delete slot, commit.
-    # Releases row locks immediately so cleanup_tables and other queries don't block.
+    # Phase 1: Write transaction — cancel actions, delete slot, count remaining, commit.
+    # remaining_ea_ids is read AFTER the delete executes (within the same transaction)
+    # so the count reflects the post-deletion state and is consistent under concurrency.
     async with session_factory() as session:
         # 1. Look up the slot
         slot_result = await session.execute(
@@ -860,15 +914,22 @@ async def delete_portfolio_player(
             delete(PortfolioSlot).where(PortfolioSlot.ea_id == ea_id)
         )
 
+        # 4. Count + capture remaining ea_ids AFTER deletion, within the same transaction.
+        # This is the key race-condition fix: the count is atomic with the delete, so
+        # two concurrent removes each see their own correct post-delete portfolio size.
+        remaining_result = await session.execute(select(PortfolioSlot.ea_id))
+        remaining_ea_ids = {row[0] for row in remaining_result.all()}
+
         await session.commit()
+
+    # How many slots need to be filled to reach TARGET_PLAYER_COUNT?
+    # remaining_count is already post-deletion so needed >= 0.
+    remaining_count = len(remaining_ea_ids)
+    needed = max(0, TARGET_PLAYER_COUNT - remaining_count)
 
     # Phase 2: Read-only queries for replacement suggestions.
     sf = _read_session_factory(request)
     async with sf() as session:
-        # 4. Get remaining portfolio ea_ids (for exclusion from candidates)
-        remaining_result = await session.execute(select(PortfolioSlot.ea_id))
-        remaining_ea_ids = {row[0] for row in remaining_result.all()}
-
         # 5. Query viable candidates (same pattern as get_portfolio)
         rows = await _fetch_latest_viable_scores(session)
 
@@ -880,10 +941,16 @@ async def delete_portfolio_player(
         if score.ea_id not in excluded
     ]
 
-    # 8. Run optimizer for replacements within freed budget
-    replacements_raw = optimize_portfolio(scored_candidates, freed_budget) if scored_candidates else []
+    # 7. Run optimizer for replacements within freed budget, then cap to `needed`.
+    # Capping prevents overshoot when the optimizer returns multiple cheap players.
+    # needed=0 means portfolio is already at or above TARGET_PLAYER_COUNT — no replacements.
+    if scored_candidates and needed > 0:
+        replacements_raw = optimize_portfolio(scored_candidates, freed_budget)
+        replacements_raw = replacements_raw[:needed]
+    else:
+        replacements_raw = []
 
-    # 9. Serialize replacements
+    # 8. Serialize replacements
     replacements = [
         {
             "ea_id": entry["ea_id"],
@@ -899,12 +966,14 @@ async def delete_portfolio_player(
     ]
 
     logger.info(
-        "Removed ea_id=%d from portfolio (freed=%d), returning %d replacements",
-        ea_id, freed_budget, len(replacements),
+        "Removed ea_id=%d from portfolio (freed=%d, remaining=%d, needed=%d), "
+        "returning %d replacements",
+        ea_id, freed_budget, remaining_count, needed, len(replacements),
     )
 
     return {
         "removed_ea_id": ea_id,
         "freed_budget": freed_budget,
         "replacements": replacements,
+        "remaining_count": remaining_count,
     }

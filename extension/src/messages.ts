@@ -51,6 +51,7 @@ export type ActionNeeded = {
   name: string;
   rating: number;
   position: string;
+  card_type: string;
   action: 'BUY' | 'LIST' | 'RELIST' | 'WAIT';
   target_price: number;
   buy_price: number;
@@ -73,7 +74,7 @@ export type ExtensionMessage =
   | { type: 'PORTFOLIO_GENERATE_RESULT'; data: PortfolioPlayer[]; budget_used: number; budget_remaining: number; error?: string }
   | { type: 'PORTFOLIO_CONFIRM'; players: PortfolioPlayer[] }
   | { type: 'PORTFOLIO_CONFIRM_RESULT'; confirmed: number; error?: string }
-  | { type: 'PORTFOLIO_SWAP'; ea_id: number; freed_budget: number; excluded_ea_ids: number[] }
+  | { type: 'PORTFOLIO_SWAP'; ea_id: number; freed_budget: number; excluded_ea_ids: number[]; current_count: number }
   | { type: 'PORTFOLIO_SWAP_RESULT'; replacements: PortfolioPlayer[]; error?: string }
   | { type: 'PORTFOLIO_LOAD' }
   | { type: 'PORTFOLIO_LOAD_RESULT'; portfolio: ConfirmedPortfolio | null }
