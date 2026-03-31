@@ -18,8 +18,9 @@ CB_SUCCESS_THRESHOLD = 2          # successes in HALF_OPEN before CLOSED
 
 # Scanner concurrency
 SCAN_CONCURRENCY = 10             # max concurrent scan tasks per dispatch cycle
-SCAN_DISPATCH_BATCH_SIZE = 500    # max players fetched per dispatch cycle (caps task burst)
-                                  # 500 * (300s / 30s) = 5000 scans/5min — well above ~2014 players
+SCAN_DISPATCH_BATCH_SIZE = 150    # max players fetched per dispatch cycle (caps task burst)
+                                  # Must fit within dispatch interval: 150 * 2 calls = 300 reqs
+                                  # at 10 req/s = 30s — matches SCAN_DISPATCH_INTERVAL
 SCAN_DISPATCH_INTERVAL = 30       # seconds between dispatch checks
 
 # Initial scoring (one-time after bootstrap)

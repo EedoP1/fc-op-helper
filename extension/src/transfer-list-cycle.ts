@@ -54,36 +54,21 @@ export type TransferListCycleResult = {
  * Find the section-header-btn button within a specific transfer list section.
  * Transfer list has sections like "Sold Items" and "Unsold Items", each with a
  * .section-header-btn. Distinguished by .primary class:
- *   - "Re-list All" button: .section-header-btn.primary (in Unsold Items section)
- *   - "Clear Sold" button: .section-header-btn without .primary (in Sold Items section)
+ *   - "Re-list All" button: .section-header-btn (text contains "Re-list")
+ *   - "Clear Sold" button: .section-header-btn (text contains "Clear Sold")
+ *   NOTE: Both buttons have .primary class — match by text, not class.
  *
- * @param wantPrimary - If true, find the .primary button (Relist All). If false, find the non-primary (Clear Sold).
+ * @param want - 'relist' for Re-list All, 'clear' for Clear Sold.
  */
-function findSectionHeaderButton(wantPrimary: boolean): HTMLElement | null {
+function findSectionHeaderButton(want: 'relist' | 'clear'): HTMLElement | null {
   const container = document.querySelector(SELECTORS.TRANSFER_LIST_CONTAINER);
   if (!container) return null;
 
-  // Each section has at most one section-header-btn
-  // Per 08-01 SUMMARY: Relist All has .primary class; Clear Sold does not
-  const sections = container.querySelectorAll<HTMLElement>('section');
-  for (const section of sections) {
-    const btn = section.querySelector<HTMLElement>('.section-header-btn');
-    if (!btn) continue;
-    const hasPrimary = btn.classList.contains('primary');
-    if (wantPrimary && hasPrimary) return btn;
-    if (!wantPrimary && !hasPrimary) return btn;
-  }
-
-  // Fallback: find by section title text content
-  const allSections = container.querySelectorAll<HTMLElement>('section');
-  for (const section of allSections) {
-    const title = section.querySelector('h2.title');
-    if (!title) continue;
-    const titleText = title.textContent?.trim() ?? '';
-    const btn = section.querySelector<HTMLElement>('.section-header-btn');
-    if (!btn) continue;
-    if (wantPrimary && titleText.toLowerCase().includes('unsold')) return btn;
-    if (!wantPrimary && titleText.toLowerCase().includes('sold') && !titleText.toLowerCase().includes('unsold')) return btn;
+  const buttons = container.querySelectorAll<HTMLElement>('.section-header-btn');
+  for (const btn of buttons) {
+    const text = btn.textContent?.trim().toLowerCase() ?? '';
+    if (want === 'relist' && (text.includes('re-list') || text.includes('relist'))) return btn;
+    if (want === 'clear' && text.includes('clear sold')) return btn;
   }
 
   return null;
@@ -105,7 +90,7 @@ async function scanAllPages(): Promise<TransferListScanResult> {
     // Read current page items
     const items = readTransferList();
     for (const item of items) {
-      if (item.status === 'listed') listed.push(item);
+      if (item.status === 'listed' || item.status === 'processing') listed.push(item);
       else if (item.status === 'expired') expired.push(item);
       else if (item.status === 'sold') sold.push(item);
       // 'bought' status is not expected on the transfer list (trade pile only)
@@ -164,13 +149,21 @@ async function goToFirstPage(): Promise<void> {
 export async function executeTransferListCycle(
   sendMessage: (msg: any) => Promise<any>,
 ): Promise<TransferListCycleResult> {
-  // Step 1 — Navigate to transfer list if not already there (D-04)
-  if (!isOnTransferListPage()) {
-    await navigateToTransferList();
-  }
+  // Step 1 — Always navigate to transfer list (D-04).
+  // EA doesn't update the TL DOM in place — must leave and re-enter to see
+  // changes (new sales, expired cards). Always navigate even if already there.
+  await navigateToTransferList();
 
   // Step 2 — Scan all pages (D-39)
-  const scanned = await scanAllPages();
+  // If any items are "processing", wait 5s and rescan — processing is transient
+  // and resolves to sold/expired. We need the final state for accurate counts.
+  let scanned = await scanAllPages();
+  const hasProcessing = scanned.listed.some(item => item.status === 'processing');
+  if (hasProcessing) {
+    await new Promise(r => setTimeout(r, 5_000));
+    await navigateToTransferList();
+    scanned = await scanAllPages();
+  }
   const { listed, expired, sold } = scanned;
 
   // Step 3 — Check daily cap status (D-24, AUTO-04)
@@ -195,7 +188,7 @@ export async function executeTransferListCycle(
     try {
       // Relist All button has the .primary class on the section-header-btn
       // (distinguished from Clear Sold which does NOT have .primary per 08-01 SUMMARY)
-      const relistBtn = findSectionHeaderButton(true);
+      const relistBtn = findSectionHeaderButton('relist');
       if (relistBtn) {
         await clickElement(relistBtn);
         await jitter();
@@ -253,7 +246,7 @@ export async function executeTransferListCycle(
     try {
       // Clear Sold button does NOT have .primary class
       // (Relist All has .primary; Clear Sold does not per 08-01 SUMMARY)
-      const clearBtn = findSectionHeaderButton(false);
+      const clearBtn = findSectionHeaderButton('clear');
 
       if (clearBtn) {
         await clickElement(clearBtn);

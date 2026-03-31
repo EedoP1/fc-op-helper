@@ -28,8 +28,10 @@ export type DetectedItem = {
   playerName: string;
   rating: number;
   position: string;
-  status: 'listed' | 'sold' | 'expired' | 'bought';
+  status: 'listed' | 'sold' | 'expired' | 'bought' | 'processing';
   price: number;
+  /** Raw time-remaining string from DOM (e.g. "55 Minutes", "1 Hour"). Only set for listed items. */
+  timeRemaining?: string;
 };
 
 /**
@@ -41,6 +43,7 @@ export type DetectedItem = {
 const STATUS_MAP: Record<string, DetectedItem['status']> = {
   'active': 'listed',
   'listed': 'listed',
+  'processing...': 'processing',  // Transitional state — still occupies a TL slot, resolves to sold/expired
   'sold': 'sold',
   'expired': 'expired',
   'won': 'bought',
@@ -111,8 +114,11 @@ export function readTransferList(root: Document | Element = document): DetectedI
     const price = priceEl ? parsePrice(priceEl.textContent ?? '0') : 0;
     const rating = ratingEl ? parseInt(ratingEl.textContent ?? '0', 10) || 0 : 0;
     const position = (positionEl?.textContent ?? '').trim();
+    const timeRemaining = status === 'listed' && isTimeRemaining(rawStatus)
+      ? (statusEl.textContent ?? '').trim()
+      : undefined;
 
-    result.push({ playerName, rating, position, status, price });
+    result.push({ playerName, rating, position, status, price, timeRemaining });
   }
 
   return result;

@@ -232,3 +232,93 @@ async def test_swap_not_found(db):
         resp = await client.delete("/api/v1/portfolio/999?budget=100000")
 
     assert resp.status_code == 404
+
+
+# ── Test 6: Bug fix — no overshoot when freed_budget fits multiple cheap players ──
+
+async def test_swap_no_overshoot_when_multiple_fit_in_freed_budget(db):
+    """DELETE must not return more replacements than the portfolio needs to reach TARGET_PLAYER_COUNT.
+
+    Scenario: Portfolio has 2 players (near-full for test purposes). Remove 1 player
+    with buy_price=30000. Three candidates each cost 10000, all fit in 30000.
+    Without the fix, the optimizer returns 3 replacements → portfolio would become
+    2 - 1 + 3 = 4 players, overshooting the target.
+    With the fix, at most 1 replacement is returned (needed = 2 - 1 + 1 = 2,
+    but since target is 100 and we only have 2 slots total, needed = 100 - 1 = 99;
+    the optimizer only has 3 candidates so it returns all 3... unless we specifically
+    cap to `needed`).
+
+    This test uses a portfolio of exactly TARGET_PLAYER_COUNT - 1 = 99 slots so that
+    exactly 1 replacement is needed after 1 removal (100 - 98 = 2... wait, 99 - 1 = 98,
+    needed = 100 - 98 = 2). To isolate the single-replacement case, we use a portfolio
+    of exactly TARGET_PLAYER_COUNT slots (100) before removal, so needed = 100 - 99 = 1.
+
+    Budget: each of the 3 candidates (ea_ids 301, 302, 303) costs 5000.
+    removed player cost = 20000. All 3 candidates fit in freed_budget=20000.
+    Without fix: optimizer returns 3 candidates. With fix: at most 1.
+    """
+    from src.config import TARGET_PLAYER_COUNT
+    _, session_factory = db
+    app = make_test_app(session_factory)
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        # Fill portfolio to exactly TARGET_PLAYER_COUNT slots
+        for i in range(TARGET_PLAYER_COUNT):
+            ea_id = 1000 + i
+            session.add(PortfolioSlot(ea_id=ea_id, buy_price=20000, sell_price=24000, added_at=now))
+            session.add(_make_player_record(ea_id))
+            session.add(_make_player_score(ea_id, buy_price=20000, epph=300.0))
+
+        # Three cheap candidate replacements (not in portfolio)
+        for ea_id in [301, 302, 303]:
+            session.add(_make_player_record(ea_id, name=f"CheapCandidate {ea_id}"))
+            session.add(_make_player_score(ea_id, buy_price=5000, epph=800.0))
+
+        await session.commit()
+
+    # Remove one slot (ea_id=1000, buy_price=20000 → freed_budget=20000)
+    # All 3 candidates cost 5000 each → total 15000 < 20000 → without fix, all 3 returned
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/portfolio/1000?budget={TARGET_PLAYER_COUNT * 20000}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    replacements = body["replacements"]
+    remaining_count = body["remaining_count"]
+
+    # After removing 1 of 100 slots, remaining = 99, needed = 1
+    assert remaining_count == TARGET_PLAYER_COUNT - 1, (
+        f"Expected remaining_count={TARGET_PLAYER_COUNT - 1}, got {remaining_count}"
+    )
+    # Only 1 replacement should be returned (needed=1), even though 3 fit in freed_budget
+    assert len(replacements) <= 1, (
+        f"OVERSHOOT BUG: Expected at most 1 replacement (needed=1), "
+        f"got {len(replacements)}. All {len(replacements)} would push portfolio above {TARGET_PLAYER_COUNT}."
+    )
+
+
+# ── Test 7: Bug fix — remaining_count returned in response ───────────────────
+
+async def test_swap_returns_remaining_count(db):
+    """DELETE response must include remaining_count field (post-deletion slot count)."""
+    _, session_factory = db
+    app = make_test_app(session_factory)
+    now = datetime.utcnow()
+
+    async with session_factory() as session:
+        for ea_id in [10, 20, 30]:
+            session.add(PortfolioSlot(ea_id=ea_id, buy_price=20000, sell_price=24000, added_at=now))
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete("/api/v1/portfolio/10?budget=100000")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert "remaining_count" in body, "Response must include remaining_count"
+    assert body["remaining_count"] == 2, (
+        f"Expected remaining_count=2 after removing 1 of 3 slots, got {body['remaining_count']}"
+    )

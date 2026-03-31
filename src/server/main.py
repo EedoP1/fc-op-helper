@@ -61,6 +61,22 @@ async def lifespan(app: FastAPI):
             ))
             logger.info("Migrated portfolio_slots: added is_leftover column")
 
+    # Migrate: add max_sell_price column to player_scores if missing
+    async with engine.begin() as conn:
+        from sqlalchemy import text, inspect
+
+        def _check_max_sell_price_col(connection):
+            insp = inspect(connection)
+            cols = [c["name"] for c in insp.get_columns("player_scores")]
+            return "max_sell_price" in cols
+
+        has_max_sell_price = await conn.run_sync(_check_max_sell_price_col)
+        if not has_max_sell_price:
+            await conn.execute(text(
+                "ALTER TABLE player_scores ADD COLUMN max_sell_price INTEGER DEFAULT NULL"
+            ))
+            logger.info("Migrated player_scores: added max_sell_price column")
+
     # Purge stale v1 scores that lack expected_profit_per_hour
     async with session_factory() as session:
         from sqlalchemy import delete

@@ -10,6 +10,7 @@ from sqlalchemy import select as sa_select
 from src.server.db import create_engine_and_tables
 from src.server.models_db import PlayerRecord, PlayerScore, PortfolioSlot
 from src.server.api.portfolio import router as portfolio_router
+from src.config import TARGET_PLAYER_COUNT
 from tests.test_api import make_test_app
 
 
@@ -138,3 +139,42 @@ async def test_confirm_empty_players(portfolio_app):
         result = await session.execute(sa_select(PortfolioSlot))
         slots = result.scalars().all()
     assert len(slots) == 0
+
+
+# ── Test 4: server caps active slots at TARGET_PLAYER_COUNT ───────────────────
+
+async def test_confirm_caps_slots_at_target_player_count(portfolio_app):
+    """POST /confirm with > TARGET_PLAYER_COUNT players inserts at most TARGET_PLAYER_COUNT slots.
+
+    Bug: confirm_portfolio had no server-side cap on active slot count.
+    A buggy client (or replayed request) sending 135 players would create 135 slots.
+    Fix: server truncates to TARGET_PLAYER_COUNT before inserting.
+    """
+    app, session_factory = portfolio_app
+
+    # Send TARGET_PLAYER_COUNT + 35 players (simulates the 135-player bug)
+    overshoot_count = TARGET_PLAYER_COUNT + 35
+    players = [
+        {"ea_id": 5000 + i, "buy_price": 10000, "sell_price": 12000}
+        for i in range(overshoot_count)
+    ]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/v1/portfolio/confirm", json={"players": players})
+
+    assert resp.status_code == 200
+
+    # DB must have at most TARGET_PLAYER_COUNT active (non-leftover) slots
+    async with session_factory() as session:
+        result = await session.execute(
+            sa_select(PortfolioSlot).where(PortfolioSlot.is_leftover == False)  # noqa: E712
+        )
+        active_slots = result.scalars().all()
+
+    assert len(active_slots) <= TARGET_PLAYER_COUNT, (
+        f"OVERSHOOT BUG: confirm inserted {len(active_slots)} active slots, "
+        f"expected at most {TARGET_PLAYER_COUNT}. "
+        "Server must enforce the cap regardless of what the client sends."
+    )

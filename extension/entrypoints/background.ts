@@ -50,7 +50,7 @@ export default defineBackground({
           handlePortfolioConfirm(msg.players).then(sendResponse);
           return true;
         case 'PORTFOLIO_SWAP':
-          handlePortfolioSwap(msg.ea_id, msg.freed_budget, msg.excluded_ea_ids).then(sendResponse);
+          handlePortfolioSwap(msg.ea_id, msg.freed_budget, msg.excluded_ea_ids, msg.current_count).then(sendResponse);
           return true;
         case 'PORTFOLIO_LOAD':
           handlePortfolioLoad().then(sendResponse);
@@ -236,12 +236,13 @@ async function handlePortfolioSwap(
   ea_id: number,
   freed_budget: number,
   excluded_ea_ids: number[],
+  current_count: number,
 ): Promise<ExtensionMessage> {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/swap-preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ freed_budget, excluded_ea_ids }),
+      body: JSON.stringify({ freed_budget, excluded_ea_ids, current_count }),
     });
     if (!res.ok) {
       return { type: 'PORTFOLIO_SWAP_RESULT', replacements: [], error: `Backend error: ${res.status}` };
