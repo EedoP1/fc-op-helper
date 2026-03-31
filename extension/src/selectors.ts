@@ -102,8 +102,12 @@ export const SEARCH_PLAYER_SUGGESTIONS = '.playerResultsList';
  */
 export const SEARCH_FILTER_DROPDOWN = '.inline-list-select.ut-search-filter-control';
 
-/** The clickable row within a dropdown filter (click to open/close) */
-export const SEARCH_FILTER_ROW = '.ut-search-filter-control--row';
+/**
+ * The clickable target to open/close a dropdown filter.
+ * IMPORTANT: .ut-search-filter-control--row does NOT respond to eaClick.
+ * Use .inline-container instead — verified working on Rarity dropdown.
+ */
+export const SEARCH_FILTER_CLICKABLE = '.inline-container';
 
 /** The search filter view container (holds all dropdowns and price inputs) */
 export const SEARCH_FILTERS_VIEW = '.ut-market-search-filters-view';

@@ -103,6 +103,112 @@ function findListConfirmButton(): HTMLButtonElement | null {
   );
 }
 
+// ── Rarity filter ─────────────────────────────────────────────────────────────
+
+/** Rarity filter dropdown index in the search page filter list. */
+const RARITY_DROPDOWN_INDEX = 2;
+
+/**
+ * Map DB card_type values that DON'T match EA dropdown labels exactly.
+ * null = skip rarity filter (use name+rating+position verification only).
+ * Most card_types match the EA dropdown labels exactly and don't need entries here.
+ */
+const CARD_TYPE_TO_EA_RARITY: Record<string, string | null> = {
+  // Empty/base cards — no rarity filter needed
+  '': null,
+  // Name differences between DB (fut.gg/scanner) and EA dropdown
+  'Fantasy UT': 'Fantasy FC',
+  'Fantasy UT Hero': 'Fantasy FC Hero',
+  'Fantasy Captain ICON': 'Fantasy Captain ICON',
+  'Champion Icon': 'Icon',
+  'TOTY ICON': 'Team of the Year ICON',
+  'Showdown Plus': 'Showdown Upgrade',
+  // UEFA abbreviated names in DB -> full names in EA
+  'UCL Road to the Knockouts': 'UEFA Champions League Primetime',
+  'UECL Road to the Final': 'UEFA Conference League Road to the Final',
+  'UECL Road to the Knockouts': 'UEFA Conference League Primetime',
+  'UEL Road to the Final': 'UEFA Europa League Road to the Final',
+  'UEL Road to the Knockouts': 'UEFA Europa League Primetime',
+  'UWCL Primetime Hero': "UEFA Women's Champions League Primetime",
+  'UWCL Road to the Knockouts': "UEFA Women's Champions League Primetime",
+  // POTM cards don't have a rarity filter — they're under "Special Item" or missing
+  'POTM Bundesliga': null,
+  'POTM LALIGA EA SPORTS': null,
+  'POTM LIGA F': null,
+  'POTM Ligue 1': null,
+  'POTM Premier League': null,
+  'POTM Serie A': null,
+  // Other missing rarities
+  'Flashback Player': null,
+  'End Of An Era': null,
+  'Special Item': null,
+  'SQUAD FOUNDATIONS': null,
+  'Winter Wildcards Hero Red': 'Winter Wildcards Hero',
+  'Winter Wildcards Icon Red': 'Winter Wildcards ICON',
+};
+
+/**
+ * Open the Rarity dropdown and select the matching option.
+ * Uses explicit mapping for known mismatches, case-insensitive fallback for the rest.
+ * If card_type maps to null, leaves rarity at "Any" (relies on name+rating verification).
+ *
+ * The clickable target is .inline-container (not .ut-search-filter-control--row).
+ */
+async function setRarityFilter(cardType: string): Promise<void> {
+  // Check explicit mapping first
+  if (cardType in CARD_TYPE_TO_EA_RARITY) {
+    const mapped = CARD_TYPE_TO_EA_RARITY[cardType];
+    if (mapped === null) return; // skip rarity for this card type
+  }
+  const rarityLabel = CARD_TYPE_TO_EA_RARITY[cardType] ?? cardType;
+
+  const dropdowns = document.querySelectorAll<HTMLElement>(SELECTORS.SEARCH_FILTER_DROPDOWN);
+  const rarityDropdown = dropdowns[RARITY_DROPDOWN_INDEX];
+  if (!rarityDropdown) return;
+
+  // Open the dropdown by clicking .inline-container (not the row — row click doesn't work)
+  const container = rarityDropdown.querySelector<HTMLElement>('.inline-container');
+  if (!container) return;
+  await clickElement(container);
+  await jitter(300, 600);
+
+  // Find and click the matching <li> option (case-insensitive comparison)
+  const options = rarityDropdown.querySelectorAll('li');
+  const targetLower = rarityLabel.toLowerCase();
+  for (const opt of Array.from(options)) {
+    if (opt.textContent?.trim().toLowerCase() === targetLower) {
+      await clickElement(opt);
+      return;
+    }
+  }
+  // Option not found — close dropdown, proceed without filter (verification will catch mismatches)
+  await clickElement(container);
+}
+
+// ── Card verification ─────────────────────────────────────────────────────────
+
+/**
+ * Verify the selected search result matches the expected player before buying.
+ * Checks rating and position from the card element's DOM.
+ * Returns false if the card doesn't match — prevents buying the wrong version.
+ */
+function verifyCard(
+  item: Element,
+  expectedRating: number,
+  expectedPosition: string,
+): boolean {
+  const ratingEl = item.querySelector(SELECTORS.ITEM_RATING);
+  const positionEl = item.querySelector(SELECTORS.ITEM_POSITION);
+
+  const rating = parseInt(ratingEl?.textContent?.trim() ?? '', 10);
+  const position = positionEl?.textContent?.trim() ?? '';
+
+  if (isNaN(rating) || rating !== expectedRating) return false;
+  if (position.toUpperCase() !== expectedPosition.toUpperCase()) return false;
+
+  return true;
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
@@ -173,11 +279,12 @@ export async function executeBuyCycle(
       // No suggestions dropdown — name input may have pre-filtered already, continue
     }
 
-    // ── Select rarity filter if present (D-05) ─────────────────────────────
+    // ── Select rarity filter (D-05) ─────────────────────────────────────
     // Rarity is dropdown index 2: Quality=0, EvolutionStatus=1, Rarity=2
-    // Only attempt if the player position implies a specific rarity can be set.
-    // For now we leave rarity at "Any" to cast the widest net.
-    // A future plan can wire rarity selection using the player's rarity field.
+    if (player.card_type) {
+      await setRarityFilter(player.card_type);
+      await jitter();
+    }
 
     // ── Step 3: Price discovery via binary search (D-06, D-07, D-08, D-09) ─
     let retries = 0;
@@ -241,7 +348,10 @@ export async function executeBuyCycle(
         return { outcome: 'skipped', reason: 'Cheapest card above price guard' };
       }
 
-      // BIN <= price guard — proceed to buy (D-07: buy even if below target)
+      // BIN <= price guard — verify this is the right card before buying
+      if (!verifyCard(cheapestItem, player.rating, player.position)) {
+        return { outcome: 'skipped', reason: `Card mismatch: expected ${player.rating} ${player.position} ${player.card_type}` };
+      }
 
       // ── Step 4: Execute Buy Now (D-26, D-10, D-11) ─────────────────────
       let bought = false;
