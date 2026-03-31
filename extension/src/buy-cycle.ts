@@ -324,7 +324,14 @@ export async function executeBuyCycle(
         : [];
 
       if (resultItems.length === 0) {
-        // No results — step max BIN up by 5%
+        // No results — go back to search form before retrying
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) {
+          await clickElement(backBtn);
+          await jitter(1000, 2000);
+        }
+
+        // Step max BIN up by 5%
         maxBin = Math.floor(maxBin * (1 + MAX_BIN_STEP_PCT));
 
         if (maxBin > priceGuard) {
