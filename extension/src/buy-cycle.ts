@@ -342,22 +342,83 @@ export async function executeBuyCycle(
         continue;
       }
 
-      // Results found — read BIN of first (cheapest) result
-      const cheapestItem = resultItems[0];
-      const binPrice = readBinPrice(cheapestItem);
+      // Results found — scan ALL pages to find the cheapest BIN that matches.
+      // EA sorts by time remaining, NOT by price — we must find the true cheapest.
+      // Scan up to MAX_PAGES pages (each has ~20 items).
+      const MAX_PAGES = 3;
+      let binPrice = Infinity;
+      let cheapestPage = 0;  // which page had the cheapest card
+      let currentPage = 0;
 
-      if (isNaN(binPrice)) {
-        return { outcome: 'error', reason: 'Could not read BIN price from search result' };
+      for (let page = 0; page < MAX_PAGES; page++) {
+        currentPage = page;
+        const currentList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
+        const currentItems = currentList
+          ? Array.from(currentList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
+          : [];
+
+        for (const item of currentItems) {
+          const itemBin = readBinPrice(item);
+          if (isNaN(itemBin)) continue;
+          if (!verifyCard(item, player.rating, player.position)) continue;
+          if (itemBin < binPrice) {
+            binPrice = itemBin;
+            cheapestPage = page;
+          }
+        }
+
+        // Try next page
+        const nextBtn = document.querySelector<HTMLElement>(SELECTORS.PAGINATION_NEXT);
+        if (!nextBtn || nextBtn.classList.contains('disabled')) break;
+        await clickElement(nextBtn);
+        await jitter(1500, 2500);
+      }
+
+      // Navigate back to the page with the cheapest card
+      if (binPrice < Infinity && currentPage !== cheapestPage) {
+        for (let i = 0; i < currentPage - cheapestPage; i++) {
+          const prevBtn = document.querySelector<HTMLElement>(SELECTORS.PAGINATION_PREV);
+          if (!prevBtn) break;
+          await clickElement(prevBtn);
+          await jitter(1000, 1500);
+        }
+      }
+
+      // Re-find the cheapest verified card on the current page
+      let cheapestItem: Element | null = null;
+      if (binPrice < Infinity) {
+        const currentList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
+        const currentItems = currentList
+          ? Array.from(currentList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
+          : [];
+        for (const item of currentItems) {
+          const itemBin = readBinPrice(item);
+          if (isNaN(itemBin)) continue;
+          if (!verifyCard(item, player.rating, player.position)) continue;
+          if (itemBin === binPrice) {
+            cheapestItem = item;
+            break;
+          }
+        }
+      }
+
+      if (!cheapestItem || binPrice === Infinity) {
+        // No matching cards found across pages — go back and retry
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) {
+          await clickElement(backBtn);
+          await jitter(1000, 2000);
+        }
+        maxBin = Math.floor(maxBin * (1 + MAX_BIN_STEP_PCT));
+        if (maxBin > priceGuard) {
+          return { outcome: 'skipped', reason: 'No verified cards found within price guard' };
+        }
+        continue;
       }
 
       if (binPrice > priceGuard) {
-        // Cheapest card is above the price guard tolerance (D-08)
+        // Cheapest verified card is above the price guard tolerance (D-08)
         return { outcome: 'skipped', reason: 'Cheapest card above price guard' };
-      }
-
-      // BIN <= price guard — verify this is the right card before buying
-      if (!verifyCard(cheapestItem, player.rating, player.position)) {
-        return { outcome: 'skipped', reason: `Card mismatch: expected ${player.rating} ${player.position} ${player.card_type}` };
       }
 
       // ── Step 4: Execute Buy Now (D-26, D-10, D-11) ─────────────────────
