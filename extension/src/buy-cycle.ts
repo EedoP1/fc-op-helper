@@ -342,64 +342,37 @@ export async function executeBuyCycle(
         continue;
       }
 
-      // Results found — scan ALL pages to find the cheapest BIN that matches.
-      // EA sorts by time remaining, NOT by price — we must find the true cheapest.
-      // Scan up to MAX_PAGES pages (each has ~20 items).
-      const MAX_PAGES = 3;
+      // Results found — scan page for cheapest verified card.
+      // If multiple different prices exist, narrow maxBin down to the cheapest
+      // and re-search to ensure we're buying at the true market minimum.
       let binPrice = Infinity;
-      let cheapestPage = 0;  // which page had the cheapest card
-      let currentPage = 0;
-
-      for (let page = 0; page < MAX_PAGES; page++) {
-        currentPage = page;
-        const currentList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
-        const currentItems = currentList
-          ? Array.from(currentList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
-          : [];
-
-        for (const item of currentItems) {
-          const itemBin = readBinPrice(item);
-          if (isNaN(itemBin)) continue;
-          if (!verifyCard(item, player.rating, player.position)) continue;
-          if (itemBin < binPrice) {
-            binPrice = itemBin;
-            cheapestPage = page;
-          }
-        }
-
-        // Try next page
-        const nextBtn = document.querySelector<HTMLElement>(SELECTORS.PAGINATION_NEXT);
-        if (!nextBtn || nextBtn.classList.contains('disabled')) break;
-        await clickElement(nextBtn);
-        await jitter(1500, 2500);
-      }
-
-      // Navigate back to the page with the cheapest card
-      if (binPrice < Infinity && currentPage !== cheapestPage) {
-        for (let i = 0; i < currentPage - cheapestPage; i++) {
-          const prevBtn = document.querySelector<HTMLElement>(SELECTORS.PAGINATION_PREV);
-          if (!prevBtn) break;
-          await clickElement(prevBtn);
-          await jitter(1000, 1500);
-        }
-      }
-
-      // Re-find the cheapest verified card on the current page
       let cheapestItem: Element | null = null;
-      if (binPrice < Infinity) {
-        const currentList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
-        const currentItems = currentList
-          ? Array.from(currentList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
-          : [];
-        for (const item of currentItems) {
-          const itemBin = readBinPrice(item);
-          if (isNaN(itemBin)) continue;
-          if (!verifyCard(item, player.rating, player.position)) continue;
-          if (itemBin === binPrice) {
-            cheapestItem = item;
-            break;
-          }
+      let priceCount = 0;
+      const seenPrices = new Set<number>();
+
+      for (const item of resultItems) {
+        const itemBin = readBinPrice(item);
+        if (isNaN(itemBin)) continue;
+        if (!verifyCard(item, player.rating, player.position)) continue;
+        seenPrices.add(itemBin);
+        priceCount++;
+        if (itemBin < binPrice) {
+          binPrice = itemBin;
+          cheapestItem = item;
         }
+      }
+
+      // If we found multiple price points, narrow the search to the cheapest
+      // This ensures we don't miss even cheaper cards on page 2+
+      if (seenPrices.size > 1 && binPrice < maxBin) {
+        // Go back and re-search with maxBin = cheapest price found
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) {
+          await clickElement(backBtn);
+          await jitter(1000, 2000);
+        }
+        maxBin = binPrice;
+        continue; // re-search with tighter maxBin
       }
 
       if (!cheapestItem || binPrice === Infinity) {
