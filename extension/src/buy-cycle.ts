@@ -503,13 +503,13 @@ export async function executeBuyCycle(
           await jitter(200, 400);
         }
 
-        // Re-search for fresh results
-        const refreshBtn = document.querySelector<HTMLElement>(
+        // Re-search for fresh results — wait for DOM readiness after back navigation
+        const refreshBtn = await waitForElement<HTMLElement>(
+          'SEARCH_SUBMIT_BUTTON',
           SELECTORS.SEARCH_SUBMIT_BUTTON,
+          document,
+          8_000,
         );
-        if (!refreshBtn) {
-          return { outcome: 'skipped', reason: 'Cannot re-search after snipe — search button not found' };
-        }
         await clickElement(refreshBtn);
 
         // Increment daily cap for the re-search (D-24)
