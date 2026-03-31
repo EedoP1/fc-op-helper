@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed 08-04-PLAN.md
-last_updated: "2026-03-30T19:52:22.810Z"
+stopped_at: Completed quick-260331-vn2
+last_updated: "2026-03-31T19:53:06.274Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 9
@@ -75,6 +75,7 @@ Plan: 3 of 5
 | Phase 08 P01 | 152 | 1 tasks | 4 files |
 | Phase 08 P01 | 300 | 2 tasks | 5 files |
 | Phase 08-dom-automation-layer P04 | 120 | 1 tasks | 9 files |
+| Phase quick P260331-vn2 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,7 @@ Plan: 3 of 5
 - [Phase 08]: Filter dropdowns indexed 0-8 in DOM order: Quality=0, EvolutionStatus=1, Rarity=2, Position=3, ChemStyle=4, Country=5, League=6, Club=7, PlayStyles=8
 - [Phase 08-dom-automation-layer]: Button discrimination by .primary class — Relist All has .primary on .section-header-btn, Clear Sold does not
 - [Phase 08-dom-automation-layer]: ea_id deferred to main loop (Plan 05) — TRADE_REPORT_BATCH sends ea_id=0 for relisted items, resolved by name+rating in caller
+- [Phase quick-260331-vn2]: Listing success verified by QUICK_LIST_PANEL disappearance; sniped skips reset consecutiveFailures; unassigned sweep uses inline button lookup
 
 ### Roadmap Evolution
 
@@ -177,9 +179,10 @@ None yet.
 | 260330-nuv | Add filter to ignore base icon players in portfolio endpoints and scanner | 2026-03-30 | 599c9b9 | [260330-nuv-add-filter-to-ignore-base-icon-players](./quick/260330-nuv-add-filter-to-ignore-base-icon-players/) |
 | 260330-ocv | Filter margin tiers where sell_price exceeds EA max BIN range (priceRange.maxPrice) | 2026-03-30 | d8f9834 | [260330-ocv-filter-players-whose-sell-price-exceeds-](./quick/260330-ocv-filter-players-whose-sell-price-exceeds-/) |
 | 260330-ujg | Factor op_sales count into portfolio scoring via log confidence multiplier | 2026-03-30 | a8e86c9 | [260330-ujg-factor-op-sale-count-into-portfolio-scor](./quick/260330-ujg-factor-op-sale-count-into-portfolio-scor/) |
+| 260331-vn2 | Fix 5 automation bugs: DOM wait after snipe, CAPTCHA threshold, listing verify, unassigned sweep, sleep display | 2026-03-31 | 41874d1 | [260331-vn2-fix-5-automation-bugs-dom-wait-after-sni](./quick/260331-vn2-fix-5-automation-bugs-dom-wait-after-sni/) |
 
 ## Session Continuity
 
-Last activity: 2026-03-30
-Stopped at: Completed 08-04-PLAN.md
+Last activity: 2026-03-31
+Stopped at: Completed quick-260331-vn2
 Resume file: None
