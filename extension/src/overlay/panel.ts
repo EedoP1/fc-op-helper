@@ -80,6 +80,7 @@ export function createOverlayPanel(): OverlayPanel {
   let currentState: PanelState = 'empty';
   let draftPlayers: PortfolioPlayer[] = [];  // D-10: ephemeral draft, in-memory only
   let removedEaIds: Set<number> = new Set();  // Track removed players within draft session
+  let swapInFlight = false;  // Block removals while a swap request is pending
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
@@ -969,6 +970,9 @@ export function createOverlayPanel(): OverlayPanel {
         });
 
         removeBtn.addEventListener('click', () => {
+          if (swapInFlight) return;  // Block until previous swap completes
+          swapInFlight = true;
+
           const freed_budget = player.price;
           // Track this player as removed for the entire draft session
           removedEaIds.add(player.ea_id);
@@ -982,11 +986,14 @@ export function createOverlayPanel(): OverlayPanel {
           draftPlayers.splice(idx, 1);
           renderPlayerList();
 
+          const current_count = draftPlayers.length;
+
           chrome.runtime.sendMessage({
             type: 'PORTFOLIO_SWAP',
             ea_id: player.ea_id,
             freed_budget,
             excluded_ea_ids,
+            current_count,
           } satisfies ExtensionMessage)
             .then((res: ExtensionMessage) => {
               if (res.type === 'PORTFOLIO_SWAP_RESULT') {
@@ -1002,6 +1009,9 @@ export function createOverlayPanel(): OverlayPanel {
             })
             .catch(() => {
               // Swap failed — draft already updated (player removed), continue without replacement
+            })
+            .finally(() => {
+              swapInFlight = false;
             });
         });
 
@@ -1444,6 +1454,7 @@ export function createOverlayPanel(): OverlayPanel {
       case 'empty':
         draftPlayers = [];
         removedEaIds = new Set();  // Clear removed players for fresh generation
+        swapInFlight = false;
         renderEmpty();
         break;
       case 'draft':

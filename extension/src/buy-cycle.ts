@@ -294,6 +294,7 @@ export async function executeBuyCycle(
     for (let step = 0; step <= MAX_BIN_STEPS; step++) {
       // Cache-bust: increment the module-level bid counter (D-09)
       cacheBustBid += 50;
+      if (cacheBustBid > 1000) cacheBustBid = 50;
       const minBid = cacheBustBid;
 
       // Set min BID (index 0 in the flat price-input array) to cache-bust value
@@ -362,8 +363,35 @@ export async function executeBuyCycle(
         }
       }
 
+      // If all cards on page 1 share the same price, check next page(s) for cheaper cards
+      // before assuming this is the best price. Only skip if no next page exists.
+      if (seenPrices.size === 1 && binPrice < Infinity) {
+        const nextBtn = document.querySelector<HTMLButtonElement>(SELECTORS.PAGINATION_NEXT);
+        if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) {
+          // Scan next page for cheaper cards
+          await clickElement(nextBtn);
+          await jitter(1000, 2000);
+
+          const nextPageList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
+          const nextPageItems = nextPageList
+            ? Array.from(nextPageList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
+            : [];
+
+          for (const item of nextPageItems) {
+            const itemBin = readBinPrice(item);
+            if (isNaN(itemBin)) continue;
+            if (!verifyCard(item, player.rating, player.position)) continue;
+            seenPrices.add(itemBin);
+            if (itemBin < binPrice) {
+              binPrice = itemBin;
+              cheapestItem = item;
+            }
+          }
+        }
+      }
+
       // If we found multiple price points, narrow the search to the cheapest
-      // This ensures we don't miss even cheaper cards on page 2+
+      // This ensures we're buying at the true market minimum.
       if (seenPrices.size > 1 && binPrice < maxBin) {
         // Go back and re-search with maxBin = cheapest price found
         const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
@@ -403,77 +431,109 @@ export async function executeBuyCycle(
         await clickElement(cheapestItem);
         await jitter();
 
-        // Click Buy Now button
-        const buyNowBtn = requireElement<HTMLElement>(
-          'BUY_NOW_BUTTON',
-          SELECTORS.BUY_NOW_BUTTON,
-        );
+        // Click Buy Now button — may be missing if card was sniped
+        const buyNowBtn = document.querySelector<HTMLElement>(SELECTORS.BUY_NOW_BUTTON);
+        if (!buyNowBtn) {
+          // Card sniped before we could click Buy Now — treat as failed attempt
+          retries++;
+          break; // fall through to retry logic below
+        }
         await clickElement(buyNowBtn);
         await jitter();
 
-        // Wait for confirmation dialog
-        await waitForElement(
-          'EA_DIALOG_PRIMARY_BUTTON',
-          SELECTORS.EA_DIALOG_PRIMARY_BUTTON,
-          document,
-          5_000,
-        );
+        // Wait for confirmation dialog — may not appear if card was sniped
+        try {
+          await waitForElement(
+            'EA_DIALOG_PRIMARY_BUTTON',
+            SELECTORS.EA_DIALOG_PRIMARY_BUTTON,
+            document,
+            5_000,
+          );
+        } catch {
+          // Dialog didn't appear — card likely sniped during purchase
+          retries++;
+          break; // fall through to retry logic below
+        }
 
         // Click the primary confirm button in the dialog
-        const confirmBtn = requireElement<HTMLElement>(
-          'EA_DIALOG_PRIMARY_BUTTON',
-          SELECTORS.EA_DIALOG_PRIMARY_BUTTON,
-        );
+        const confirmBtn = document.querySelector<HTMLElement>(SELECTORS.EA_DIALOG_PRIMARY_BUTTON);
+        if (!confirmBtn) {
+          retries++;
+          break;
+        }
         await clickElement(confirmBtn);
         await jitter(1000, 2000);
 
-        // Check if the item expired (sniped) — expired items get .expired class
-        const isExpired =
-          cheapestItem.classList.contains('expired') ||
-          document.querySelector(SELECTORS.SEARCH_RESULT_EXPIRED) !== null;
+        // Determine if buy succeeded: check for the list accordion (only appears
+        // on the post-buy screen). If it's not there, the buy failed — either the
+        // card was sniped (.expired class) or EA rejected the purchase silently.
+        const hasListAccordion =
+          document.querySelector(SELECTORS.LIST_ON_MARKET_ACCORDION) !== null;
 
-        if (isExpired) {
-          // Card was sniped — retry (D-10)
-          retries++;
-          if (retries >= MAX_RETRIES) {
-            return { outcome: 'skipped', reason: 'Sniped 3 times' };
-          }
-          // Re-search for fresh results
-          const refreshBtn = requireElement<HTMLElement>(
-            'SEARCH_SUBMIT_BUTTON',
-            SELECTORS.SEARCH_SUBMIT_BUTTON,
-          );
-          await clickElement(refreshBtn);
-
-          // Increment daily cap for the re-search (D-24)
-          sendMessage({ type: 'DAILY_CAP_INCREMENT' }).catch(() => {});
-
-          await jitter(1500, 3000);
-
-          const refreshedList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
-          const freshItems = refreshedList
-            ? Array.from(
-                refreshedList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM),
-              )
-            : [];
-
-          if (freshItems.length === 0) {
-            return { outcome: 'skipped', reason: 'Sniped and no fresh results' };
-          }
-
-          const freshBin = readBinPrice(freshItems[0]);
-          if (isNaN(freshBin) || freshBin > priceGuard) {
-            return { outcome: 'skipped', reason: 'Post-snipe price above guard' };
-          }
-
-          actualBinPaid = freshBin;
-          // Loop to re-attempt buy with the refreshed first item
-          continue;
+        if (hasListAccordion) {
+          // Buy succeeded — list accordion is visible on the post-buy screen
+          bought = true;
+          break;
         }
 
-        // No expired indicator — buy succeeded
-        bought = true;
-        break;
+        // Buy failed — treat as sniped (D-10: retry up to 3 times)
+        retries++;
+        if (retries >= MAX_RETRIES) {
+          return { outcome: 'skipped', reason: 'Sniped 3 times' };
+        }
+
+        // Navigate back to search results to retry
+        // If we're still on the results page (expired card visible), re-search directly.
+        // Otherwise press back first.
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) {
+          await clickElement(backBtn);
+          await jitter(1000, 2000);
+        }
+
+        // Cache-bust before re-searching (D-09: EA caches results without a value change)
+        cacheBustBid += 50;
+        if (cacheBustBid > 1000) cacheBustBid = 50;
+        const retryPriceInputs = getPriceInputs();
+        if (retryPriceInputs.length >= 4) {
+          await setPriceInput(retryPriceInputs, 0, cacheBustBid);
+          await jitter(200, 400);
+        }
+
+        // Re-search for fresh results
+        const refreshBtn = document.querySelector<HTMLElement>(
+          SELECTORS.SEARCH_SUBMIT_BUTTON,
+        );
+        if (!refreshBtn) {
+          return { outcome: 'skipped', reason: 'Cannot re-search after snipe — search button not found' };
+        }
+        await clickElement(refreshBtn);
+
+        // Increment daily cap for the re-search (D-24)
+        sendMessage({ type: 'DAILY_CAP_INCREMENT' }).catch(() => {});
+
+        await jitter(1500, 3000);
+
+        const refreshedList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
+        const freshItems = refreshedList
+          ? Array.from(
+              refreshedList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM),
+            )
+          : [];
+
+        if (freshItems.length === 0) {
+          return { outcome: 'skipped', reason: 'Sniped and no fresh results' };
+        }
+
+        cheapestItem = freshItems[0];
+        const freshBin = readBinPrice(freshItems[0]);
+        if (isNaN(freshBin) || freshBin > priceGuard) {
+          return { outcome: 'skipped', reason: 'Post-snipe price above guard' };
+        }
+
+        actualBinPaid = freshBin;
+        // Loop to re-attempt buy with the refreshed first item
+        continue;
       }
 
       if (!bought) {

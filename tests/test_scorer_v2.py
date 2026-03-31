@@ -434,6 +434,131 @@ async def test_below_min_total_resolved_observations(db):
     )
 
 
+# ── max_price_range enforcement tests ────────────────────────────────────────
+
+
+def _make_op_observations(
+    ea_id: int,
+    prefix: str,
+    buy_now_price: int,
+    market_price: int,
+    outcome: str,
+    count: int,
+    t_start,
+) -> list[ListingObservation]:
+    """Helper: produce `count` resolved observations at given price/outcome."""
+    return [
+        make_observation(
+            ea_id=ea_id,
+            fingerprint=f"{prefix}-{i}",
+            buy_now_price=buy_now_price,
+            market_price_at_obs=market_price,
+            outcome=outcome,
+            first_seen_at=t_start + timedelta(hours=i),
+            last_seen_at=t_start + timedelta(hours=i, minutes=30),
+            resolved_at=t_start + timedelta(hours=i, minutes=30),
+        )
+        for i in range(count)
+    ]
+
+
+async def test_max_price_range_caps_sell_price(db):
+    """When max_price_range is set, margins whose sell_price exceeds it are skipped.
+
+    Setup:
+      buy_price = 10_000
+      max_price_range = 10_999   (just below 10% sell_price = 11_000)
+
+    Observations qualify at margin 10% (>= MIN_OP_OBSERVATIONS) AND margin 8%
+    (since margin_8_sell = 10_800 < 10_999, 10% obs also count at 8%).
+
+    Without max_price_range guard: scorer would pick margin 10% (higher EPPH).
+    With max_price_range=10_999: sell_price at 10% is 11_000 > 10_999 → skipped.
+    Scorer must fall back to margin 8% (sell_price=10_800 <= 10_999).
+    """
+    _, session_factory = db
+    ea_id = 3001
+    buy_price = 10_000
+    market_price = 10_000
+    max_price_range = 10_999  # 11_000 - 1 → blocks 10% margin
+
+    now = datetime.utcnow()
+    t_start = now - timedelta(days=4)
+
+    observations = []
+    # 5 OP sold + 3 OP expired at exactly 10% margin (buy_now = 11_000)
+    observations += _make_op_observations(ea_id, "cap-sold", int(market_price * 1.10), market_price, "sold", 5, t_start)
+    observations += _make_op_observations(ea_id, "cap-expired", int(market_price * 1.10), market_price, "expired", 3, t_start + timedelta(hours=10))
+    # 15 non-OP filler to push total resolved >= MIN_TOTAL_RESOLVED_OBSERVATIONS
+    observations += _make_op_observations(ea_id, "cap-filler", market_price - 100, market_price, "sold", 15, t_start + timedelta(hours=20))
+
+    async with session_factory() as session:
+        for obs in observations:
+            session.add(obs)
+        await session.commit()
+
+        # Without cap: should choose margin 10%
+        result_no_cap = await score_player_v2(
+            ea_id=ea_id, session=session, buy_price=buy_price, max_price_range=None
+        )
+        # With cap just below 10%: must fall back to margin 8%
+        result_capped = await score_player_v2(
+            ea_id=ea_id, session=session, buy_price=buy_price, max_price_range=max_price_range
+        )
+
+    # Without cap: freely picks best margin (10%)
+    assert result_no_cap is not None
+    assert result_no_cap["margin_pct"] == 10
+    assert result_no_cap["sell_price"] == 11_000  # exceeds cap
+
+    # With cap: 10% is blocked → falls back to margin 8%
+    assert result_capped is not None, (
+        "Expected a result at margin 8% when 10% is capped by max_price_range"
+    )
+    assert result_capped["margin_pct"] == 8, (
+        f"Expected margin_pct=8 (10% blocked by cap), got {result_capped['margin_pct']}"
+    )
+    assert result_capped["sell_price"] <= max_price_range, (
+        f"REGRESSION: sell_price={result_capped['sell_price']} > max_price_range={max_price_range}"
+    )
+
+
+async def test_max_price_range_all_margins_blocked_returns_none(db):
+    """When max_price_range is set so low that ALL viable margins are blocked, returns None.
+
+    buy_price = 10_000, max_price_range = 10_000 (no margin at all possible).
+    All sell_price computations (buy_price * (1 + any_margin)) > max_price_range.
+    Scorer must return None rather than a capped/invalid sell_price.
+    """
+    _, session_factory = db
+    ea_id = 3002
+    buy_price = 10_000
+    market_price = 10_000
+    max_price_range = 10_000  # equal to buy_price — no positive margin possible
+
+    now = datetime.utcnow()
+    t_start = now - timedelta(days=4)
+
+    observations = []
+    # Sufficient OP observations at 3% margin
+    observations += _make_op_observations(ea_id, "block-sold", int(market_price * 1.03), market_price, "sold", 5, t_start)
+    observations += _make_op_observations(ea_id, "block-expired", int(market_price * 1.03), market_price, "expired", 3, t_start + timedelta(hours=10))
+    observations += _make_op_observations(ea_id, "block-filler", market_price - 100, market_price, "sold", 15, t_start + timedelta(hours=20))
+
+    async with session_factory() as session:
+        for obs in observations:
+            session.add(obs)
+        await session.commit()
+
+        result = await score_player_v2(
+            ea_id=ea_id, session=session, buy_price=buy_price, max_price_range=max_price_range
+        )
+
+    assert result is None, (
+        f"Expected None when all margins produce sell_price > max_price_range, got {result}"
+    )
+
+
 async def test_above_min_total_resolved_observations(db):
     """
     Player with 25 resolved observations (above MIN_TOTAL_RESOLVED_OBSERVATIONS=20)

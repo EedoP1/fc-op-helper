@@ -49,6 +49,7 @@ class PlayerScore(Base):
     is_viable: Mapped[bool] = mapped_column(Boolean, default=True)
     expected_profit_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     scorer_version: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "v1"|"v2"
+    max_sell_price: Mapped[int | None] = mapped_column(Integer, nullable=True)  # EA priceRange.maxPrice at scan time
 
     __table_args__ = (
         Index("ix_player_scores_ea_id_scored_at", "ea_id", "scored_at"),

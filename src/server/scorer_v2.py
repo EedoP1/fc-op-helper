@@ -48,7 +48,7 @@ _SCORE_SQL = text("""
         WHERE ea_id = :ea_id
           AND outcome IS NOT NULL
           AND first_seen_at >= :cutoff
-          AND buy_now_price < (market_price_at_obs * :max_op_factor)::int
+          AND buy_now_price < (market_price_at_obs * CAST(:max_op_factor AS double precision))::int
           AND market_price_at_obs > 0
     )
     SELECT

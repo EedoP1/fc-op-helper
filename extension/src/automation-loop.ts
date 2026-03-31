@@ -29,6 +29,22 @@ import type { ActionNeeded, ExtensionMessage } from './messages';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
+ * Parse EA time-remaining string (e.g. "55 Minutes", "1 Hour", "30 Seconds")
+ * into milliseconds. Returns Infinity if unparseable.
+ */
+function parseTimeRemainingMs(timeStr: string): number {
+  const lower = timeStr.toLowerCase();
+  const match = lower.match(/(\d+)\s*(second|minute|hour)/);
+  if (!match) return Infinity;
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  if (unit.startsWith('second')) return value * 1_000;
+  if (unit.startsWith('minute')) return value * 60_000;
+  if (unit.startsWith('hour')) return value * 3_600_000;
+  return Infinity;
+}
+
+/**
  * Check if the current page has the EA session login view visible.
  * Used to detect D-38: session expiry after any navigation or automation step.
  */
@@ -75,7 +91,54 @@ export async function runAutomationLoop(
 ): Promise<void> {
   try {
     while (!engine.isStopping) {
-      // ── Phase A: Get actions-needed (D-19: cold start / D-18: resume) ────
+      // ── Phase A: Scan transfer list + relist + clear sold (D-02, D-03) ───
+      // Runs FIRST so expired cards get relisted immediately, sold cards are
+      // cleared, and trade reports are sent before fetching actions_needed.
+      // Also builds the reconciliation set to skip players already listed.
+
+      await engine.setState('SCANNING', 'Scanning transfer list');
+
+      let alreadyListedNames: Set<string> = new Set();
+      let cycleResult: TransferListCycleResult | null = null;
+      try {
+        cycleResult = await executeTransferListCycle(sendMessage);
+
+        // Build reconciliation set from scan results
+        for (const item of cycleResult.scanned.listed) {
+          alreadyListedNames.add(item.playerName.toLowerCase());
+        }
+
+        await engine.setLastEvent(
+          `Transfer list scan: ${cycleResult.scanned.listed.length} listed, ${cycleResult.scanned.expired.length} expired, ${cycleResult.scanned.sold.length} sold`,
+        );
+
+        if (cycleResult.relistedCount > 0) {
+          await engine.setLastEvent(`Relisted ${cycleResult.relistedCount} cards`);
+        }
+
+        if (cycleResult.soldCleared > 0) {
+          await engine.log(`Cleared ${cycleResult.soldCleared} sold cards`);
+        }
+
+        await engine.setState('SCANNING', 'Transfer list cycle complete');
+
+      } catch (err) {
+        if (err instanceof AutomationError) {
+          if (isSessionExpired()) {
+            await engine.setError('EA session expired — please log in and restart automation');
+            return;
+          }
+          await engine.setError(err.message);
+          return;
+        }
+        await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)} — proceeding without reconciliation`);
+      }
+
+      if (engine.isStopping) return;
+
+      // ── Phase B: Get actions-needed (D-19: cold start / D-18: resume) ────
+      // Fetched AFTER scan+relist so trade reports from Phase A are processed
+      // and backend state is current.
 
       await engine.setState('SCANNING', 'Fetching portfolio actions');
 
@@ -89,28 +152,9 @@ export async function runAutomationLoop(
         await engine.log('ACTIONS_NEEDED_REQUEST failed — continuing with last known state');
       }
 
-      // D-18 / D-19: Scan DOM to detect what is actually on the transfer list
-      // Reconcile: skip players that backend says BUY but are already listed in DOM
-      let alreadyListedNames: Set<string> = new Set();
-      try {
-        const scanResult = await scanTransferList();
-        for (const item of scanResult.listed) {
-          alreadyListedNames.add(item.playerName.toLowerCase());
-        }
-        await engine.setLastEvent(
-          `Transfer list scan: ${scanResult.listed.length} listed, ${scanResult.expired.length} expired, ${scanResult.sold.length} sold`,
-        );
-      } catch (err) {
-        if (err instanceof AutomationError) {
-          await engine.setError(err.message);
-          return;
-        }
-        await engine.log('Transfer list scan failed — proceeding without reconciliation');
-      }
-
       if (engine.isStopping) return;
 
-      // ── Phase B: Buy all portfolio players (D-02) ─────────────────────────
+      // ── Phase C: Buy all portfolio players (D-02) ─────────────────────────
 
       // Check daily cap before starting buy phase (D-24, AUTO-04)
       let isCapped = false;
@@ -126,11 +170,25 @@ export async function runAutomationLoop(
       const buyPlayers = actionsNeeded.filter(a => a.action === 'BUY');
       let outOfCoins = false;
 
-      if (!isCapped && buyPlayers.length > 0) {
+      // D-36: Track transfer list occupancy — EA caps at 100 active listings.
+      // Start from scan results; increment after each successful buy+list.
+      const EA_TRANSFER_LIST_MAX = 100;
+      let transferListCount = cycleResult
+        ? cycleResult.scanned.listed.length + cycleResult.scanned.expired.length
+        : 0;
+      const transferListFull = transferListCount >= EA_TRANSFER_LIST_MAX;
+
+      if (!isCapped && !transferListFull && buyPlayers.length > 0) {
         await engine.setState('BUYING', 'Starting buy cycle');
 
         for (const player of buyPlayers) {
           if (engine.isStopping) return; // D-17: graceful stop between actions
+
+          // D-36: Stop buying if transfer list is full
+          if (transferListCount >= EA_TRANSFER_LIST_MAX) {
+            await engine.log('Transfer list full (100) — stopping buy phase');
+            break;
+          }
 
           // D-35: if already out of coins, skip buy phase entirely
           if (outOfCoins) {
@@ -156,8 +214,16 @@ export async function runAutomationLoop(
             await engine.log(`Fresh price unavailable for ${player.name} — using cached price`);
           }
 
-          // D-19 / D-18 reconciliation: skip if DOM already shows this player listed
-          if (alreadyListedNames.has(player.name.toLowerCase())) {
+          // D-19 / D-18 reconciliation: skip if DOM already shows this player listed.
+          // EA shows surname-only on transfer list cards (e.g. "Tonali" not "Sandro Tonali"),
+          // so exact match fails. Use substring: if any listed name is contained in the
+          // backend name (or vice versa), it's a match.
+          const pName = player.name.toLowerCase();
+          const isAlreadyListed = alreadyListedNames.has(pName)
+            || Array.from(alreadyListedNames).some(domName =>
+              pName.includes(domName) || domName.includes(pName)
+            );
+          if (isAlreadyListed) {
             await engine.log(`Skipping ${player.name} — already listed on transfer list`);
             continue;
           }
@@ -167,23 +233,27 @@ export async function runAutomationLoop(
           const result: BuyCycleResult = await executeBuyCycle(freshPlayer, sendMessage);
 
           if (result.outcome === 'bought') {
+            transferListCount++;  // D-36: track new listing
             await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
 
-            // Report buy to backend (D-30)
-            sendMessage({
-              type: 'TRADE_REPORT',
-              ea_id: player.ea_id,
-              price: result.buyPrice,
-              outcome: 'bought',
-            } satisfies ExtensionMessage).catch(() => {});
-
-            // Report listing to backend (D-30: immediately listed at OP price)
-            sendMessage({
-              type: 'TRADE_REPORT',
-              ea_id: player.ea_id,
-              price: freshPlayer.sell_price,
-              outcome: 'listed',
-            } satisfies ExtensionMessage).catch(() => {});
+            // Report buy + list to backend (D-30) — await to ensure backend
+            // state is up to date before the next cycle fetches actions_needed.
+            try {
+              await sendMessage({
+                type: 'TRADE_REPORT',
+                ea_id: player.ea_id,
+                price: result.buyPrice,
+                outcome: 'bought',
+              } satisfies ExtensionMessage);
+              await sendMessage({
+                type: 'TRADE_REPORT',
+                ea_id: player.ea_id,
+                price: freshPlayer.sell_price,
+                outcome: 'listed',
+              } satisfies ExtensionMessage);
+            } catch {
+              await engine.log(`Trade report failed for ${player.name} — backend state may be stale`);
+            }
 
             // Increment daily cap counter (D-24)
             sendMessage({ type: 'DAILY_CAP_INCREMENT' } satisfies ExtensionMessage).catch(() => {});
@@ -233,41 +303,10 @@ export async function runAutomationLoop(
             await jitter();
           }
         }
+      } else if (transferListFull) {
+        await engine.log(`Transfer list full (${transferListCount}/${EA_TRANSFER_LIST_MAX}) — skipping buy phase`);
       } else if (isCapped) {
         await engine.log('Daily cap reached — skipping buy phase');
-      }
-
-      if (engine.isStopping) return;
-
-      // ── Phase C: Scan transfer list + relist + clear sold (D-02, D-03) ───
-
-      await engine.setState('SCANNING', 'Scanning transfer list');
-
-      let cycleResult: TransferListCycleResult | null = null;
-      try {
-        cycleResult = await executeTransferListCycle(sendMessage);
-
-        if (cycleResult.relistedCount > 0) {
-          await engine.setLastEvent(`Relisted ${cycleResult.relistedCount} cards`);
-        }
-
-        if (cycleResult.soldCleared > 0) {
-          await engine.log(`Cleared ${cycleResult.soldCleared} sold cards`);
-        }
-
-        await engine.setState('SCANNING', 'Transfer list cycle complete');
-
-      } catch (err) {
-        if (err instanceof AutomationError) {
-          // D-38: Check session expiry
-          if (isSessionExpired()) {
-            await engine.setError('EA session expired — please log in and restart automation');
-            return;
-          }
-          await engine.setError(err.message);
-          return;
-        }
-        await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       if (engine.isStopping) return;
@@ -298,22 +337,28 @@ export async function runAutomationLoop(
               await engine.log(`Sold item not in portfolio: ${soldItem.playerName} — skipping rebuy`);
               // Report the sale even without a matched ea_id if we have a listing ea_id
               // ea_id=0 here since we can't match; backend will ignore or log
-              sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: 0,
-                price: soldItem.price,
-                outcome: 'sold',
-              } satisfies ExtensionMessage).catch(() => {});
+              try {
+                await sendMessage({
+                  type: 'TRADE_REPORT',
+                  ea_id: 0,
+                  price: soldItem.price,
+                  outcome: 'sold',
+                } satisfies ExtensionMessage);
+              } catch { /* unmatched sale — best effort */ }
               continue;
             }
 
-            // Report the sale (D-30)
-            sendMessage({
-              type: 'TRADE_REPORT',
-              ea_id: matched.ea_id,
-              price: soldItem.price,
-              outcome: 'sold',
-            } satisfies ExtensionMessage).catch(() => {});
+            // Report the sale (D-30) — await so backend state is current
+            try {
+              await sendMessage({
+                type: 'TRADE_REPORT',
+                ea_id: matched.ea_id,
+                price: soldItem.price,
+                outcome: 'sold',
+              } satisfies ExtensionMessage);
+            } catch {
+              await engine.log(`Sale report failed for ${matched.name}`);
+            }
 
             // Track profit (approximate — EA tax applied backend-side per D-14)
             const approxProfit = soldItem.price - matched.buy_price;
@@ -341,25 +386,36 @@ export async function runAutomationLoop(
               await engine.log(`Fresh price unavailable for rebuy of ${matched.name}`);
             }
 
+            // D-36: Check transfer list space before rebuy
+            if (transferListCount >= EA_TRANSFER_LIST_MAX) {
+              await engine.log(`Transfer list full — skipping rebuy of ${matched.name}`);
+              continue;
+            }
+
             await engine.setState('BUYING', `Rebuying: ${matched.name}`);
             const rebuyResult = await executeBuyCycle(rebuyPlayer, sendMessage);
 
             if (rebuyResult.outcome === 'bought') {
+              transferListCount++;  // D-36: track new listing
               await engine.setLastEvent(
                 `Rebought ${matched.name} for ${rebuyResult.buyPrice.toLocaleString()}`,
               );
-              sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: matched.ea_id,
-                price: rebuyResult.buyPrice,
-                outcome: 'bought',
-              } satisfies ExtensionMessage).catch(() => {});
-              sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: matched.ea_id,
-                price: rebuyPlayer.sell_price,
-                outcome: 'listed',
-              } satisfies ExtensionMessage).catch(() => {});
+              try {
+                await sendMessage({
+                  type: 'TRADE_REPORT',
+                  ea_id: matched.ea_id,
+                  price: rebuyResult.buyPrice,
+                  outcome: 'bought',
+                } satisfies ExtensionMessage);
+                await sendMessage({
+                  type: 'TRADE_REPORT',
+                  ea_id: matched.ea_id,
+                  price: rebuyPlayer.sell_price,
+                  outcome: 'listed',
+                } satisfies ExtensionMessage);
+              } catch {
+                await engine.log(`Trade report failed for rebuy of ${matched.name}`);
+              }
             } else if (rebuyResult.outcome === 'error') {
               // Check for critical failures
               const isAutomationFailure =
@@ -393,10 +449,38 @@ export async function runAutomationLoop(
 
       if (engine.isStopping) return;
 
-      // ── Inter-cycle pause (D-28, AUTO-05): avoid hammering EA servers ─────
-      await engine.setState('IDLE', 'Cycle complete — waiting before next cycle');
-      await engine.log('Cycle complete — pausing before next cycle');
-      await jitter(5000, 10000);
+      // ── Inter-cycle pause ─────────────────────────────────────────────────
+      // If transfer list is full, sleep until the earliest card expires instead
+      // of polling every 10 seconds. Otherwise use standard jitter (D-28, AUTO-05).
+      if (transferListCount >= EA_TRANSFER_LIST_MAX && cycleResult) {
+        let earliestMs = Infinity;
+        for (const item of cycleResult.scanned.listed) {
+          if (item.timeRemaining) {
+            const ms = parseTimeRemainingMs(item.timeRemaining);
+            if (ms < earliestMs) earliestMs = ms;
+          }
+        }
+        if (earliestMs < Infinity && earliestMs > 10_000) {
+          // Add a small buffer so the card is definitely expired when we rescan
+          const waitMs = earliestMs + 5_000;
+          const waitMin = Math.round(waitMs / 60_000);
+          await engine.setState('IDLE', `Transfer list full — next expiry in ~${waitMin}m`);
+          await engine.log(`Transfer list full — sleeping ${waitMin}m until next card expires`);
+          // Sleep in 30s chunks so we can respond to stop requests
+          let remaining = waitMs;
+          while (remaining > 0 && !engine.isStopping) {
+            const chunk = Math.min(remaining, 30_000);
+            await new Promise(r => setTimeout(r, chunk));
+            remaining -= chunk;
+          }
+        } else {
+          await engine.setState('IDLE', 'Transfer list full — checking again shortly');
+          await jitter(15_000, 30_000);
+        }
+      } else {
+        await engine.setState('IDLE', 'Cycle complete — waiting before next cycle');
+        await jitter(5000, 10000);
+      }
     }
   } catch (err) {
     if (err instanceof AutomationError) {

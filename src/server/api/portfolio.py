@@ -125,7 +125,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
             ps.buy_price, ps.sell_price, ps.net_profit, ps.margin_pct,
             ps.op_sales, ps.total_sales, ps.op_ratio, ps.expected_profit,
             ps.efficiency, ps.sales_per_hour, ps.is_viable,
-            ps.expected_profit_per_hour, ps.scorer_version,
+            ps.expected_profit_per_hour, ps.scorer_version, ps.max_sell_price,
             pr.ea_id   AS pr_ea_id, pr.name, pr.rating, pr.position,
             pr.nation, pr.league, pr.club, pr.card_type, pr.scan_tier,
             pr.last_scanned_at, pr.next_scan_at, pr.is_active,
@@ -145,6 +145,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
         WHERE ps.rn = 1
           AND pr.is_active = TRUE
           AND pr.card_type NOT IN ('Icon', 'UT Heroes')
+          AND (ps.max_sell_price IS NULL OR ps.sell_price <= ps.max_sell_price)
     """)
     result = await session.execute(sql)
     raw_rows = result.mappings().all()
@@ -169,6 +170,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
             is_viable=row["is_viable"],
             expected_profit_per_hour=row["expected_profit_per_hour"],
             scorer_version=row["scorer_version"],
+            max_sell_price=row["max_sell_price"],
         )
         record = PlayerRecord(
             ea_id=row["pr_ea_id"],

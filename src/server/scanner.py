@@ -11,7 +11,7 @@ from typing import Optional
 from curl_cffi.requests import Session as CffiSession
 from curl_cffi.requests.exceptions import HTTPError
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tenacity import (
     retry,
@@ -88,6 +88,8 @@ class ScannerService:
         # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
         # much tighter to keep the connection pool available for API endpoints.
         self._db_semaphore = asyncio.Semaphore(20)
+        # Track ea_ids currently being scanned to prevent duplicate work.
+        self._in_flight: set[int] = set()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -340,6 +342,16 @@ class ScannerService:
         Args:
             ea_id: The EA resource ID of the player to scan.
         """
+        if ea_id in self._in_flight:
+            return
+        self._in_flight.add(ea_id)
+
+        try:
+            await self._scan_player_inner(ea_id)
+        finally:
+            self._in_flight.discard(ea_id)
+
+    async def _scan_player_inner(self, ea_id: int) -> None:
         if self._circuit_breaker.is_open:
             logger.debug(f"Circuit breaker OPEN — skipping scan for {ea_id}")
             return
@@ -452,6 +464,7 @@ class ScannerService:
                     is_viable=viable,
                     expected_profit_per_hour=v2_result["expected_profit_per_hour"],
                     scorer_version="v2",
+                    max_sell_price=market_data.max_price_range,
                 )
             else:
                 ps = PlayerScore(
@@ -574,19 +587,31 @@ class ScannerService:
             result = await session.execute(stmt)
             due_players = result.scalars().all()
 
-        logger.warning(f"dispatch_scans: found {len(due_players)} due players")
-        if not due_players:
-            return
+            if not due_players:
+                logger.warning("dispatch_scans: found 0 due players")
+                return
 
-        self._queue_depth_cache = len(due_players)
+            # Immediately push next_scan_at forward so the next dispatch cycle
+            # won't pick up the same players while they're still being scanned.
+            ea_ids = [p.ea_id for p in due_players]
+            await session.execute(
+                update(PlayerRecord)
+                .where(PlayerRecord.ea_id.in_(ea_ids))
+                .values(next_scan_at=now + timedelta(seconds=SCAN_INTERVAL_SECONDS))
+            )
+            await session.commit()
+
+        logger.warning(f"dispatch_scans: found {len(ea_ids)} due players")
+
+        self._queue_depth_cache = len(ea_ids)
         semaphore = asyncio.Semaphore(SCAN_CONCURRENCY)
 
         async def _scan_with_sem(ea_id: int) -> None:
             async with semaphore:
                 await self.scan_player(ea_id)
 
-        for p in due_players:
-            task = asyncio.get_running_loop().create_task(_scan_with_sem(p.ea_id))
+        for eid in ea_ids:
+            task = asyncio.get_running_loop().create_task(_scan_with_sem(eid))
             self._active_tasks.add(task)
 
     # ── Scheduled aggregation and cleanup jobs ──────────────────────────────
