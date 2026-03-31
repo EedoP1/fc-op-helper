@@ -282,12 +282,12 @@ export async function runAutomationLoop(
             } catch { /* ignore */ }
 
           } else if (result.outcome === 'skipped') {
-            // D-22: Count snipe-related skips toward CAPTCHA detection.
-            // "Price above guard" is a normal skip — don't count it.
-            const isSnipeSkip = result.reason.includes('Sniped')
-              || result.reason.includes('snipe')
-              || result.reason.includes('search button not found');
-            if (isSnipeSkip) {
+            // Sniped is normal market competition — reset failure counter.
+            // Only DOM/timeout failures count toward CAPTCHA detection.
+            const isDomFailure = result.reason.includes('search button not found')
+              || result.reason.includes('DOM mismatch')
+              || result.reason.includes('Timeout waiting');
+            if (isDomFailure) {
               consecutiveFailures++;
             } else {
               consecutiveFailures = 0;
@@ -478,7 +478,7 @@ export async function runAutomationLoop(
         if (earliestMs < Infinity && earliestMs > 10_000) {
           // Add a small buffer so the card is definitely expired when we rescan
           const waitMs = earliestMs + 5_000;
-          const waitMin = Math.round(waitMs / 60_000);
+          const waitMin = Math.max(1, Math.round(waitMs / 60_000));
           await engine.setState('IDLE', `Transfer list full — next expiry in ~${waitMin}m`);
           await engine.log(`Transfer list full — sleeping ${waitMin}m until next card expires`);
           // Sleep in 30s chunks so we can respond to stop requests
