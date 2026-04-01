@@ -202,13 +202,17 @@ export class AutomationEngine {
    * Stop the automation engine.
    * Signals the AbortController so the cycle loop can exit gracefully (D-17).
    * Returns { success: true } even if already stopped.
+   *
+   * Idempotent by design: always sets state to STOPPED and persists to storage,
+   * even if the engine is already stopped. This clears stale isRunning:true values
+   * left in chrome.storage.local after a page refresh kills the running loop —
+   * the first button click after refresh will always reconcile storage correctly.
    */
   async stop(): Promise<{ success: boolean }> {
     // Always abort the controller — even if isRunning is already false (e.g., after
     // setError), there may be pending timeouts from the old loop that need to see
-    // the signal as aborted. Also reset error state so the UI shows STOPPED, not ERROR.
+    // the signal as aborted.
     this.abortController?.abort();
-    if (!this.isRunning && this.state !== 'ERROR') return { success: true };
     this.isRunning = false;
     this.state = 'STOPPED';
     this.currentAction = null;
