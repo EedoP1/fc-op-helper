@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -492,8 +491,7 @@ class ScannerService:
                     captured_at=now,
                     current_lowest_bin=market_data.current_lowest_bin,
                     listing_count=market_data.listing_count,
-                    live_auction_prices=json.dumps(market_data.live_auction_prices),
-                )
+                    )
                 session.add(snapshot)
 
             # Update PlayerRecord fields (record already loaded above)
@@ -662,9 +660,10 @@ class ScannerService:
             )
             snapshot_count = result.rowcount
 
-            # Also prune old PlayerScore rows
+            # Also prune old PlayerScore rows (keep last 48h)
+            score_cutoff = datetime.utcnow() - timedelta(hours=48)
             result = await session.execute(
-                delete(PlayerScore).where(PlayerScore.scored_at < cutoff)
+                delete(PlayerScore).where(PlayerScore.scored_at < score_cutoff)
             )
             score_count = result.rowcount
 

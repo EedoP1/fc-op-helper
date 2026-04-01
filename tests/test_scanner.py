@@ -1,5 +1,4 @@
 """Tests for ScannerService: tier classification, scan lifecycle, bootstrap, scheduling."""
-import json
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -243,9 +242,7 @@ async def test_snapshot_created_on_scan(mock_score, scanner):
     assert snap.ea_id == 100
     assert snap.current_lowest_bin == 20000
     assert snap.listing_count == 30
-    prices = json.loads(snap.live_auction_prices)
-    assert isinstance(prices, list)
-    assert len(prices) == 30
+    assert snap.listing_count == 30
 
 
 async def test_no_snapshot_on_none_market_data(scanner):
@@ -279,14 +276,12 @@ async def test_cleanup_deletes_old_snapshots(scanner):
         old_snap = MarketSnapshot(
             ea_id=200, captured_at=old_time,
             current_lowest_bin=10000, listing_count=20,
-            live_auction_prices="[10000]",
         )
         session.add(old_snap)
 
         recent_snap = MarketSnapshot(
             ea_id=200, captured_at=recent_time,
             current_lowest_bin=10000, listing_count=20,
-            live_auction_prices="[10000]",
         )
         session.add(recent_snap)
         await session.commit()
@@ -310,7 +305,6 @@ async def test_cleanup_preserves_recent_snapshots(scanner):
             snap = MarketSnapshot(
                 ea_id=300, captured_at=now - timedelta(days=days_ago),
                 current_lowest_bin=15000, listing_count=25,
-                live_auction_prices="[15000]",
             )
             session.add(snap)
         await session.commit()

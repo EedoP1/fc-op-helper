@@ -68,7 +68,6 @@ class MarketSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime)
     current_lowest_bin: Mapped[int] = mapped_column(Integer)
     listing_count: Mapped[int] = mapped_column(Integer)
-    live_auction_prices: Mapped[str] = mapped_column(Text)
 
     __table_args__ = (
         Index("ix_market_snapshots_ea_id_captured_at", "ea_id", "captured_at"),
