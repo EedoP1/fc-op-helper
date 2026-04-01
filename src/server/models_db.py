@@ -106,6 +106,8 @@ class DailyListingSummary(Base):
     op_sold_count: Mapped[int] = mapped_column(Integer, default=0)
     op_expired_count: Mapped[int] = mapped_column(Integer, default=0)
     total_listed_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_sold_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_expired_count: Mapped[int] = mapped_column(Integer, default=0)
 
     __table_args__ = (
         Index("ix_daily_summary_ea_id_date_margin", "ea_id", "date", "margin_pct"),
