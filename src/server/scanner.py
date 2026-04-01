@@ -35,7 +35,7 @@ from src.config import (
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.listing_tracker import record_listings, resolve_outcomes
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, ScannerStatus
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, ScannerStatus
 from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
@@ -614,32 +614,6 @@ class ScannerService:
 
     # ── Scheduled aggregation and cleanup jobs ──────────────────────────────
 
-    async def run_aggregation(self) -> None:
-        """Aggregate yesterday's listing observations into daily summaries (D-13).
-
-        Runs daily. Summarises all resolved ListingObservation rows for the
-        previous day into DailyListingSummary rows per margin tier.
-        """
-        from src.server.listing_tracker import aggregate_daily_summaries
-        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
-
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(PlayerRecord.ea_id).where(PlayerRecord.is_active == True)  # noqa: E712
-            )
-            ea_ids = [row[0] for row in result.all()]
-
-        total = 0
-        for ea_id in ea_ids:
-            try:
-                async with self._session_factory() as session:
-                    count = await aggregate_daily_summaries(ea_id, yesterday, session)
-                    await session.commit()
-                    total += count
-            except Exception as exc:
-                logger.error(f"Aggregation failed for {ea_id}: {exc}")
-        logger.info(f"Daily aggregation: {total} summary rows for {yesterday}")
-
     # ── Cleanup ─────────────────────────────────────────────────────────────
 
     async def run_cleanup(self) -> None:
@@ -667,14 +641,12 @@ class ScannerService:
             )
             score_count = result.rowcount
 
-            # Purge old resolved listing observations (D-12)
+            # Delete old daily listing summaries beyond retention
+            summary_cutoff = (datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)).strftime("%Y-%m-%d")
             result = await session.execute(
-                delete(ListingObservation).where(
-                    ListingObservation.resolved_at.isnot(None),
-                    ListingObservation.resolved_at < listing_cutoff,
-                )
+                delete(DailyListingSummary).where(DailyListingSummary.date < summary_cutoff)
             )
-            resolved_purged = result.rowcount
+            summary_purged = result.rowcount
 
             # Purge orphaned unresolved observations (last_seen_at too old)
             result = await session.execute(
@@ -689,7 +661,7 @@ class ScannerService:
         logger.info(
             f"Cleanup: deleted {snapshot_count} snapshots, {score_count} scores "
             f"older than {MARKET_DATA_RETENTION_DAYS} days; "
-            f"purged {resolved_purged} resolved and {orphaned_purged} orphaned "
+            f"purged {summary_purged} old daily summaries and {orphaned_purged} orphaned "
             f"listing observations older than {LISTING_RETENTION_DAYS} days"
         )
 

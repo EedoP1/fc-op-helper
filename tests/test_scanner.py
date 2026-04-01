@@ -358,24 +358,20 @@ async def test_fixed_5min_scan_interval(mock_v2, scanner):
 
 
 async def test_listing_purge(scanner):
-    """Test 22: run_cleanup deletes resolved and orphaned ListingObservation rows older than retention."""
+    """Test 22: run_cleanup deletes orphaned unresolved ListingObservation rows
+    and old DailyListingSummary rows beyond retention.
+
+    Resolved observations are now deleted inline during resolve_outcomes(),
+    so cleanup only handles orphaned unresolved observations and old summaries.
+    """
+    from src.server.models_db import DailyListingSummary
     svc, session_factory, _ = scanner
     now = datetime.utcnow()
     old_time = now - timedelta(days=LISTING_RETENTION_DAYS + 3)
+    old_date_str = old_time.strftime("%Y-%m-%d")
+    recent_date_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
     async with session_factory() as session:
-        # Resolved observation — old resolved_at should be purged
-        session.add(ListingObservation(
-            fingerprint="old_resolved:1",
-            ea_id=5001,
-            buy_now_price=25000,
-            market_price_at_obs=20000,
-            first_seen_at=old_time,
-            last_seen_at=old_time,
-            scan_count=1,
-            outcome="sold",
-            resolved_at=old_time,
-        ))
         # Orphaned unresolved — old last_seen_at should be purged
         session.add(ListingObservation(
             fingerprint="old_orphaned:1",
@@ -388,17 +384,29 @@ async def test_listing_purge(scanner):
             outcome=None,
             resolved_at=None,
         ))
-        # Recent resolved — should be preserved
+        # Recent unresolved — should be preserved
         session.add(ListingObservation(
-            fingerprint="recent_resolved:1",
+            fingerprint="recent_unresolved:1",
             ea_id=5001,
             buy_now_price=24000,
             market_price_at_obs=20000,
             first_seen_at=now - timedelta(days=2),
             last_seen_at=now - timedelta(days=1),
             scan_count=2,
-            outcome="expired",
-            resolved_at=now - timedelta(days=1),
+            outcome=None,
+            resolved_at=None,
+        ))
+        # Old daily summary — should be purged
+        session.add(DailyListingSummary(
+            ea_id=5001, date=old_date_str, margin_pct=10,
+            op_listed_count=5, op_sold_count=3, op_expired_count=2,
+            total_listed_count=20, total_sold_count=15, total_expired_count=5,
+        ))
+        # Recent daily summary — should be preserved
+        session.add(DailyListingSummary(
+            ea_id=5001, date=recent_date_str, margin_pct=10,
+            op_listed_count=5, op_sold_count=3, op_expired_count=2,
+            total_listed_count=20, total_sold_count=15, total_expired_count=5,
         ))
         await session.commit()
 
@@ -406,9 +414,12 @@ async def test_listing_purge(scanner):
 
     async with session_factory() as session:
         obs = (await session.execute(select(ListingObservation))).scalars().all()
+        summaries = (await session.execute(select(DailyListingSummary))).scalars().all()
 
     assert len(obs) == 1, f"Expected 1 listing observation preserved, got {len(obs)}"
-    assert obs[0].fingerprint == "recent_resolved:1"
+    assert obs[0].fingerprint == "recent_unresolved:1"
+    assert len(summaries) == 1, f"Expected 1 summary preserved, got {len(summaries)}"
+    assert summaries[0].date == recent_date_str
 
 
 # ── Deduplication and name population tests ──────────────────────────────────
