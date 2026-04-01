@@ -51,15 +51,4 @@ def create_scheduler(scanner) -> AsyncIOScheduler:
         name="Data cleanup",
     )
 
-    # Daily aggregation: summarize yesterday's listing observations (D-13)
-    scheduler.add_job(
-        scanner.run_aggregation,
-        trigger=IntervalTrigger(hours=24),
-        id="aggregation",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-        name="Daily listing aggregation",
-    )
-
     return scheduler
