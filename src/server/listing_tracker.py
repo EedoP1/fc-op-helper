@@ -385,7 +385,7 @@ async def resolve_outcomes(
                 total_sold_count=n_sold,
                 total_expired_count=n_expired,
             ).on_conflict_do_update(
-                constraint="uq_daily_summary_ea_id_date_margin",
+                index_elements=["ea_id", "date", "margin_pct"],
                 set_=dict(
                     op_listed_count=DailyListingSummary.__table__.c.op_listed_count + op_listed,
                     op_sold_count=DailyListingSummary.__table__.c.op_sold_count + op_sold,

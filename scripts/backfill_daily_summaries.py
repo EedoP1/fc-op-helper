@@ -85,7 +85,7 @@ async def backfill():
                          total_listed_count, total_sold_count, total_expired_count)
                     VALUES (:ea_id, :date, :margin_pct, :op_listed, :op_sold, :op_expired,
                             :total, :total_sold, :total_expired)
-                    ON CONFLICT ON CONSTRAINT uq_daily_summary_ea_id_date_margin
+                    ON CONFLICT (ea_id, date, margin_pct)
                     DO UPDATE SET
                         op_listed_count = EXCLUDED.op_listed_count,
                         op_sold_count = EXCLUDED.op_sold_count,
