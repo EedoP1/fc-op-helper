@@ -30,8 +30,7 @@ async def lifespan(app: FastAPI):
 
     Startup:
     - Creates DB engine and tables (idempotent).
-    - Runs inline migrations if needed.
-    - Purges stale v1 scores.
+    - Runs Alembic migrations to head.
 
     Shutdown:
     - Disposes the DB engine.
@@ -45,50 +44,15 @@ async def lifespan(app: FastAPI):
 
     engine, session_factory = await create_engine_and_tables()
 
-    # Migrate: add is_leftover column to portfolio_slots if missing
-    async with engine.begin() as conn:
-        from sqlalchemy import text, inspect
+    # Run Alembic migrations
+    import os
+    from alembic.config import Config as AlembicConfig
+    from alembic import command
 
-        def _check_column(connection):
-            insp = inspect(connection)
-            cols = [c["name"] for c in insp.get_columns("portfolio_slots")]
-            return "is_leftover" in cols
-
-        has_col = await conn.run_sync(_check_column)
-        if not has_col:
-            await conn.execute(text(
-                "ALTER TABLE portfolio_slots ADD COLUMN is_leftover BOOLEAN DEFAULT FALSE NOT NULL"
-            ))
-            logger.info("Migrated portfolio_slots: added is_leftover column")
-
-    # Migrate: add max_sell_price column to player_scores if missing
-    async with engine.begin() as conn:
-        from sqlalchemy import text, inspect
-
-        def _check_max_sell_price_col(connection):
-            insp = inspect(connection)
-            cols = [c["name"] for c in insp.get_columns("player_scores")]
-            return "max_sell_price" in cols
-
-        has_max_sell_price = await conn.run_sync(_check_max_sell_price_col)
-        if not has_max_sell_price:
-            await conn.execute(text(
-                "ALTER TABLE player_scores ADD COLUMN max_sell_price INTEGER DEFAULT NULL"
-            ))
-            logger.info("Migrated player_scores: added max_sell_price column")
-
-    # Purge stale v1 scores that lack expected_profit_per_hour
-    async with session_factory() as session:
-        from sqlalchemy import delete
-        from src.server.models_db import PlayerScore
-
-        result = await session.execute(
-            delete(PlayerScore).where(PlayerScore.expected_profit_per_hour == None)  # noqa: E711
-        )
-        purged = result.rowcount
-        await session.commit()
-        if purged:
-            logger.info("Purged %d stale v1 scores (missing expected_profit_per_hour)", purged)
+    alembic_ini = os.path.join(os.path.dirname(__file__), "..", "..", "alembic.ini")
+    alembic_cfg = AlembicConfig(alembic_ini)
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Alembic migrations applied.")
 
     app.state.engine = engine
     app.state.session_factory = session_factory
