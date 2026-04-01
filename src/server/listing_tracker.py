@@ -234,6 +234,7 @@ async def resolve_outcomes(
             ListingObservation.id,
             ListingObservation.fingerprint,
             ListingObservation.buy_now_price,
+            ListingObservation.market_price_at_obs,
             ListingObservation.first_seen_at,
         )
         .where(
@@ -303,18 +304,107 @@ async def resolve_outcomes(
             else:
                 expired_ids.append(row.id)
 
-    # Batch UPDATE instead of per-row ORM mutations
-    if sold_ids:
+    # Aggregate resolved observations into daily summaries, then delete them.
+    # This replaces the old batch UPDATE + nightly aggregation approach:
+    # observations are classified by margin tier, counts are upserted into
+    # daily_listing_summaries, and the raw observations are deleted in-place.
+
+    today_str = now.strftime("%Y-%m-%d")
+    n_sold = len(sold_ids)
+    n_expired = len(expired_ids)
+    n_total = n_sold + n_expired
+
+    # Build price info lookup from disappeared rows
+    price_info = {row.id: (row.buy_now_price, row.market_price_at_obs) for row in disappeared}
+
+    from src.config import MAX_OP_MARGIN_PCT
+    max_op_factor = 1 + MAX_OP_MARGIN_PCT / 100.0
+
+    # Detect dialect for SQLite vs Postgres upsert strategy
+    dialect = session.bind.dialect.name
+
+    for margin_pct in MARGINS:
+        op_sold = 0
+        op_expired = 0
+        op_listed = 0
+
+        for obs_id in sold_ids:
+            buy_price, market_price = price_info[obs_id]
+            if market_price > 0 and buy_price < int(market_price * max_op_factor):
+                if _is_op_listing(buy_price, market_price, margin_pct):
+                    op_sold += 1
+                    op_listed += 1
+
+        for obs_id in expired_ids:
+            buy_price, market_price = price_info[obs_id]
+            if market_price > 0 and buy_price < int(market_price * max_op_factor):
+                if _is_op_listing(buy_price, market_price, margin_pct):
+                    op_expired += 1
+                    op_listed += 1
+
+        # Upsert: increment today's summary row
+        if dialect == "sqlite":
+            # SQLite: SELECT + UPDATE/INSERT to support incremental counts
+            # (pg_insert on_conflict_do_update with += doesn't work on SQLite
+            # because SQLite's ON CONFLICT replaces instead of updating in place)
+            existing = await session.execute(
+                select(DailyListingSummary).where(
+                    DailyListingSummary.ea_id == ea_id,
+                    DailyListingSummary.date == today_str,
+                    DailyListingSummary.margin_pct == margin_pct,
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row is not None:
+                row.op_listed_count += op_listed
+                row.op_sold_count += op_sold
+                row.op_expired_count += op_expired
+                row.total_listed_count += n_total
+                row.total_sold_count += n_sold
+                row.total_expired_count += n_expired
+            else:
+                session.add(DailyListingSummary(
+                    ea_id=ea_id,
+                    date=today_str,
+                    margin_pct=margin_pct,
+                    op_listed_count=op_listed,
+                    op_sold_count=op_sold,
+                    op_expired_count=op_expired,
+                    total_listed_count=n_total,
+                    total_sold_count=n_sold,
+                    total_expired_count=n_expired,
+                ))
+        else:
+            stmt = pg_insert(DailyListingSummary).values(
+                ea_id=ea_id,
+                date=today_str,
+                margin_pct=margin_pct,
+                op_listed_count=op_listed,
+                op_sold_count=op_sold,
+                op_expired_count=op_expired,
+                total_listed_count=n_total,
+                total_sold_count=n_sold,
+                total_expired_count=n_expired,
+            ).on_conflict_do_update(
+                constraint="uq_daily_summary_ea_id_date_margin",
+                set_=dict(
+                    op_listed_count=DailyListingSummary.__table__.c.op_listed_count + op_listed,
+                    op_sold_count=DailyListingSummary.__table__.c.op_sold_count + op_sold,
+                    op_expired_count=DailyListingSummary.__table__.c.op_expired_count + op_expired,
+                    total_listed_count=DailyListingSummary.__table__.c.total_listed_count + n_total,
+                    total_sold_count=DailyListingSummary.__table__.c.total_sold_count + n_sold,
+                    total_expired_count=DailyListingSummary.__table__.c.total_expired_count + n_expired,
+                ),
+            )
+            await session.execute(stmt)
+
+    # Delete resolved observations — they've been aggregated
+    from sqlalchemy import delete
+    all_resolved_ids = sold_ids + expired_ids
+    for i in range(0, len(all_resolved_ids), 500):
+        chunk = all_resolved_ids[i:i + 500]
         await session.execute(
-            update(ListingObservation)
-            .where(ListingObservation.id.in_(sold_ids))
-            .values(outcome="sold", resolved_at=now)
-        )
-    if expired_ids:
-        await session.execute(
-            update(ListingObservation)
-            .where(ListingObservation.id.in_(expired_ids))
-            .values(outcome="expired", resolved_at=now)
+            delete(ListingObservation).where(ListingObservation.id.in_(chunk))
         )
     _t_update = _time.monotonic()
 
@@ -323,7 +413,7 @@ async def resolve_outcomes(
         ea_id, _t_find - _t0, len(disappeared), _t_max - _t_find, _t_update - _t_max, _t_update - _t0,
     )
 
-    return {"sold": len(sold_ids), "expired": len(expired_ids), "resolved_at": now}
+    return {"sold": n_sold, "expired": n_expired, "resolved_at": now}
 
 
 async def aggregate_daily_summaries(
