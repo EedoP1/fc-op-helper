@@ -42,8 +42,10 @@ async def scanner(db, circuit_breaker):
     from src.server.scanner import ScannerService
     _, session_factory = db
     svc = ScannerService(session_factory=session_factory, circuit_breaker=circuit_breaker)
-    # Replace the real FutGGClient with a mock so no real HTTP calls are made
-    mock_client = AsyncMock()
+    # Replace the real FutGGClient with a mock so no real HTTP calls are made.
+    # Use MagicMock (not AsyncMock) because scanner calls get_player_market_data_sync
+    # synchronously via run_in_executor — AsyncMock would return a coroutine object.
+    mock_client = MagicMock()
     mock_client.start = AsyncMock()
     mock_client.stop = AsyncMock()
     svc._client = mock_client
@@ -73,7 +75,7 @@ async def test_scan_player_writes_score(mock_v2, scanner, db):
         num_listings=30,
         hours_of_data=10.0,
     )
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
 
     # Insert PlayerRecord first so the update in scan_player can find it
     async with session_factory() as session:
@@ -112,12 +114,12 @@ async def test_scan_player_skips_when_cb_open(scanner, db):
     cb._opened_at = time.monotonic()
     svc._circuit_breaker = cb
 
-    mock_client.get_player_market_data = AsyncMock()
+    mock_client.get_player_market_data_sync = MagicMock()
 
     await svc.scan_player(999)
 
     # No API call should have been made
-    mock_client.get_player_market_data.assert_not_called()
+    mock_client.get_player_market_data_sync.assert_not_called()
 
     # No PlayerScore row should exist
     async with session_factory() as session:
@@ -132,7 +134,7 @@ async def test_scan_player_records_failure_on_exception(scanner):
     svc, session_factory, mock_client = scanner
 
     import httpx
-    mock_client.get_player_market_data = AsyncMock(
+    mock_client.get_player_market_data_sync = MagicMock(
         side_effect=httpx.TimeoutException("timeout")
     )
 
@@ -223,7 +225,7 @@ async def test_snapshot_created_on_scan(mock_score, scanner):
     """Test 15: scan_player creates a MarketSnapshot with correct fields."""
     svc, session_factory, mock_client = scanner
     market_data = make_player(ea_id=100, price=20000, num_sales=50, num_listings=30)
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
 
     async with session_factory() as session:
         _seed_player_record(session, 100)
@@ -249,7 +251,7 @@ async def test_snapshot_created_on_scan(mock_score, scanner):
 async def test_no_snapshot_on_none_market_data(scanner):
     """Test 18: scan_player with None market_data creates no snapshot rows."""
     svc, session_factory, mock_client = scanner
-    mock_client.get_player_market_data = AsyncMock(return_value=None)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=None)
 
     async with session_factory() as session:
         _seed_player_record(session, 103)
@@ -337,7 +339,7 @@ async def test_fixed_5min_scan_interval(mock_v2, scanner):
     market_data = make_player(
         ea_id=5001, name="Fixed Interval", price=20000, num_sales=50, num_listings=25,
     )
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
 
     async with session_factory() as session:
         session.add(PlayerRecord(
@@ -428,7 +430,7 @@ async def test_scan_player_populates_name(mock_v2, scanner):
     svc, session_factory, mock_client = scanner
 
     market_data = make_player(ea_id=401, name="Klostermann", price=20000, num_sales=10, num_listings=30)
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
 
     # Seed with ea_id as name (simulating the old behavior)
     async with session_factory() as session:
@@ -458,7 +460,7 @@ async def test_scan_player_sets_scorer_version(mock_v2, scanner):
     svc, session_factory, mock_client = scanner
 
     market_data = make_player(ea_id=402, name="Version Test", price=20000, num_sales=10, num_listings=30)
-    mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+    mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
 
     async with session_factory() as session:
         _seed_player_record(session, 402)

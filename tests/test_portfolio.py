@@ -73,6 +73,7 @@ async def seeded_portfolio_app(db):
                 efficiency=efficiency,
                 sales_per_hour=10.0,
                 is_viable=True,
+                expected_profit_per_hour=float(buy_price) * efficiency,
             )
             session.add(score)
 

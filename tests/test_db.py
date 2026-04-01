@@ -1,5 +1,6 @@
 """Tests for the database layer: engine creation, WAL mode, CRUD, session."""
 import pytest
+import sys
 import tempfile
 import os
 from datetime import datetime
@@ -23,6 +24,7 @@ async def test_create_engine_and_tables_succeeds(db):
     assert session_factory is not None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="WAL mode file locking on Windows")
 async def test_wal_mode_enabled():
     """Test 2: WAL mode is enabled on file-based SQLite."""
     with tempfile.TemporaryDirectory() as tmpdir:

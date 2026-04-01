@@ -165,8 +165,8 @@ async def test_v2_scorer_writes_score():
             ea_id=ea_id, price=buy_price, num_sales=100, num_listings=25,
             op_sales_pct=0.15, op_margin=0.40, hours_of_data=10.0,
         )
-        mock_client = AsyncMock()
-        mock_client.get_player_market_data = AsyncMock(return_value=market_data)
+        mock_client = MagicMock()
+        mock_client.get_player_market_data_sync = MagicMock(return_value=market_data)
         svc._client = mock_client
 
         await svc.scan_player(ea_id)
