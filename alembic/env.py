@@ -1,4 +1,9 @@
-"""Alembic env — async PostgreSQL with SQLAlchemy."""
+"""Alembic env — supports both CLI usage and in-process execution.
+
+When called from server startup (main.py), a connection is passed via
+config.attributes["connection"] to avoid creating a new event loop.
+When called from CLI (alembic upgrade head), creates its own async engine.
+"""
 import asyncio
 from logging.config import fileConfig
 
@@ -41,7 +46,14 @@ async def run_async_migrations():
 
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    # If a connection was passed from the application (e.g., server startup),
+    # use it directly instead of creating a new engine/event loop.
+    connectable = config.attributes.get("connection", None)
+    if connectable is not None:
+        do_run_migrations(connectable)
+    else:
+        # CLI invocation — create our own async engine
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
