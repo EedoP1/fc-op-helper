@@ -471,19 +471,7 @@ export async function executeBuyCycle(
             // the root cause of false "buy failed" detections — the buy succeeded but
             // the accordion hadn't rendered yet, so the code treated it as a snipe and
             // navigated back, abandoning the bought card.
-            //
-            // Also handle a possible second post-buy dialog (EA sometimes shows a
-            // "Purchase Successful" modal). If the dialog container is still visible
-            // after clicking confirm, dismiss it with its primary button before waiting
-            // for the accordion.
             await jitter(500, 1000);
-
-            // Dismiss any lingering or new post-buy dialog
-            const postBuyDialog = document.querySelector<HTMLElement>(SELECTORS.EA_DIALOG_PRIMARY_BUTTON);
-            if (postBuyDialog) {
-              await clickElement(postBuyDialog);
-              await jitter(300, 600);
-            }
 
             // Poll for the accordion — the definitive post-buy success indicator
             try {

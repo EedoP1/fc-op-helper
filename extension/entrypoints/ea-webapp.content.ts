@@ -16,7 +16,7 @@
 import { ExtensionMessage, assertNever } from '../src/messages';
 import { createOverlayPanel } from '../src/overlay/panel';
 import { readTransferList, isTransferListPage } from '../src/trade-observer';
-import { portfolioItem, reportedOutcomesItem } from '../src/storage';
+import { portfolioItem, reportedOutcomesItem, automationStatusItem } from '../src/storage';
 import { TRANSFER_LIST_CONTAINER } from '../src/selectors';
 import { AutomationEngine } from '../src/automation';
 import { runAutomationLoop } from '../src/automation-loop';
@@ -30,6 +30,21 @@ export default defineContentScript({
     const automationEngine = new AutomationEngine(
       (msg) => chrome.runtime.sendMessage(msg),
     );
+
+    // Clear stale automation status from the previous session (D-06 design).
+    // Page refresh kills the running loop but chrome.storage.local persists,
+    // so storage may still show isRunning:true while the fresh engine is IDLE.
+    // Reconcile immediately so the panel renders the correct button state.
+    automationStatusItem.setValue({
+      isRunning: false,
+      state: 'IDLE',
+      currentAction: null,
+      lastEvent: null,
+      sessionProfit: 0,
+      errorMessage: null,
+    }).catch(() => {
+      // Storage write failure is non-fatal — engine still operates in memory.
+    });
 
     /**
      * Handle incoming messages from the service worker.
