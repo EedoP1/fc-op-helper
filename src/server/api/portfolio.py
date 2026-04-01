@@ -119,6 +119,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
     Returns:
         List of (PlayerScore, PlayerRecord) tuples, one per active+viable player.
     """
+    cutoff = datetime.utcnow() - timedelta(hours=4)
     sql = text("""
         SELECT
             ps.id, ps.ea_id, ps.scored_at,
@@ -139,7 +140,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
                    ) AS rn
             FROM player_scores
             WHERE is_viable = TRUE
-              AND scored_at >= NOW() - INTERVAL '4 hours'
+              AND scored_at >= :cutoff
         ) ps
         JOIN players pr ON pr.ea_id = ps.ea_id
         WHERE ps.rn = 1
@@ -147,7 +148,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
           AND pr.card_type NOT IN ('Icon', 'UT Heroes')
           AND (ps.max_sell_price IS NULL OR ps.sell_price <= ps.max_sell_price)
     """)
-    result = await session.execute(sql)
+    result = await session.execute(sql, {"cutoff": cutoff})
     raw_rows = result.mappings().all()
 
     # Reconstruct ORM-like objects so callers can use score.field / record.field
@@ -239,8 +240,14 @@ async def get_portfolio(
     data = []
     for entry in selected:
         last_scanned_at = entry["last_scanned_at"]
+        # Normalize to naive datetime for comparison
+        if isinstance(last_scanned_at, str):
+            try:
+                last_scanned_at = datetime.fromisoformat(last_scanned_at)
+            except (ValueError, TypeError):
+                last_scanned_at = None
         # Strip timezone info for comparison (Postgres returns tz-aware, utcnow() is naive)
-        if last_scanned_at is not None and last_scanned_at.tzinfo is not None:
+        if last_scanned_at is not None and hasattr(last_scanned_at, 'tzinfo') and last_scanned_at.tzinfo is not None:
             last_scanned_at = last_scanned_at.replace(tzinfo=None)
         is_stale = (
             last_scanned_at is None
@@ -317,7 +324,12 @@ async def generate_portfolio(
     data = []
     for entry in selected:
         last_scanned_at = entry["last_scanned_at"]
-        if last_scanned_at is not None and last_scanned_at.tzinfo is not None:
+        if isinstance(last_scanned_at, str):
+            try:
+                last_scanned_at = datetime.fromisoformat(last_scanned_at)
+            except (ValueError, TypeError):
+                last_scanned_at = None
+        if last_scanned_at is not None and hasattr(last_scanned_at, 'tzinfo') and last_scanned_at.tzinfo is not None:
             last_scanned_at = last_scanned_at.replace(tzinfo=None)
         is_stale = last_scanned_at is None or last_scanned_at < stale_cutoff
         epph = entry.get("expected_profit_per_hour")

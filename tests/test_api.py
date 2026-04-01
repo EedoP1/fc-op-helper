@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from src.server.db import create_engine_and_tables
-from src.server.models_db import PlayerRecord, PlayerScore
+from src.server.models_db import PlayerRecord, PlayerScore, ScannerStatus
 from src.server.api.players import router as players_router
 from src.server.api.health import router as health_router
 from src.server.circuit_breaker import CBState
@@ -59,6 +59,7 @@ def make_test_app(session_factory, scanner=None, cb=None):
     # Set state directly — ASGITransport does not trigger lifespan events,
     # so we wire state before the app handles any requests.
     app.state.session_factory = session_factory
+    app.state.read_session_factory = session_factory
     app.state.scanner = scanner
     app.state.circuit_breaker = cb
 
@@ -245,6 +246,19 @@ async def test_top_players_all_fields_present(seeded_app):
 async def test_health_returns_all_fields(db):
     """Test 7: GET /api/v1/health returns 200 with all D-10 fields."""
     _, session_factory = db
+
+    # Seed ScannerStatus row so health endpoint returns real values
+    async with session_factory() as session:
+        session.add(ScannerStatus(
+            id=1,
+            is_running=True,
+            last_scan_at=None,
+            success_rate_1h=1.0,
+            queue_depth=0,
+            circuit_breaker_state="closed",
+            updated_at=datetime.utcnow(),
+        ))
+        await session.commit()
 
     scanner = MockScannerService()
     cb = MockCircuitBreaker()

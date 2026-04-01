@@ -210,7 +210,8 @@ async def get_pending_action(request: Request):
     async with session_factory() as session:
         # Serialize action derivation to prevent MVCC race where two concurrent
         # requests both see no PENDING action and both create one for the same slot.
-        await session.execute(text("SELECT pg_advisory_xact_lock(42)"))
+        if session.bind.dialect.name != "sqlite":
+            await session.execute(text("SELECT pg_advisory_xact_lock(42)"))
 
         # Step 1: reset stale
         await _reset_stale_actions(session)

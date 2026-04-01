@@ -8,6 +8,7 @@ from httpx import AsyncClient, ASGITransport
 
 from src.server.api.health import router as health_router
 from src.server.circuit_breaker import CBState
+from src.server.db import create_engine_and_tables
 
 
 # ── Minimal test app with the same CORS config as main.py ────────────────────
@@ -37,7 +38,15 @@ class MockCircuitBreaker:
         self.state = CBState.CLOSED
 
 
-def make_cors_test_app() -> FastAPI:
+@pytest.fixture
+async def cors_db():
+    """In-memory SQLite DB for CORS tests."""
+    engine, session_factory = await create_engine_and_tables("sqlite+aiosqlite:///:memory:")
+    yield session_factory
+    await engine.dispose()
+
+
+def make_cors_test_app(session_factory=None) -> FastAPI:
     """Create a minimal FastAPI app mirroring the CORSMiddleware config from main.py.
 
     Uses the health router as the target endpoint for CORS verification.
@@ -53,7 +62,8 @@ def make_cors_test_app() -> FastAPI:
     )
     app.include_router(health_router)
 
-    app.state.session_factory = None
+    app.state.session_factory = session_factory
+    app.state.read_session_factory = session_factory
     app.state.scanner = MockScannerService()
     app.state.circuit_breaker = MockCircuitBreaker()
 
@@ -95,9 +105,9 @@ async def test_cors_preflight_blocked_origin():
 
 # ── Test 3: Simple GET request from chrome-extension origin includes CORS header ──
 
-async def test_cors_simple_request():
+async def test_cors_simple_request(cors_db):
     """GET /api/v1/health with chrome-extension Origin returns access-control-allow-origin header."""
-    app = make_cors_test_app()
+    app = make_cors_test_app(session_factory=cors_db)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(
             "/api/v1/health",

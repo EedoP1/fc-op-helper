@@ -20,6 +20,7 @@ def make_test_app(session_factory):
     app = FastAPI(title="OP Seller Test — Portfolio Status")
     app.include_router(status_router)
     app.state.session_factory = session_factory
+    app.state.read_session_factory = session_factory
     return app
 
 

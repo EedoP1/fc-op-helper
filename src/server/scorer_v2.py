@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # SQL query: classify each observation into its highest qualifying margin,
 # then aggregate sold/expired counts per margin tier (cumulative).
-_SCORE_SQL = text("""
+_SCORE_SQL_PG = text("""
     WITH classified AS (
         SELECT outcome,
             CASE
@@ -57,6 +57,45 @@ _SCORE_SQL = text("""
         COUNT(*) FILTER (WHERE outcome = 'expired' AND max_margin >= m.margin_pct) as op_expired
     FROM classified
     CROSS JOIN (VALUES (40),(35),(30),(25),(20),(15),(10),(8),(5),(3)) AS m(margin_pct)
+    WHERE max_margin >= m.margin_pct
+    GROUP BY m.margin_pct
+    ORDER BY m.margin_pct DESC
+""")
+
+# SQLite-compatible version: uses CAST instead of ::int, SUM+CASE instead of
+# COUNT FILTER, and a CTE for the margin values instead of VALUES clause.
+_SCORE_SQL_SQLITE = text("""
+    WITH classified AS (
+        SELECT outcome,
+            CASE
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.40 AS INTEGER) THEN 40
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.35 AS INTEGER) THEN 35
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.30 AS INTEGER) THEN 30
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.25 AS INTEGER) THEN 25
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.20 AS INTEGER) THEN 20
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.15 AS INTEGER) THEN 15
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.10 AS INTEGER) THEN 10
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.08 AS INTEGER) THEN 8
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.05 AS INTEGER) THEN 5
+                WHEN buy_now_price >= CAST(market_price_at_obs * 1.03 AS INTEGER) THEN 3
+                ELSE 0
+            END as max_margin
+        FROM listing_observations
+        WHERE ea_id = :ea_id
+          AND outcome IS NOT NULL
+          AND first_seen_at >= :cutoff
+          AND buy_now_price < CAST(market_price_at_obs * CAST(:max_op_factor AS REAL) AS INTEGER)
+          AND market_price_at_obs > 0
+    ),
+    margins(margin_pct) AS (
+        VALUES (40),(35),(30),(25),(20),(15),(10),(8),(5),(3)
+    )
+    SELECT
+        m.margin_pct,
+        SUM(CASE WHEN outcome = 'sold' AND max_margin >= m.margin_pct THEN 1 ELSE 0 END) as op_sold,
+        SUM(CASE WHEN outcome = 'expired' AND max_margin >= m.margin_pct THEN 1 ELSE 0 END) as op_expired
+    FROM classified
+    CROSS JOIN margins m
     WHERE max_margin >= m.margin_pct
     GROUP BY m.margin_pct
     ORDER BY m.margin_pct DESC
@@ -99,22 +138,23 @@ async def score_player_v2(
     cutoff = datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)
     max_op_factor = 1 + MAX_OP_MARGIN_PCT / 100.0
 
-    # Aggregate sold/expired per margin tier in SQL (skip separate COUNT query —
-    # we can check total from the aggregation result itself)
+    # Aggregate sold/expired per margin tier in SQL
+    dialect = session.bind.dialect.name
+    score_sql = _SCORE_SQL_SQLITE if dialect == "sqlite" else _SCORE_SQL_PG
     result = await session.execute(
-        _SCORE_SQL,
+        score_sql,
         {"ea_id": ea_id, "cutoff": cutoff, "max_op_factor": max_op_factor},
     )
     margin_rows = result.all()
     _t_agg = _time.monotonic()
 
-    # Quality guard: sum all sold+expired across the lowest margin tier (most inclusive)
-    # If no rows returned, there are zero OP observations
-    total_obs = 0
-    if margin_rows:
-        # The lowest margin row (last in DESC order) has the cumulative count
-        lowest = margin_rows[-1]
-        total_obs = lowest[1] + lowest[2]  # op_sold + op_expired at lowest margin
+    # Quality guard: count ALL resolved observations (not just OP ones) to ensure
+    # we have a statistically meaningful sample before trusting the OP ratios.
+    total_result = await session.execute(
+        _TOTAL_COUNT_SQL,
+        {"ea_id": ea_id, "cutoff": cutoff},
+    )
+    total_obs = total_result.scalar() or 0
 
     if total_obs < MIN_TOTAL_RESOLVED_OBSERVATIONS:
         logger.debug(
