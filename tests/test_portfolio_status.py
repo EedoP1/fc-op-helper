@@ -112,7 +112,6 @@ async def test_status_bought(db):
             captured_at=now,
             current_lowest_bin=55000,
             listing_count=50,
-            live_auction_prices="[]",
         ))
         await session.commit()
 
@@ -149,7 +148,6 @@ async def test_status_listed(db):
             captured_at=now,
             current_lowest_bin=45000,
             listing_count=30,
-            live_auction_prices="[]",
         ))
         await session.commit()
 
@@ -271,7 +269,6 @@ async def test_summary_totals(db):
             captured_at=now,
             current_lowest_bin=55000,
             listing_count=20,
-            live_auction_prices="[]",
         ))
 
         await session.commit()
