@@ -16,6 +16,40 @@ import type { PortfolioPlayer } from '../storage';
 import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded } from '../messages';
 import { automationStatusItem, activityLogItem } from '../storage';
 
+// ── Non-blocking error notification ──────────────────────────────────────────
+
+/**
+ * Show a prominent but non-blocking error toast at the top of the viewport.
+ * Replaces window.alert() which blocks the JS thread and prevents start/stop.
+ * Auto-dismisses after 10 seconds or on click.
+ */
+function showErrorToast(message: string): void {
+  const toast = document.createElement('div');
+  Object.assign(toast.style, {
+    position: 'fixed',
+    top: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: '#e74c3c',
+    color: '#fff',
+    padding: '16px 24px',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    zIndex: '999999',
+    maxWidth: '500px',
+    textAlign: 'center',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+    cursor: 'pointer',
+  });
+  toast.textContent = message;
+  toast.title = 'Click to dismiss';
+  document.body.appendChild(toast);
+  const remove = () => { if (document.body.contains(toast)) document.body.removeChild(toast); };
+  toast.addEventListener('click', remove);
+  setTimeout(remove, 10_000);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type PanelState = 'empty' | 'draft' | 'confirmed';
@@ -1324,11 +1358,12 @@ export function createOverlayPanel(): OverlayPanel {
         newStatus.sessionProfit,
       );
 
-      // AUTO-06: Prominent window.alert() on CAPTCHA/DOM failure (D-22, D-23)
-      // Alert even if panel is collapsed so the user is immediately notified.
+      // AUTO-06: Prominent notification on CAPTCHA/DOM failure (D-22, D-23)
+      // Non-blocking toast instead of window.alert() — alert blocks the JS thread
+      // which prevents start/stop buttons from working and can leave automation stuck.
       if (newStatus.state === 'ERROR' && newStatus.errorMessage && newStatus.errorMessage !== lastAlertedError) {
         lastAlertedError = newStatus.errorMessage;
-        window.alert('[OP Seller] Automation stopped: ' + newStatus.errorMessage);
+        showErrorToast('[OP Seller] Automation stopped: ' + newStatus.errorMessage);
       }
     });
 

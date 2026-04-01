@@ -244,6 +244,12 @@ export async function executeTransferListCycle(
   let soldCleared = 0;
   if (sold.length > 0) {
     try {
+      // Navigate to first page before looking for Clear Sold button — same reason as
+      // goToFirstPage() before relist: scanAllPages() ends on the last page, and EA only
+      // shows the "Sold Items" section header button when those items are in view.
+      await goToFirstPage();
+      await jitter();
+
       // Clear Sold button does NOT have .primary class
       // (Relist All has .primary; Clear Sold does not per 08-01 SUMMARY)
       const clearBtn = findSectionHeaderButton('clear');

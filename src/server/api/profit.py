@@ -62,15 +62,22 @@ async def get_profit_summary(request: Request):
         else:
             name_map = {}
 
-    # Build per-player breakdown
+    # Build per-player breakdown — only include players that have both
+    # buy and sell records so profit numbers aren't inflated by unmatched trades.
     per_player = []
     for row in agg_rows:
-        total_earned = int(float(row.total_earned_gross) * (1 - EA_TAX_RATE))
-        net = total_earned - int(row.total_spent)
+        spent = int(row.total_spent)
+        earned_gross = int(row.total_earned_gross)
+        if spent == 0 and earned_gross > 0:
+            continue  # sell without recorded buy — would inflate profit
+        if spent > 0 and earned_gross == 0:
+            continue  # buy without sell — no realized profit yet
+        total_earned = int(float(earned_gross) * (1 - EA_TAX_RATE))
+        net = total_earned - spent
         per_player.append({
             "ea_id": row.ea_id,
             "name": name_map.get(row.ea_id, f"Player {row.ea_id}"),
-            "total_spent": int(row.total_spent),
+            "total_spent": spent,
             "total_earned": total_earned,
             "net_profit": net,
             "trade_count": int(row.trade_count),

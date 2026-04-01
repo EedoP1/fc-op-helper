@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OP Seller", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"chrome-extension://.*",
+    allow_origin_regex=r"(chrome-extension://.*|http://localhost(:\d+)?)",
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
@@ -119,3 +119,16 @@ app.include_router(actions_router)
 app.include_router(profit_router)
 app.include_router(status_router)
 app.include_router(automation.router)
+
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+import pathlib
+from fastapi.responses import HTMLResponse
+
+_DASHBOARD_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / "dashboard.html"
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the dashboard UI."""
+    return _DASHBOARD_PATH.read_text(encoding="utf-8")

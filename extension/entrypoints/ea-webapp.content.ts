@@ -255,6 +255,7 @@ export default defineContentScript({
           p.position === item.position,
         );
         if (!match) continue; // Not a portfolio player (D-03)
+        if (item.status === 'processing') continue; // Transient state — will resolve to sold/expired
 
         const eaId = String(match.ea_id);
         if (lastReportedStatus.get(eaId) === item.status) continue; // Same status — dedup (D-07)

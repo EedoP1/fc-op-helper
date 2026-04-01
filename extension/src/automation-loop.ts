@@ -9,7 +9,7 @@
  *   Loop: repeat until stopped or error
  *
  * Key decisions:
- *   D-17: Graceful stop — checks engine.isStopping between actions
+ *   D-17: Graceful stop — checks stopped() between actions
  *   D-18: Resume scans DOM to detect current state before acting
  *   D-19: Cold start fetches actions-needed from backend then scans DOM
  *   D-22: AutomationError triggers alert via engine.setError
@@ -90,8 +90,14 @@ export async function runAutomationLoop(
   engine: AutomationEngine,
   sendMessage: (msg: any) => Promise<any>,
 ): Promise<void> {
+  // Capture this loop's abort signal at start. Each loop invocation checks
+  // ITS OWN signal — if start() creates a new controller, old loops see
+  // their signal as aborted and exit, preventing ghost loops.
+  const signal = engine.getAbortSignal();
+  const stopped = () => signal?.aborted ?? false;
+
   try {
-    while (!engine.isStopping) {
+    while (!stopped()) {
       // ── Phase 0: Sweep unassigned pile for orphaned cards ────────────
       // Cards end up here when listing fails silently (TL full, EA glitch).
       // Check the unassigned badge count on the Transfers hub — if > 0,
@@ -116,7 +122,7 @@ export async function runAutomationLoop(
               // For each item in the unassigned pile, click it and try to list
               const items = document.querySelectorAll<HTMLElement>(SELECTORS.TRANSFER_LIST_ITEM);
               for (const item of Array.from(items)) {
-                if (engine.isStopping) return;
+                if (stopped()) return;
                 await clickElement(item);
                 await jitter();
 
@@ -149,7 +155,7 @@ export async function runAutomationLoop(
         await engine.log(`Unassigned sweep error: ${err instanceof Error ? err.message : String(err)} — continuing`);
       }
 
-      if (engine.isStopping) return;
+      if (stopped()) return;
 
       // ── Phase A: Scan transfer list + relist + clear sold (D-02, D-03) ───
       // Runs FIRST so expired cards get relisted immediately, sold cards are
@@ -194,7 +200,7 @@ export async function runAutomationLoop(
         await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)} — proceeding without reconciliation`);
       }
 
-      if (engine.isStopping) return;
+      if (stopped()) return;
 
       // ── Phase B: Get actions-needed (D-19: cold start / D-18: resume) ────
       // Fetched AFTER scan+relist so trade reports from Phase A are processed
@@ -212,7 +218,7 @@ export async function runAutomationLoop(
         await engine.log('ACTIONS_NEEDED_REQUEST failed — continuing with last known state');
       }
 
-      if (engine.isStopping) return;
+      if (stopped()) return;
 
       // ── Phase C: Buy all portfolio players (D-02) ─────────────────────────
 
@@ -231,10 +237,12 @@ export async function runAutomationLoop(
       let outOfCoins = false;
 
       // D-36: Track transfer list occupancy — EA caps at 100 active listings.
-      // Start from scan results; increment after each successful buy+list.
+      // All three states (listed, expired, sold) occupy TL slots. Subtract
+      // soldCleared because those slots were freed during the relist cycle.
       const EA_TRANSFER_LIST_MAX = 100;
       let transferListCount = cycleResult
         ? cycleResult.scanned.listed.length + cycleResult.scanned.expired.length
+          + cycleResult.scanned.sold.length - cycleResult.soldCleared
         : 0;
       const transferListFull = transferListCount >= EA_TRANSFER_LIST_MAX;
 
@@ -245,7 +253,7 @@ export async function runAutomationLoop(
         const CAPTCHA_THRESHOLD = 3;  // D-22: 3 consecutive failures = possible CAPTCHA
 
         for (const player of buyPlayers) {
-          if (engine.isStopping) return; // D-17: graceful stop between actions
+          if (stopped()) return; // D-17: graceful stop between actions
 
           // D-22: Too many consecutive failures — likely CAPTCHA or blocked UI
           if (consecutiveFailures >= CAPTCHA_THRESHOLD) {
@@ -303,11 +311,18 @@ export async function runAutomationLoop(
 
           await engine.setState('BUYING', `Buying: ${player.name}`);
 
+          // Increment daily cap counter per buy attempt (D-24)
+          sendMessage({ type: 'DAILY_CAP_INCREMENT' } satisfies ExtensionMessage).catch(() => {});
+
           const result: BuyCycleResult = await executeBuyCycle(freshPlayer, sendMessage);
 
           if (result.outcome === 'bought') {
             consecutiveFailures = 0;  // D-22: reset on success
             transferListCount++;  // D-36: track new listing
+            // D-18/D-19 reconciliation: mark this player as listed so subsequent
+            // iterations in this same cycle don't buy again (alreadyListedNames is
+            // only seeded from the pre-cycle scan — it must be updated live here).
+            alreadyListedNames.add(player.name.toLowerCase());
             await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
 
             // Report buy + list to backend (D-30) — await to ensure backend
@@ -328,9 +343,6 @@ export async function runAutomationLoop(
             } catch {
               await engine.log(`Trade report failed for ${player.name} — backend state may be stale`);
             }
-
-            // Increment daily cap counter (D-24)
-            sendMessage({ type: 'DAILY_CAP_INCREMENT' } satisfies ExtensionMessage).catch(() => {});
 
             // Check if now capped after this buy
             try {
@@ -369,12 +381,20 @@ export async function runAutomationLoop(
               continue;
             }
 
+            // Listing failed because TL is full — card bought but stuck in unassigned pile.
+            // Stop buying immediately to avoid piling up more unassigned cards.
+            if (result.reason.includes('unassigned pile')) {
+              transferListCount = EA_TRANSFER_LIST_MAX; // force TL-full guard
+              await engine.log('Listing failed (TL full) — stopping buy phase');
+              break;
+            }
+
             // Non-critical error — log and continue to next player
             await engine.setLastEvent(`Error buying ${player.name}: ${result.reason}`);
           }
 
           // Brief pause between players (D-28 / AUTO-05)
-          if (!engine.isStopping) {
+          if (!stopped()) {
             await jitter();
           }
         }
@@ -382,9 +402,11 @@ export async function runAutomationLoop(
         await engine.log(`Transfer list full (${transferListCount}/${EA_TRANSFER_LIST_MAX}) — skipping buy phase`);
       } else if (isCapped) {
         await engine.log('Daily cap reached — skipping buy phase');
+      } else if (buyPlayers.length === 0) {
+        await engine.log(`No BUY actions from backend (TL: ${transferListCount}/${EA_TRANSFER_LIST_MAX}, ${actionsNeeded.length} total actions)`);
       }
 
-      if (engine.isStopping) return;
+      if (stopped()) return;
 
       // ── Phase D: Handle sold players — rebuy (D-14, D-15) ─────────────────
 
@@ -400,7 +422,7 @@ export async function runAutomationLoop(
 
         if (!cappedForRebuy) {
           for (const soldItem of cycleResult.scanned.sold) {
-            if (engine.isStopping) return;
+            if (stopped()) return;
 
             // Match sold DOM item to a portfolio player by name (endsWith) + rating
             const domName = soldItem.playerName.toLowerCase();
@@ -515,19 +537,20 @@ export async function runAutomationLoop(
               await engine.log(`Rebuy skipped for ${matched.name}: ${rebuyResult.reason}`);
             }
 
-            if (!engine.isStopping) {
+            if (!stopped()) {
               await jitter();
             }
           }
         }
       }
 
-      if (engine.isStopping) return;
+      if (stopped()) return;
 
       // ── Inter-cycle pause ─────────────────────────────────────────────────
-      // If transfer list is full, sleep until the earliest card expires instead
-      // of polling every 10 seconds. Otherwise use standard jitter (D-28, AUTO-05).
-      if (transferListCount >= EA_TRANSFER_LIST_MAX && cycleResult) {
+      // If nothing productive can happen (TL full, no buy actions, capped),
+      // sleep until the earliest card expires instead of rescanning every 10s.
+      const nothingToBuy = buyPlayers.length === 0 || isCapped || transferListFull;
+      if (nothingToBuy && cycleResult && cycleResult.scanned.listed.length > 0) {
         let earliestMs = Infinity;
         for (const item of cycleResult.scanned.listed) {
           if (item.timeRemaining) {
@@ -539,17 +562,17 @@ export async function runAutomationLoop(
           // Add a small buffer so the card is definitely expired when we rescan
           const waitMs = earliestMs + 5_000;
           const waitMin = Math.max(1, Math.round(waitMs / 60_000));
-          await engine.setState('IDLE', `Transfer list full — next expiry in ~${waitMin}m`);
-          await engine.log(`Transfer list full — sleeping ${waitMin}m until next card expires`);
+          await engine.setState('IDLE', `Waiting ~${waitMin}m for next card to expire`);
+          await engine.log(`Nothing to buy — sleeping ${waitMin}m until next card expires`);
           // Sleep in 30s chunks so we can respond to stop requests
           let remaining = waitMs;
-          while (remaining > 0 && !engine.isStopping) {
+          while (remaining > 0 && !stopped()) {
             const chunk = Math.min(remaining, 30_000);
             await new Promise(r => setTimeout(r, chunk));
             remaining -= chunk;
           }
         } else {
-          await engine.setState('IDLE', 'Transfer list full — checking again shortly');
+          await engine.setState('IDLE', 'Waiting for cards to expire');
           await jitter(15_000, 30_000);
         }
       } else {

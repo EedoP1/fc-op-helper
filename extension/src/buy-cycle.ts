@@ -313,8 +313,7 @@ export async function executeBuyCycle(
       );
       await clickElement(searchBtn);
 
-      // Increment daily cap after every search attempt (D-24)
-      sendMessage({ type: 'DAILY_CAP_INCREMENT' }).catch(() => {});
+      // D-24: Cap increment moved to automation-loop on successful buy only.
 
       // Wait for results to appear (up to 8 seconds)
       await jitter(1500, 3000);
@@ -465,19 +464,41 @@ export async function executeBuyCycle(
             attemptFailed = true;
           } else {
             await clickElement(confirmBtn);
-            await jitter(1000, 2000);
 
-            // Determine if buy succeeded: check for the list accordion (only appears
-            // on the post-buy screen). If it's not there, the buy failed.
-            const hasListAccordion =
-              document.querySelector(SELECTORS.LIST_ON_MARKET_ACCORDION) !== null;
+            // EA's post-buy DOM transition can take several seconds. Poll for the
+            // "List on Transfer Market" accordion (button.accordian) using waitForElement
+            // rather than a one-shot check after a short jitter. A one-shot check was
+            // the root cause of false "buy failed" detections — the buy succeeded but
+            // the accordion hadn't rendered yet, so the code treated it as a snipe and
+            // navigated back, abandoning the bought card.
+            //
+            // Also handle a possible second post-buy dialog (EA sometimes shows a
+            // "Purchase Successful" modal). If the dialog container is still visible
+            // after clicking confirm, dismiss it with its primary button before waiting
+            // for the accordion.
+            await jitter(500, 1000);
 
-            if (hasListAccordion) {
+            // Dismiss any lingering or new post-buy dialog
+            const postBuyDialog = document.querySelector<HTMLElement>(SELECTORS.EA_DIALOG_PRIMARY_BUTTON);
+            if (postBuyDialog) {
+              await clickElement(postBuyDialog);
+              await jitter(300, 600);
+            }
+
+            // Poll for the accordion — the definitive post-buy success indicator
+            try {
+              await waitForElement(
+                'LIST_ON_MARKET_ACCORDION',
+                SELECTORS.LIST_ON_MARKET_ACCORDION,
+                document,
+                8_000,
+              );
               bought = true;
               break;
+            } catch {
+              // Accordion did not appear within 8s — buy failed (sniped or dialog stuck)
+              attemptFailed = true;
             }
-            // No accordion = buy failed silently
-            attemptFailed = true;
           }
         }
 
@@ -512,8 +533,7 @@ export async function executeBuyCycle(
         );
         await clickElement(refreshBtn);
 
-        // Increment daily cap for the re-search (D-24)
-        sendMessage({ type: 'DAILY_CAP_INCREMENT' }).catch(() => {});
+        // D-24: Cap increment moved to automation-loop on successful buy only.
 
         await jitter(1500, 3000);
 

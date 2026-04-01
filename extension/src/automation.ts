@@ -186,6 +186,9 @@ export class AutomationEngine {
    */
   async start(): Promise<{ success: boolean; error?: string }> {
     if (this.isRunning) return { success: false, error: 'Already running' };
+    // Abort any lingering controller from a previous error/stop so old loop
+    // timeouts see isStopping=true when they resolve (prevents ghost loops).
+    this.abortController?.abort();
     this.isRunning = true;
     this.state = 'IDLE';
     this.errorMessage = null;
@@ -201,12 +204,15 @@ export class AutomationEngine {
    * Returns { success: true } even if already stopped.
    */
   async stop(): Promise<{ success: boolean }> {
-    if (!this.isRunning) return { success: true };
-    // Signal abort — the cycle loop checks this between actions (D-17: graceful stop)
+    // Always abort the controller — even if isRunning is already false (e.g., after
+    // setError), there may be pending timeouts from the old loop that need to see
+    // the signal as aborted. Also reset error state so the UI shows STOPPED, not ERROR.
     this.abortController?.abort();
+    if (!this.isRunning && this.state !== 'ERROR') return { success: true };
     this.isRunning = false;
     this.state = 'STOPPED';
     this.currentAction = null;
+    this.errorMessage = null;
     await this.persistStatus();
     await this.log('Automation stopped');
     return { success: true };
@@ -217,8 +223,18 @@ export class AutomationEngine {
     return this.abortController?.signal.aborted ?? false;
   }
 
-  /** Record an error, set state to ERROR, and persist. */
+  /**
+   * Return the current AbortSignal so the loop can capture it at start.
+   * Each loop invocation checks ITS OWN captured signal — not the engine's
+   * current one — preventing ghost loops when start() replaces the controller.
+   */
+  getAbortSignal(): AbortSignal | undefined {
+    return this.abortController?.signal;
+  }
+
+  /** Record an error, set state to ERROR, abort the loop, and persist. */
   async setError(message: string): Promise<void> {
+    this.abortController?.abort();
     this.isRunning = false;
     this.state = 'ERROR';
     this.errorMessage = message;
