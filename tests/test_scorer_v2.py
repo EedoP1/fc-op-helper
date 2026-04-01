@@ -1,5 +1,5 @@
 """
-Tests for scorer_v2: listing-observation-based scoring using D-10 formula.
+Tests for scorer_v2: daily-listing-summary-based scoring.
 
 Tests verify:
 - expected_profit_per_hour formula correctness
@@ -8,6 +8,7 @@ Tests verify:
 - No-observations guard
 - Insufficient OP observations guard
 - Return dict shape
+- max_price_range enforcement
 """
 from __future__ import annotations
 
@@ -17,9 +18,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from src.server.db import create_engine_and_tables
-from src.server.models_db import ListingObservation
+from src.server.models_db import DailyListingSummary
 from src.server.scorer_v2 import score_player_v2
-from src.config import MIN_OP_OBSERVATIONS, MIN_TOTAL_RESOLVED_OBSERVATIONS
+from src.config import MIN_OP_OBSERVATIONS, MIN_TOTAL_RESOLVED_OBSERVATIONS, MARGINS
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -32,37 +33,56 @@ async def db():
     await engine.dispose()
 
 
-def make_observation(
+def _today_str() -> str:
+    """Return today's date as YYYY-MM-DD string."""
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def seed_summaries(
     ea_id: int,
-    fingerprint: str,
-    buy_now_price: int,
-    market_price_at_obs: int,
-    outcome: str | None,
-    first_seen_at: datetime,
-    last_seen_at: datetime | None = None,
-    scan_count: int = 1,
-    resolved_at: datetime | None = None,
-) -> ListingObservation:
-    """Build a ListingObservation for test seeding."""
-    return ListingObservation(
-        fingerprint=fingerprint,
-        ea_id=ea_id,
-        buy_now_price=buy_now_price,
-        market_price_at_obs=market_price_at_obs,
-        first_seen_at=first_seen_at,
-        last_seen_at=last_seen_at or first_seen_at,
-        scan_count=scan_count,
-        outcome=outcome,
-        resolved_at=resolved_at or (first_seen_at if outcome is not None else None),
-    )
+    date: str,
+    total_listed: int,
+    total_sold: int,
+    total_expired: int,
+    margin_data: dict[int, tuple[int, int, int]],
+) -> list[DailyListingSummary]:
+    """Build DailyListingSummary rows for all margin tiers.
+
+    Args:
+        ea_id: Player EA ID.
+        date: Date string (YYYY-MM-DD).
+        total_listed: Total observations resolved on this date.
+        total_sold: Total sold observations.
+        total_expired: Total expired observations.
+        margin_data: Dict mapping margin_pct -> (op_listed, op_sold, op_expired).
+            Margins not in this dict get zeros for OP counts.
+
+    Returns:
+        List of DailyListingSummary objects to add to session.
+    """
+    summaries = []
+    for margin_pct in MARGINS:
+        op_listed, op_sold, op_expired = margin_data.get(margin_pct, (0, 0, 0))
+        summaries.append(DailyListingSummary(
+            ea_id=ea_id,
+            date=date,
+            margin_pct=margin_pct,
+            op_listed_count=op_listed,
+            op_sold_count=op_sold,
+            op_expired_count=op_expired,
+            total_listed_count=total_listed,
+            total_sold_count=total_sold,
+            total_expired_count=total_expired,
+        ))
+    return summaries
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 async def test_expected_profit_per_hour(db):
     """
-    Given 20 resolved observations spanning 4 days at margin 10%:
-    8 OP listings (5 sold, 3 expired), buy_price=10000.
+    Given summary data: 8 OP listings at 10% (5 sold, 3 expired), buy_price=10000,
+    total=20 observations.
     Expected:
       op_sell_rate = 5/8 = 0.625
       sell_price = 11000, ea_tax = 550, net_profit = 450
@@ -71,56 +91,19 @@ async def test_expected_profit_per_hour(db):
     _, session_factory = db
     ea_id = 1001
     buy_price = 10_000
-    market_price = 10_000
-    op_threshold = int(market_price * 1.10)  # 11000
+    today = _today_str()
 
-    now = datetime.utcnow()
-    # Span 4 days of observations
-    t_start = now - timedelta(days=4)
+    # At margin 10%: 8 OP listed (5 sold, 3 expired)
+    # Cumulative: same counts at lower margins (8, 5, 3)
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 10:
+            margin_data[m] = (8, 5, 3)
 
-    observations = []
-    # 5 OP sold
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"op-sold-{i}",
-            buy_now_price=op_threshold,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 3 OP expired
-    for i in range(3):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"op-expired-{i}",
-            buy_now_price=op_threshold,
-            market_price_at_obs=market_price,
-            outcome="expired",
-            first_seen_at=t_start + timedelta(hours=5 + i),
-            last_seen_at=t_start + timedelta(hours=5 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=5 + i, minutes=30),
-        ))
-    # 12 non-OP sold — last one anchors latest last_seen_at to t_start + 10h
-    for i in range(12):
-        # spread evenly, last entry at t_start + 9.5h (last_seen_at = 10h)
-        h = i * (9.5 / 11)
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"non-op-{i}",
-            buy_now_price=market_price - 100,  # below OP threshold
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=h),
-            last_seen_at=t_start + timedelta(hours=h + 0.5),
-            resolved_at=t_start + timedelta(hours=h + 0.5),
-        ))
+    summaries = seed_summaries(ea_id, today, total_listed=20, total_sold=17, total_expired=3, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
@@ -137,117 +120,60 @@ async def test_expected_profit_per_hour(db):
 async def test_margin_selection(db):
     """
     Given observations where margin 10% produces higher expected_profit_per_hour
-    than margin 20%, the scorer picks 10%.
+    than margin 15%, the scorer picks the one with the best EPPH.
 
-    Margin 10% only obs: 10 sold, 5 expired → strong sell-through rate.
-    Margin 20% obs: only 2 sold (below MIN_OP_OBSERVATIONS=3) → tier skipped.
-    Result: only margin 10% is viable, expected_profit_per_hour = 450 * (12/17) ≈ 317.
-    (The 2 sold at 20% also count at the 10% threshold since 1.20 >= 1.10.)
+    Margin 15% and above: only 2 OP total (below MIN_OP_OBSERVATIONS=3) -> skipped.
+    Margin 10% and below: 17 OP total (12 sold, 5 expired) -> viable.
+    Result: margin 10% is chosen.
     """
     _, session_factory = db
     ea_id = 1002
     buy_price = 10_000
-    market_price = 10_000
+    today = _today_str()
 
-    now = datetime.utcnow()
-    # Span 4 days of observations
-    t_start = now - timedelta(days=4)
+    # margin 15% and above: 2 OP (below min, skipped)
+    # margin 10% and below: 17 OP (12 sold, 5 expired)
+    margin_data = {}
+    for m in MARGINS:
+        if m >= 15:
+            margin_data[m] = (2, 2, 0)
+        else:
+            margin_data[m] = (17, 12, 5)
 
-    observations = []
-    # 10 sold at exactly 10% margin (priced at market * 1.10, below 20% threshold)
-    for i in range(10):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"m10-sold-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 5 expired at 10% margin
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"m10-expired-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="expired",
-            first_seen_at=t_start + timedelta(hours=10 + i),
-            last_seen_at=t_start + timedelta(hours=10 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=10 + i, minutes=30),
-        ))
-    # Only 2 sold at 20% margin → op_total=2 < MIN_OP_OBSERVATIONS=3 → tier skipped
-    for i in range(2):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"m20-sold-{i}",
-            buy_now_price=int(market_price * 1.20),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=15 + i),
-            last_seen_at=t_start + timedelta(hours=15 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=15 + i, minutes=30),
-        ))
-    # Non-OP filler to reach MIN_TOTAL_RESOLVED_OBSERVATIONS
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"filler-{i}",
-            buy_now_price=market_price - 500,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=2 + i),
-            last_seen_at=t_start + timedelta(hours=2 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=2 + i, minutes=30),
-        ))
+    summaries = seed_summaries(ea_id, today, total_listed=22, total_sold=19, total_expired=3, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
 
     assert result is not None
-    # margin 10% should be chosen since margin 20% is below MIN_OP_OBSERVATIONS
+    # margin 10% should be chosen since margins >= 15% are below MIN_OP_OBSERVATIONS
     assert result["margin_pct"] == 10
 
 
 async def test_bootstrap_min(db):
-    """Given only 5 resolved observations (below MIN_TOTAL_RESOLVED_OBSERVATIONS=20), returns None."""
+    """Given only 5 total observations (below MIN_TOTAL_RESOLVED_OBSERVATIONS=20), returns None."""
     _, session_factory = db
     ea_id = 1003
     buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
+    today = _today_str()
 
-    observations = []
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"boot-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=now - timedelta(hours=5 - i),
-            last_seen_at=now - timedelta(hours=5 - i, minutes=-30),
-            resolved_at=now - timedelta(hours=5 - i, minutes=-30),
-        ))
+    margin_data = {10: (5, 5, 0), 8: (5, 5, 0), 5: (5, 5, 0), 3: (5, 5, 0)}
+    summaries = seed_summaries(ea_id, today, total_listed=5, total_sold=5, total_expired=0, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
 
-    assert result is None, f"Expected None for {len(observations)} obs (below bootstrap), got {result}"
+    assert result is None, f"Expected None for 5 obs (below bootstrap), got {result}"
 
 
 async def test_no_resolved_observations(db):
-    """Given zero resolved observations, score_player_v2 returns None."""
+    """Given zero summary data, score_player_v2 returns None."""
     _, session_factory = db
     ea_id = 1004
     buy_price = 10_000
@@ -260,45 +186,20 @@ async def test_no_resolved_observations(db):
 
 async def test_insufficient_op_observations(db):
     """
-    Given 20 resolved observations but only 2 are OP at every margin tier
+    Given 20 total observations but only 2 OP at every margin tier
     (below MIN_OP_OBSERVATIONS=3), returns None.
     """
     _, session_factory = db
     ea_id = 1005
     buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    t_start = now - timedelta(hours=20)
+    today = _today_str()
 
-    observations = []
-    # Only 2 OP sold (below min at all margins since 10% is lowest viable margin and 2 < 3)
-    for i in range(2):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"op-only-{i}",
-            buy_now_price=int(market_price * 1.40),  # highest margin
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 18 non-OP resolved (filler to pass bootstrap threshold)
-    for i in range(18):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"non-op-filler-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=2 + i),
-            last_seen_at=t_start + timedelta(hours=2 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=2 + i, minutes=30),
-        ))
+    # Only 2 OP at highest margin, cumulative down
+    margin_data = {m: (2, 2, 0) for m in MARGINS}
+    summaries = seed_summaries(ea_id, today, total_listed=20, total_sold=18, total_expired=2, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
@@ -313,52 +214,18 @@ async def test_return_dict_shape(db):
     _, session_factory = db
     ea_id = 1006
     buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    # Span 4 days of observations
-    t_start = now - timedelta(days=4)
+    today = _today_str()
 
-    observations = []
-    # 5 OP sold at margin 10%
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"shape-op-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 3 OP expired
-    for i in range(3):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"shape-exp-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="expired",
-            first_seen_at=t_start + timedelta(hours=5 + i),
-            last_seen_at=t_start + timedelta(hours=5 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=5 + i, minutes=30),
-        ))
-    # 15 non-OP filler to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS=20 (5+3+15=23 total)
-    for i in range(15):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"shape-fill-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
+    # 8 OP at 10% (5 sold, 3 expired), 23 total
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 10:
+            margin_data[m] = (8, 5, 3)
+
+    summaries = seed_summaries(ea_id, today, total_listed=23, total_sold=20, total_expired=3, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
@@ -382,84 +249,36 @@ async def test_return_dict_shape(db):
 
 async def test_below_min_total_resolved_observations(db):
     """
-    Player with 15 resolved observations (above BOOTSTRAP_MIN=10 but below
+    Player with 15 total observations (above 10 but below
     MIN_TOTAL_RESOLVED_OBSERVATIONS=20) returns None.
     """
     _, session_factory = db
     ea_id = 2001
     buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    t_start = now - timedelta(hours=20)
+    today = _today_str()
 
-    observations = []
-    # 5 OP sold at 10% margin
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"below-total-op-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 10 non-OP filler to reach exactly 15 (above bootstrap=10, below quality=20)
-    for i in range(10):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"below-total-fill-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=5 + i),
-            last_seen_at=t_start + timedelta(hours=5 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=5 + i, minutes=30),
-        ))
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 10:
+            margin_data[m] = (5, 5, 0)
 
-    assert len(observations) == 15, "Fixture must seed exactly 15 observations"
+    summaries = seed_summaries(ea_id, today, total_listed=15, total_sold=15, total_expired=0, margin_data=margin_data)
+
     assert 15 < MIN_TOTAL_RESOLVED_OBSERVATIONS, "Sanity: 15 < quality threshold"
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)
 
     assert result is None, (
-        f"Expected None for {len(observations)} obs (below MIN_TOTAL_RESOLVED_OBSERVATIONS={MIN_TOTAL_RESOLVED_OBSERVATIONS}), "
+        f"Expected None for 15 obs (below MIN_TOTAL_RESOLVED_OBSERVATIONS={MIN_TOTAL_RESOLVED_OBSERVATIONS}), "
         f"got {result}"
     )
 
 
 # ── max_price_range enforcement tests ────────────────────────────────────────
-
-
-def _make_op_observations(
-    ea_id: int,
-    prefix: str,
-    buy_now_price: int,
-    market_price: int,
-    outcome: str,
-    count: int,
-    t_start,
-) -> list[ListingObservation]:
-    """Helper: produce `count` resolved observations at given price/outcome."""
-    return [
-        make_observation(
-            ea_id=ea_id,
-            fingerprint=f"{prefix}-{i}",
-            buy_now_price=buy_now_price,
-            market_price_at_obs=market_price,
-            outcome=outcome,
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        )
-        for i in range(count)
-    ]
 
 
 async def test_max_price_range_caps_sell_price(db):
@@ -469,32 +288,26 @@ async def test_max_price_range_caps_sell_price(db):
       buy_price = 10_000
       max_price_range = 10_999   (just below 10% sell_price = 11_000)
 
-    Observations qualify at margin 10% (>= MIN_OP_OBSERVATIONS) AND margin 8%
-    (since margin_8_sell = 10_800 < 10_999, 10% obs also count at 8%).
-
     Without max_price_range guard: scorer would pick margin 10% (higher EPPH).
-    With max_price_range=10_999: sell_price at 10% is 11_000 > 10_999 → skipped.
+    With max_price_range=10_999: sell_price at 10% is 11_000 > 10_999 -> skipped.
     Scorer must fall back to margin 8% (sell_price=10_800 <= 10_999).
     """
     _, session_factory = db
     ea_id = 3001
     buy_price = 10_000
-    market_price = 10_000
-    max_price_range = 10_999  # 11_000 - 1 → blocks 10% margin
+    max_price_range = 10_999  # 11_000 - 1 -> blocks 10% margin
+    today = _today_str()
 
-    now = datetime.utcnow()
-    t_start = now - timedelta(days=4)
+    # OP data at margins 10% and below (8 OP: 5 sold, 3 expired)
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 10:
+            margin_data[m] = (8, 5, 3)
 
-    observations = []
-    # 5 OP sold + 3 OP expired at exactly 10% margin (buy_now = 11_000)
-    observations += _make_op_observations(ea_id, "cap-sold", int(market_price * 1.10), market_price, "sold", 5, t_start)
-    observations += _make_op_observations(ea_id, "cap-expired", int(market_price * 1.10), market_price, "expired", 3, t_start + timedelta(hours=10))
-    # 15 non-OP filler to push total resolved >= MIN_TOTAL_RESOLVED_OBSERVATIONS
-    observations += _make_op_observations(ea_id, "cap-filler", market_price - 100, market_price, "sold", 15, t_start + timedelta(hours=20))
+    summaries = seed_summaries(ea_id, today, total_listed=23, total_sold=20, total_expired=3, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         # Without cap: should choose margin 10%
@@ -511,7 +324,7 @@ async def test_max_price_range_caps_sell_price(db):
     assert result_no_cap["margin_pct"] == 10
     assert result_no_cap["sell_price"] == 11_000  # exceeds cap
 
-    # With cap: 10% is blocked → falls back to margin 8%
+    # With cap: 10% is blocked -> falls back to margin 8%
     assert result_capped is not None, (
         "Expected a result at margin 8% when 10% is capped by max_price_range"
     )
@@ -533,21 +346,18 @@ async def test_max_price_range_all_margins_blocked_returns_none(db):
     _, session_factory = db
     ea_id = 3002
     buy_price = 10_000
-    market_price = 10_000
     max_price_range = 10_000  # equal to buy_price — no positive margin possible
+    today = _today_str()
 
-    now = datetime.utcnow()
-    t_start = now - timedelta(days=4)
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 3:
+            margin_data[m] = (8, 5, 3)
 
-    observations = []
-    # Sufficient OP observations at 3% margin
-    observations += _make_op_observations(ea_id, "block-sold", int(market_price * 1.03), market_price, "sold", 5, t_start)
-    observations += _make_op_observations(ea_id, "block-expired", int(market_price * 1.03), market_price, "expired", 3, t_start + timedelta(hours=10))
-    observations += _make_op_observations(ea_id, "block-filler", market_price - 100, market_price, "sold", 15, t_start + timedelta(hours=20))
+    summaries = seed_summaries(ea_id, today, total_listed=23, total_sold=20, total_expired=3, margin_data=margin_data)
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(
@@ -561,49 +371,25 @@ async def test_max_price_range_all_margins_blocked_returns_none(db):
 
 async def test_above_min_total_resolved_observations(db):
     """
-    Player with 25 resolved observations (above MIN_TOTAL_RESOLVED_OBSERVATIONS=20)
+    Player with 25 total observations (above MIN_TOTAL_RESOLVED_OBSERVATIONS=20)
     with viable OP data is not None.
     """
     _, session_factory = db
     ea_id = 2002
     buy_price = 10_000
-    market_price = 10_000
-    now = datetime.utcnow()
-    # Span 5 days of observations
-    t_start = now - timedelta(days=5)
+    today = _today_str()
 
-    observations = []
-    # 5 OP sold at 10% margin
-    for i in range(5):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"above-total-op-{i}",
-            buy_now_price=int(market_price * 1.10),
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=i),
-            last_seen_at=t_start + timedelta(hours=i, minutes=30),
-            resolved_at=t_start + timedelta(hours=i, minutes=30),
-        ))
-    # 20 non-OP filler to reach exactly 25 observations (above quality=20)
-    for i in range(20):
-        observations.append(make_observation(
-            ea_id=ea_id,
-            fingerprint=f"above-total-fill-{i}",
-            buy_now_price=market_price - 100,
-            market_price_at_obs=market_price,
-            outcome="sold",
-            first_seen_at=t_start + timedelta(hours=5 + i),
-            last_seen_at=t_start + timedelta(hours=5 + i, minutes=30),
-            resolved_at=t_start + timedelta(hours=5 + i, minutes=30),
-        ))
+    margin_data = {}
+    for m in MARGINS:
+        if m <= 10:
+            margin_data[m] = (5, 5, 0)
 
-    assert len(observations) == 25, "Fixture must seed exactly 25 observations"
+    summaries = seed_summaries(ea_id, today, total_listed=25, total_sold=25, total_expired=0, margin_data=margin_data)
+
     assert 25 >= MIN_TOTAL_RESOLVED_OBSERVATIONS, "Sanity: 25 >= quality threshold"
 
     async with session_factory() as session:
-        for obs in observations:
-            session.add(obs)
+        session.add_all(summaries)
         await session.commit()
 
         result = await score_player_v2(ea_id=ea_id, session=session, buy_price=buy_price)

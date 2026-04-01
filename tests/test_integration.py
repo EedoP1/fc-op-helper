@@ -107,16 +107,16 @@ def test_pipeline_csv_contains_all_players():
 # ── V2 scorer integration test ────────────────────────────────────────────────
 
 async def test_v2_scorer_writes_score():
-    """Integration: scan_player with enough listing data produces v2 score.
+    """Integration: scan_player with enough daily summary data produces v2 score.
 
-    Seeds enough resolved ListingObservation rows to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS,
+    Seeds DailyListingSummary rows to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS,
     then calls scan_player and asserts the written PlayerScore has v2 fields populated.
     """
     from src.server.db import create_engine_and_tables
-    from src.server.models_db import PlayerRecord, PlayerScore, ListingObservation
+    from src.server.models_db import PlayerRecord, PlayerScore, DailyListingSummary
     from src.server.scanner import ScannerService
     from src.server.circuit_breaker import CircuitBreaker
-    from src.config import MIN_TOTAL_RESOLVED_OBSERVATIONS, MIN_OP_OBSERVATIONS
+    from src.config import MIN_TOTAL_RESOLVED_OBSERVATIONS, MARGINS
     from tests.mock_client import make_player
     from sqlalchemy import select
 
@@ -124,8 +124,8 @@ async def test_v2_scorer_writes_score():
     try:
         ea_id = 9001
         buy_price = 20000
-        op_sell_price = int(buy_price * 1.20)  # 20% above market
         now = datetime.utcnow()
+        today = now.strftime("%Y-%m-%d")
 
         # Seed PlayerRecord
         async with session_factory() as session:
@@ -136,29 +136,27 @@ async def test_v2_scorer_writes_score():
             ))
             await session.commit()
 
-        # Seed enough resolved ListingObservations to exceed MIN_TOTAL_RESOLVED_OBSERVATIONS
-        # Use observations: OP sold + OP expired (all at 20% above market)
-        n_obs = max(MIN_TOTAL_RESOLVED_OBSERVATIONS + 5, MIN_OP_OBSERVATIONS + 12)
+        # Seed DailyListingSummary rows with OP data at 20% margin
+        # 25 total observations, 10 OP at 20% (7 sold, 3 expired)
         async with session_factory() as session:
-            for i in range(n_obs):
-                hours_ago = i + 1
-                outcome = "sold" if i < (n_obs * 2 // 3) else "expired"
-                session.add(ListingObservation(
-                    fingerprint=f"v2test:{ea_id}:{i}",
+            for margin_pct in MARGINS:
+                op_sold = 7 if margin_pct <= 20 else 0
+                op_expired = 3 if margin_pct <= 20 else 0
+                op_listed = op_sold + op_expired
+                session.add(DailyListingSummary(
                     ea_id=ea_id,
-                    buy_now_price=op_sell_price,
-                    market_price_at_obs=buy_price,
-                    first_seen_at=now - timedelta(hours=hours_ago + 1),
-                    last_seen_at=now - timedelta(hours=hours_ago),
-                    scan_count=1,
-                    outcome=outcome,
-                    resolved_at=now - timedelta(hours=hours_ago),
+                    date=today,
+                    margin_pct=margin_pct,
+                    op_listed_count=op_listed,
+                    op_sold_count=op_sold,
+                    op_expired_count=op_expired,
+                    total_listed_count=25,
+                    total_sold_count=20,
+                    total_expired_count=5,
                 ))
             await session.commit()
 
         # Set up scanner with mock client
-        # Use parameters that satisfy v1 scorer: >=7 sales/hr, >=3 OP sales, >=20 listings
-        # 100 sales over 10 hours = 10 sales/hr, 15% OP rate = 15 OP sales at 40% margin
         cb = CircuitBreaker(failure_threshold=5, success_threshold=2, recovery_timeout=60.0)
         svc = ScannerService(session_factory=session_factory, circuit_breaker=cb)
         market_data = make_player(
