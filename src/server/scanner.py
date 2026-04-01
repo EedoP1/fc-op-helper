@@ -24,18 +24,12 @@ from src.config import (
     SCAN_INTERVAL_SECONDS,
     SCAN_CONCURRENCY,
     SCAN_DISPATCH_BATCH_SIZE,
-    SCANNER_MIN_PRICE,
-    SCANNER_MAX_PRICE,
-    INITIAL_SCORING_CONCURRENCY,
-    INITIAL_SCORING_BATCH_SIZE,
-    MARKET_DATA_RETENTION_DAYS,
-    LISTING_RETENTION_DAYS,
     MIN_SALES_PER_HOUR,
 )
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.listing_tracker import record_listings, resolve_outcomes
-from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, ScannerStatus
+from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ScannerStatus
 from src.server.scorer_v2 import score_player_v2
 
 logger = logging.getLogger(__name__)
@@ -137,121 +131,18 @@ class ScannerService:
     async def run_bootstrap(self) -> None:
         """Discover all players in the 11k-200k price range and seed the DB.
 
-        Upserts PlayerRecord rows with scan_tier='normal' and next_scan_at=now
-        so the dispatch loop picks them up immediately.
-
-        Uses batched DB writes (chunks of 200) to reduce round-trips vs the
-        previous one-insert-per-player approach.
+        Delegates to scanner_discovery.run_bootstrap().
         """
-        t_discovery = time.monotonic()
-        players = await self._client.discover_players(
-            budget=SCANNER_MAX_PRICE,
-            min_price=SCANNER_MIN_PRICE,
-            max_price=SCANNER_MAX_PRICE,
-        )
-        discovery_elapsed = time.monotonic() - t_discovery
-        logger.info(
-            f"Bootstrap discovered {len(players)} players in {discovery_elapsed:.1f}s"
-        )
-
-        before = len(players)
-        players = [p for p in players if p.get("rarityName", "") not in ("Icon", "UT Heroes")]
-        if before - len(players):
-            logger.info(f"Bootstrap: filtered {before - len(players)} base icons/heroes")
-
-        now = datetime.utcnow()
-
-        # Build values list for bulk upsert
-        values_list = [
-            dict(
-                ea_id=p["ea_id"],
-                name=p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(p["ea_id"]),
-                rating=p.get("overall", 0),
-                position=p.get("position", "UNK"),
-                nation="",
-                league="",
-                club="",
-                card_type=p.get("rarityName", ""),
-                scan_tier="",
-                next_scan_at=now,
-                is_active=True,
-                listing_count=0,
-                sales_per_hour=0.0,
-            )
-            for p in players
-        ]
-
-        t_db = time.monotonic()
-        chunk_size = 200
-        async with self._session_factory() as session:
-            for i in range(0, len(values_list), chunk_size):
-                chunk = values_list[i : i + chunk_size]
-                for row in chunk:
-                    stmt = pg_insert(PlayerRecord).values(**row)
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=["ea_id"],
-                        set_=dict(
-                            name=row["name"],
-                            rating=row["rating"],
-                            position=row["position"],
-                            card_type=row["card_type"],
-                            is_active=True,
-                            next_scan_at=now,
-                        ),
-                    )
-                    await session.execute(stmt)
-                await session.commit()
-        db_elapsed = time.monotonic() - t_db
-        logger.info(
-            f"Bootstrap upserted {len(players)} PlayerRecord rows in {db_elapsed:.1f}s"
-        )
+        from src.server.scanner_discovery import run_bootstrap
+        await run_bootstrap(self._session_factory, self._client)
 
     async def run_initial_scoring(self) -> None:
         """Score all unscored active players with elevated concurrency.
 
-        Called once after bootstrap. Uses INITIAL_SCORING_CONCURRENCY (10)
-        instead of normal SCAN_CONCURRENCY (5) to complete faster.
-        Processes players in batches of INITIAL_SCORING_BATCH_SIZE to avoid
-        overwhelming the event loop.
+        Delegates to scanner_discovery.run_initial_scoring().
         """
-        start = time.monotonic()
-
-        async with self._session_factory() as session:
-            stmt = (
-                select(PlayerRecord.ea_id)
-                .where(
-                    PlayerRecord.is_active == True,  # noqa: E712
-                    PlayerRecord.last_scanned_at == None,  # noqa: E711
-                )
-                .order_by(PlayerRecord.ea_id)
-            )
-            result = await session.execute(stmt)
-            unscored_ids = [row[0] for row in result.all()]
-
-        total = len(unscored_ids)
-        logger.info(f"Initial scoring: {total} unscored players")
-
-        semaphore = asyncio.Semaphore(INITIAL_SCORING_CONCURRENCY)
-        scored = 0
-
-        async def _scan_with_sem(ea_id: int) -> None:
-            nonlocal scored
-            async with semaphore:
-                await self.scan_player(ea_id)
-                scored += 1
-                if scored % 100 == 0:
-                    logger.info(f"Initial scoring progress: {scored}/{total}")
-
-        # Process in batches to avoid creating thousands of tasks at once
-        for i in range(0, total, INITIAL_SCORING_BATCH_SIZE):
-            batch = unscored_ids[i : i + INITIAL_SCORING_BATCH_SIZE]
-            tasks = [asyncio.create_task(_scan_with_sem(eid)) for eid in batch]
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        elapsed = time.monotonic() - start
-        logger.info(
-            f"Initial scoring complete: {scored}/{total} players in {elapsed:.1f}s"
-        )
+        from src.server.scanner_discovery import run_initial_scoring
+        await run_initial_scoring(self._session_factory, self.scan_player)
 
     async def run_bootstrap_and_score(self) -> None:
         """Run bootstrap discovery then immediately score all discovered players.
@@ -264,71 +155,10 @@ class ScannerService:
     async def run_discovery(self) -> None:
         """Periodic rediscovery: upsert new players and deactivate removed ones.
 
-        Runs hourly to catch new players entering the 11k-200k range.
-        Players no longer in the discovery result are marked cold (per Research pitfall 6).
+        Delegates to scanner_discovery.run_discovery().
         """
-        players = await self._client.discover_players(
-            budget=SCANNER_MAX_PRICE,
-            min_price=SCANNER_MIN_PRICE,
-            max_price=SCANNER_MAX_PRICE,
-        )
-        logger.info(f"Discovery found {len(players)} players")
-
-        before = len(players)
-        players = [p for p in players if p.get("rarityName", "") not in ("Icon", "UT Heroes")]
-        if before - len(players):
-            logger.info(f"Discovery: filtered {before - len(players)} base icons/heroes")
-
-        discovered_ids = {p["ea_id"] for p in players}
-        now = datetime.utcnow()
-        far_future = now + timedelta(hours=24)
-
-        async with self._session_factory() as session:
-            # Upsert all discovered players
-            for p in players:
-                ea_id = p["ea_id"]
-                player_name = p.get("commonName") or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip() or str(ea_id)
-                stmt = pg_insert(PlayerRecord).values(
-                    ea_id=ea_id,
-                    name=player_name,
-                    rating=p.get("overall", 0),
-                    position=p.get("position", "UNK"),
-                    nation="",
-                    league="",
-                    club="",
-                    card_type=p.get("rarityName", ""),
-                    scan_tier="",
-                    next_scan_at=now,
-                    is_active=True,
-                    listing_count=0,
-                    sales_per_hour=0.0,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["ea_id"],
-                    set_=dict(
-                        name=player_name,
-                        rating=p.get("overall", 0),
-                        position=p.get("position", "UNK"),
-                        card_type=p.get("rarityName", ""),
-                        is_active=True,
-                    ),
-                )
-                await session.execute(stmt)
-
-            # Mark players NOT in discovery as cold
-            if discovered_ids:
-                result = await session.execute(
-                    select(PlayerRecord).where(
-                        PlayerRecord.is_active == True  # noqa: E712
-                    )
-                )
-                all_active = result.scalars().all()
-                for record in all_active:
-                    if record.ea_id not in discovered_ids:
-                        record.next_scan_at = far_future
-
-            await session.commit()
-        logger.info(f"Discovery complete: {len(discovered_ids)} active players")
+        from src.server.scanner_discovery import run_discovery
+        await run_discovery(self._session_factory, self._client)
 
     # ── Per-player scan ───────────────────────────────────────────────────────
 
@@ -617,53 +447,12 @@ class ScannerService:
     # ── Cleanup ─────────────────────────────────────────────────────────────
 
     async def run_cleanup(self) -> None:
-        """Delete market snapshots older than MARKET_DATA_RETENTION_DAYS.
+        """Delete market snapshots and stale records beyond retention periods.
 
-        Also prunes old PlayerScore rows beyond retention to keep the DB
-        lean. Additionally purges old resolved and orphaned
-        ListingObservation rows (D-12).
+        Delegates to scanner_jobs.run_cleanup().
         """
-        cutoff = datetime.utcnow() - timedelta(days=MARKET_DATA_RETENTION_DAYS)
-        listing_cutoff = datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)
-        async with self._session_factory() as session:
-            from sqlalchemy import delete
-
-            # Delete old snapshots
-            result = await session.execute(
-                delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff)
-            )
-            snapshot_count = result.rowcount
-
-            # Also prune old PlayerScore rows (keep last 48h)
-            score_cutoff = datetime.utcnow() - timedelta(hours=48)
-            result = await session.execute(
-                delete(PlayerScore).where(PlayerScore.scored_at < score_cutoff)
-            )
-            score_count = result.rowcount
-
-            # Delete old daily listing summaries beyond retention
-            summary_cutoff = (datetime.utcnow() - timedelta(days=LISTING_RETENTION_DAYS)).strftime("%Y-%m-%d")
-            result = await session.execute(
-                delete(DailyListingSummary).where(DailyListingSummary.date < summary_cutoff)
-            )
-            summary_purged = result.rowcount
-
-            # Purge orphaned unresolved observations (last_seen_at too old)
-            result = await session.execute(
-                delete(ListingObservation).where(
-                    ListingObservation.outcome.is_(None),
-                    ListingObservation.last_seen_at < listing_cutoff,
-                )
-            )
-            orphaned_purged = result.rowcount
-
-            await session.commit()
-        logger.info(
-            f"Cleanup: deleted {snapshot_count} snapshots, {score_count} scores "
-            f"older than {MARKET_DATA_RETENTION_DAYS} days; "
-            f"purged {summary_purged} old daily summaries and {orphaned_purged} orphaned "
-            f"listing observations older than {LISTING_RETENTION_DAYS} days"
-        )
+        from src.server.scanner_jobs import run_cleanup
+        await run_cleanup(self._session_factory)
 
     # ── Metrics ───────────────────────────────────────────────────────────────
 
