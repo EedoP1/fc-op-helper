@@ -8,7 +8,6 @@ and aggregates daily summaries per margin tier.
 Public API:
     record_listings(ea_id, live_auctions_raw, current_lowest_bin, completed_sales, session)
     resolve_outcomes(ea_id, current_fingerprints, completed_sales, session)
-    aggregate_daily_summaries(ea_id, target_date, session)
 """
 from __future__ import annotations
 
@@ -416,77 +415,3 @@ async def resolve_outcomes(
     return {"sold": n_sold, "expired": n_expired, "resolved_at": now}
 
 
-async def aggregate_daily_summaries(
-    ea_id: int,
-    target_date: str,
-    session: AsyncSession,
-) -> int:
-    """Aggregate resolved ListingObservations into DailyListingSummary rows.
-
-    For each margin in MARGINS, counts OP listings (and sold/expired sub-counts)
-    among all resolved observations for ``ea_id`` on ``target_date``.
-    Upserts one DailyListingSummary row per (ea_id, date, margin_pct).
-
-    Args:
-        ea_id: Player EA ID.
-        target_date: Date string in YYYY-MM-DD format.
-        session: Active AsyncSession.
-
-    Returns:
-        Number of DailyListingSummary rows written.
-    """
-    # Parse date boundaries
-    day_start = datetime.strptime(target_date, "%Y-%m-%d")
-    day_end = datetime(day_start.year, day_start.month, day_start.day, 23, 59, 59)
-
-    # Fetch all resolved observations for this player on target_date
-    stmt = select(ListingObservation).where(
-        ListingObservation.ea_id == ea_id,
-        ListingObservation.outcome.isnot(None),
-        ListingObservation.first_seen_at >= day_start,
-        ListingObservation.first_seen_at <= day_end,
-    )
-    result = await session.execute(stmt)
-    observations = result.scalars().all()
-
-    total_listed = len(observations)
-    rows_written = 0
-
-    for margin_pct in MARGINS:
-        op_obs = [
-            obs for obs in observations
-            if _is_op_listing(obs.buy_now_price, obs.market_price_at_obs, margin_pct)
-        ]
-        op_listed = len(op_obs)
-        op_sold = sum(1 for obs in op_obs if obs.outcome == "sold")
-        op_expired = sum(1 for obs in op_obs if obs.outcome == "expired")
-
-        stmt = (
-            pg_insert(DailyListingSummary)
-            .values(
-                ea_id=ea_id,
-                date=target_date,
-                margin_pct=margin_pct,
-                op_listed_count=op_listed,
-                op_sold_count=op_sold,
-                op_expired_count=op_expired,
-                total_listed_count=total_listed,
-            )
-            .on_conflict_do_update(
-                constraint="uq_daily_summary_ea_id_date_margin",
-                set_=dict(
-                    op_listed_count=op_listed,
-                    op_sold_count=op_sold,
-                    op_expired_count=op_expired,
-                    total_listed_count=total_listed,
-                ),
-            )
-        )
-        await session.execute(stmt)
-        rows_written += 1
-
-    logger.debug(
-        f"aggregate_daily_summaries: ea_id={ea_id} date={target_date} "
-        f"obs={total_listed} margins={rows_written}"
-    )
-    return rows_written
