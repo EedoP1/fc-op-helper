@@ -1,7 +1,7 @@
 """Tests for listing_tracker: fingerprint upsert, outcome resolution, daily aggregation."""
 import pytest
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from src.server.db import create_engine_and_tables
 from src.server.models_db import ListingObservation, DailyListingSummary
@@ -141,14 +141,15 @@ async def test_fingerprint_without_auction_id(db):
 
 async def test_outcome_sold(db):
     """Given listing A disappeared and a completedAuctions entry matches
-    (same price, within time window), outcome='sold' and resolved_at is set."""
+    (same price, within time window), outcome='sold', observation is DELETED,
+    and daily_listing_summaries is populated."""
     from src.server.listing_tracker import record_listings, resolve_outcomes
 
     _, session_factory = db
     ea_id = 11111
     now = _utcnow()
-    # Use remaining_seconds=-60 so expected_expiry_at is set in the past (already expired)
-    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=1001, remaining_seconds=-60)]
+    # Use buy_now_price=14000 with market=10000 (40% margin, within MAX_OP_MARGIN_PCT=44%)
+    live_auctions = [_make_live_auction(buy_now_price=14000, trade_id=1001, remaining_seconds=-60)]
 
     # First scan records the listing
     async with session_factory() as session:
@@ -161,10 +162,8 @@ async def test_outcome_sold(db):
         )
         await session.commit()
 
-    fp = result["fingerprints"][0]
-
     # Completed sale matching the price
-    sale = _make_sale(sold_price=15000, sold_at=now, resource_id=ea_id)
+    sale = _make_sale(sold_price=14000, sold_at=now, resource_id=ea_id)
 
     # Resolve outcomes: listing disappeared (empty current fingerprints)
     async with session_factory() as session:
@@ -179,24 +178,36 @@ async def test_outcome_sold(db):
     assert counts["sold"] == 1
     assert counts["expired"] == 0
 
-    # Verify the row was updated
+    # Verify the resolved observation was DELETED (not just marked)
     async with session_factory() as session:
-        row = (await session.execute(select(ListingObservation).where(
-            ListingObservation.fingerprint == fp
-        ))).scalar_one()
-    assert row.outcome == "sold"
-    assert row.resolved_at is not None
+        remaining = (await session.execute(select(ListingObservation).where(
+            ListingObservation.ea_id == ea_id
+        ))).scalars().all()
+    assert len(remaining) == 0, f"Expected 0 observations after resolve (deleted), got {len(remaining)}"
+
+    # Verify daily_listing_summaries was populated
+    async with session_factory() as session:
+        summaries = (await session.execute(select(DailyListingSummary).where(
+            DailyListingSummary.ea_id == ea_id,
+        ))).scalars().all()
+    assert len(summaries) > 0, "Expected daily_listing_summaries rows after resolve"
+    # The listing at 14000 with market 10000 is OP at 40% (14000 >= 10000 * 1.40)
+    summary_40 = next((s for s in summaries if s.margin_pct == 40), None)
+    assert summary_40 is not None
+    assert summary_40.op_sold_count == 1
+    assert summary_40.total_sold_count == 1
+    assert summary_40.total_listed_count == 1
 
 
 async def test_outcome_expired(db):
     """Given listing B disappeared and no completedAuctions match found,
-    outcome='expired' and resolved_at is set."""
+    observation is DELETED and daily_listing_summaries tracks the expired count."""
     from src.server.listing_tracker import record_listings, resolve_outcomes
 
     _, session_factory = db
     ea_id = 22222
-    # Use remaining_seconds=-60 so expected_expiry_at is set in the past (already expired)
-    live_auctions = [_make_live_auction(buy_now_price=15000, trade_id=2001, remaining_seconds=-60)]
+    # Use buy_now_price=14000 with market=10000 (40% margin, within MAX_OP_MARGIN_PCT=44%)
+    live_auctions = [_make_live_auction(buy_now_price=14000, trade_id=2001, remaining_seconds=-60)]
 
     # Record the listing
     async with session_factory() as session:
@@ -208,8 +219,6 @@ async def test_outcome_expired(db):
             session=session,
         )
         await session.commit()
-
-    fp = result["fingerprints"][0]
 
     # No matching sale — listing expired
     async with session_factory() as session:
@@ -224,28 +233,39 @@ async def test_outcome_expired(db):
     assert counts["sold"] == 0
     assert counts["expired"] == 1
 
+    # Verify observation was DELETED
     async with session_factory() as session:
-        row = (await session.execute(select(ListingObservation).where(
-            ListingObservation.fingerprint == fp
-        ))).scalar_one()
-    assert row.outcome == "expired"
-    assert row.resolved_at is not None
+        remaining = (await session.execute(select(ListingObservation).where(
+            ListingObservation.ea_id == ea_id
+        ))).scalars().all()
+    assert len(remaining) == 0
+
+    # Verify daily_listing_summaries has expired count
+    async with session_factory() as session:
+        summaries = (await session.execute(select(DailyListingSummary).where(
+            DailyListingSummary.ea_id == ea_id,
+        ))).scalars().all()
+    assert len(summaries) > 0
+    summary_40 = next((s for s in summaries if s.margin_pct == 40), None)
+    assert summary_40 is not None
+    assert summary_40.op_expired_count == 1
+    assert summary_40.total_expired_count == 1
 
 
 async def test_outcome_proportional(db):
-    """Given 3 listings at price 15000 disappeared and only 1 completedAuctions
-    sale at 15000, 1 marked 'sold' and 2 marked 'expired'."""
+    """Given 3 listings at price 14000 disappeared and only 1 completedAuctions
+    sale at 14000, 1 marked 'sold' and 2 marked 'expired'. All deleted after."""
     from src.server.listing_tracker import record_listings, resolve_outcomes
 
     _, session_factory = db
     ea_id = 33333
     now = _utcnow()
 
-    # Use remaining_seconds=-60 so expected_expiry_at is in the past for all three
+    # Use buy_now_price=14000 with market=10000 (40% margin, within MAX_OP_MARGIN_PCT=44%)
     live_auctions = [
-        _make_live_auction(buy_now_price=15000, trade_id=3001, remaining_seconds=-60),
-        _make_live_auction(buy_now_price=15000, trade_id=3002, remaining_seconds=-60),
-        _make_live_auction(buy_now_price=15000, trade_id=3003, remaining_seconds=-60),
+        _make_live_auction(buy_now_price=14000, trade_id=3001, remaining_seconds=-60),
+        _make_live_auction(buy_now_price=14000, trade_id=3002, remaining_seconds=-60),
+        _make_live_auction(buy_now_price=14000, trade_id=3003, remaining_seconds=-60),
     ]
 
     async with session_factory() as session:
@@ -259,7 +279,7 @@ async def test_outcome_proportional(db):
         await session.commit()
 
     # Only 1 sale at that price
-    sale = _make_sale(sold_price=15000, sold_at=now, resource_id=ea_id)
+    sale = _make_sale(sold_price=14000, sold_at=now, resource_id=ea_id)
 
     async with session_factory() as session:
         counts = await resolve_outcomes(
@@ -273,81 +293,89 @@ async def test_outcome_proportional(db):
     assert counts["sold"] == 1
     assert counts["expired"] == 2
 
-    # Verify outcomes in DB
+    # Verify all observations were DELETED
     async with session_factory() as session:
         rows = (await session.execute(select(ListingObservation).where(
             ListingObservation.ea_id == ea_id
         ))).scalars().all()
+    assert len(rows) == 0
 
-    sold = [r for r in rows if r.outcome == "sold"]
-    expired = [r for r in rows if r.outcome == "expired"]
-    assert len(sold) == 1
-    assert len(expired) == 2
+    # Verify summaries: 1 sold, 2 expired at margin 40%
+    async with session_factory() as session:
+        summaries = (await session.execute(select(DailyListingSummary).where(
+            DailyListingSummary.ea_id == ea_id,
+        ))).scalars().all()
+    summary_40 = next((s for s in summaries if s.margin_pct == 40), None)
+    assert summary_40 is not None
+    assert summary_40.op_sold_count == 1
+    assert summary_40.op_expired_count == 2
+    assert summary_40.total_sold_count == 1
+    assert summary_40.total_expired_count == 2
+    assert summary_40.total_listed_count == 3
 
 
-async def test_daily_summary(db):
-    """Given 10 resolved observations for a player across 2 margin tiers,
-    aggregate_daily_summaries produces correct counts per (ea_id, date, margin_pct)."""
-    from src.server.listing_tracker import aggregate_daily_summaries
+async def test_daily_summary_inline_aggregation(db):
+    """Verify inline aggregation produces correct per-margin counts when
+    listings at different OP tiers are resolved."""
+    from src.server.listing_tracker import record_listings, resolve_outcomes
 
     _, session_factory = db
     ea_id = 44444
-    today_str = "2026-03-25"
-    today = datetime(2026, 3, 25, 12, 0, 0)
+    now = _utcnow()
 
-    # Insert resolved observations directly:
-    # 5 at buyNowPrice=15000 (market=10000, margin=50% => OP at 40% and 35% and 30% and 25% and 20% and 15%)
-    # 5 at buyNowPrice=11000 (market=10000, margin=10% => OP at 10% and 8%)
-    observations = []
+    # 5 listings at 14000 (market=10000, margin=40%, within MAX_OP_MARGIN_PCT=44%)
+    # 5 listings at 11000 (market=10000, margin=10% => OP at 10%, 8%, 5%, 3%)
+    live_auctions = []
     for i in range(5):
-        obs = ListingObservation(
-            fingerprint=f"fp-high-{ea_id}-{i}",
-            ea_id=ea_id,
-            buy_now_price=15000,
-            market_price_at_obs=10000,
-            first_seen_at=today,
-            last_seen_at=today,
-            scan_count=1,
-            outcome="sold" if i < 3 else "expired",
-            resolved_at=today,
-        )
-        observations.append(obs)
+        live_auctions.append(_make_live_auction(buy_now_price=14000, trade_id=4001 + i, remaining_seconds=-60))
     for i in range(5):
-        obs = ListingObservation(
-            fingerprint=f"fp-low-{ea_id}-{i}",
-            ea_id=ea_id,
-            buy_now_price=11000,
-            market_price_at_obs=10000,
-            first_seen_at=today,
-            last_seen_at=today,
-            scan_count=1,
-            outcome="sold" if i < 2 else "expired",
-            resolved_at=today,
-        )
-        observations.append(obs)
+        live_auctions.append(_make_live_auction(buy_now_price=11000, trade_id=4006 + i, remaining_seconds=-60))
 
     async with session_factory() as session:
-        session.add_all(observations)
-        await session.commit()
-
-    async with session_factory() as session:
-        written = await aggregate_daily_summaries(
+        await record_listings(
             ea_id=ea_id,
-            target_date=today_str,
+            live_auctions_raw=live_auctions,
+            current_lowest_bin=10000,
+            completed_sales=[],
             session=session,
         )
         await session.commit()
 
-    # Should write multiple margin summary rows
-    assert written > 0
+    # 3 sold at 14000, 2 sold at 11000
+    sales = [
+        _make_sale(sold_price=14000, sold_at=now, resource_id=ea_id),
+        _make_sale(sold_price=14000, sold_at=now, resource_id=ea_id),
+        _make_sale(sold_price=14000, sold_at=now, resource_id=ea_id),
+        _make_sale(sold_price=11000, sold_at=now, resource_id=ea_id),
+        _make_sale(sold_price=11000, sold_at=now, resource_id=ea_id),
+    ]
 
+    async with session_factory() as session:
+        counts = await resolve_outcomes(
+            ea_id=ea_id,
+            current_fingerprints=[],
+            completed_sales=sales,
+            session=session,
+        )
+        await session.commit()
+
+    assert counts["sold"] == 5
+    assert counts["expired"] == 5
+
+    # Verify observations deleted
+    async with session_factory() as session:
+        remaining = (await session.execute(select(ListingObservation).where(
+            ListingObservation.ea_id == ea_id
+        ))).scalars().all()
+    assert len(remaining) == 0
+
+    # Verify summaries
     async with session_factory() as session:
         summaries = (await session.execute(select(DailyListingSummary).where(
             DailyListingSummary.ea_id == ea_id,
-            DailyListingSummary.date == today_str,
         ))).scalars().all()
 
-    # Margin 40%: 15000 >= 10000 * 1.40 = 14000 -> yes (5 listings)
+    # Margin 40%: 14000 >= 10000 * 1.40 = 14000 -> yes (5 listings)
     # 11000 < 14000 -> no
     margin_40 = next((s for s in summaries if s.margin_pct == 40), None)
     assert margin_40 is not None
@@ -356,7 +384,7 @@ async def test_daily_summary(db):
     assert margin_40.op_expired_count == 2
     assert margin_40.total_listed_count == 10
 
-    # Margin 10%: 15000 >= 11000 -> yes, 11000 >= 11000 -> yes (all 10)
+    # Margin 10%: 14000 >= 11000 -> yes, 11000 >= 11000 -> yes (all 10)
     margin_10 = next((s for s in summaries if s.margin_pct == 10), None)
     assert margin_10 is not None
     assert margin_10.op_listed_count == 10
@@ -410,9 +438,9 @@ async def test_resolve_outcomes_no_double_counting(db):
     ea_id = 66666
     now = _utcnow()
 
-    # Batch 1: 5 listings at 160k disappear
+    # Batch 1: 5 listings at 140k disappear (40% margin, within MAX_OP_MARGIN_PCT=44%)
     batch1_auctions = [
-        _make_live_auction(buy_now_price=160000, trade_id=7001 + i, remaining_seconds=-60)
+        _make_live_auction(buy_now_price=140000, trade_id=7001 + i, remaining_seconds=-60)
         for i in range(5)
     ]
 
@@ -426,9 +454,9 @@ async def test_resolve_outcomes_no_double_counting(db):
         )
         await session.commit()
 
-    # 10 completed sales at 160k (the sliding window from fut.gg)
+    # 10 completed sales at 140k (the sliding window from fut.gg)
     sales = [
-        _make_sale(sold_price=160000, sold_at=now, resource_id=ea_id)
+        _make_sale(sold_price=140000, sold_at=now, resource_id=ea_id)
         for _ in range(10)
     ]
 
@@ -445,9 +473,9 @@ async def test_resolve_outcomes_no_double_counting(db):
     assert counts1["sold"] == 5
     assert counts1["expired"] == 0
 
-    # Batch 2: 3 NEW listings at 160k disappear
+    # Batch 2: 3 NEW listings at 140k disappear
     batch2_auctions = [
-        _make_live_auction(buy_now_price=160000, trade_id=7006 + i, remaining_seconds=-60)
+        _make_live_auction(buy_now_price=140000, trade_id=7006 + i, remaining_seconds=-60)
         for i in range(3)
     ]
 
@@ -462,7 +490,7 @@ async def test_resolve_outcomes_no_double_counting(db):
         await session.commit()
 
     # Resolve batch 2 with the SAME 10 sales (no new sales occurred)
-    # Bug: without timestamp filtering, all 10 sales count again -> 3 sold
+    # Without timestamp filtering, all 10 sales count again -> 3 sold
     # Fixed: only sales with sold_at > batch 1's resolved_at count -> 0 sold, 3 expired
     async with session_factory() as session:
         counts2 = await resolve_outcomes(
