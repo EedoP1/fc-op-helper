@@ -44,22 +44,8 @@ async def lifespan(app: FastAPI):
 
     engine, session_factory = await create_engine_and_tables()
 
-    # Run Alembic migrations using the existing engine (no new event loop)
-    from alembic.config import Config as AlembicConfig
-    from alembic import command
-    from alembic.runtime.environment import EnvironmentContext
-    from alembic.script import ScriptDirectory
-    import os
-
-    alembic_ini = os.path.join(os.path.dirname(__file__), "..", "..", "alembic.ini")
-    alembic_cfg = AlembicConfig(alembic_ini)
-
-    async with engine.begin() as conn:
-        def _run_upgrade(connection):
-            alembic_cfg.attributes["connection"] = connection
-            command.upgrade(alembic_cfg, "head")
-        await conn.run_sync(_run_upgrade)
-    logger.info("Alembic migrations applied.")
+    # Migrations are managed by Alembic — run manually:
+    #   alembic upgrade head
 
     app.state.engine = engine
     app.state.session_factory = session_factory
