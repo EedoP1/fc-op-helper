@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed quick-260331-vn2
-last_updated: "2026-03-31T19:53:06.274Z"
-last_activity: 2026-03-30
+stopped_at: Completed quick-260402-enx
+last_updated: "2026-04-02T07:38:57.893Z"
+last_activity: 2026-03-31
 progress:
   total_phases: 9
   completed_phases: 8
@@ -146,6 +146,7 @@ Plan: 3 of 5
 - [Phase 08-dom-automation-layer]: Button discrimination by .primary class — Relist All has .primary on .section-header-btn, Clear Sold does not
 - [Phase 08-dom-automation-layer]: ea_id deferred to main loop (Plan 05) — TRADE_REPORT_BATCH sends ea_id=0 for relisted items, resolved by name+rating in caller
 - [Phase quick-260331-vn2]: Listing success verified by QUICK_LIST_PANEL disappearance; sniped skips reset consecutiveFailures; unassigned sweep uses inline button lookup
+- [Phase quick]: PlaywrightPricesClient bridges sync ThreadPoolExecutor threads to async Playwright via run_coroutine_threadsafe for Cloudflare JS challenge bypass on player-prices endpoint
 
 ### Roadmap Evolution
 
@@ -184,5 +185,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-03-31
-Stopped at: Completed quick-260331-vn2
+Stopped at: Completed quick-260402-enx
 Resume file: None
