@@ -199,13 +199,8 @@ class FutGGClient:
         defn_data = _get_sync(f"/api/fut/player-item-definitions/26/{ea_id}/")
 
         if prices_fetcher is not None:
-            # Rate-limit the Playwright call the same way as curl_cffi calls.
-            with _sync_rate_lock:
-                now = time.monotonic()
-                wait = _MIN_REQUEST_INTERVAL - (now - _last_request_time)
-                if wait > 0:
-                    time.sleep(wait)
-                _last_request_time = time.monotonic()
+            # No rate limiting here — the Playwright page pool (3 pages)
+            # naturally limits concurrency without serializing threads.
             prices = prices_fetcher(ea_id)
             prices_data = {"data": prices} if prices is not None else None
         else:
