@@ -1,9 +1,9 @@
 """Playwright-based client for the fut.gg player-prices endpoint.
 
 Uses a real Chrome browser with stealth flags to bypass Cloudflare's managed
-JS challenge. Navigates to each price URL via page.goto() — Cloudflare solves
-the challenge on the first request, and subsequent navigations return JSON
-directly.
+JS challenge. Maintains a pool of browser pages for concurrent fetches —
+Cloudflare solves the challenge on the first request, and subsequent
+navigations return JSON directly.
 
 The definitions endpoint continues to use curl_cffi (no challenge there).
 """
@@ -24,6 +24,10 @@ _PRICES_URL = _FUTGG_BASE + "/api/fut/player-prices/26/{ea_id}/"
 # Regex to extract JSON from Chrome's raw JSON viewer (<pre> tag)
 _PRE_JSON_RE = re.compile(r"<pre>(.*?)</pre>", re.DOTALL)
 
+# Number of browser pages to keep in the pool for concurrent fetches.
+# 5 triggers Cloudflare rate limiting; 3 is the sweet spot.
+_PAGE_POOL_SIZE = 3
+
 
 class PlaywrightPricesClient:
     """Playwright browser client for the player-prices endpoint.
@@ -37,27 +41,27 @@ class PlaywrightPricesClient:
         client.set_loop(loop)         # call from async context after start()
         data = client.get_prices_sync(ea_id)  # call from ThreadPoolExecutor
 
-    The sync bridge uses asyncio.run_coroutine_threadsafe to schedule the
-    async fetch onto the main event loop where Playwright lives.
+    Uses a pool of browser pages so multiple scanner threads can fetch
+    concurrently without blocking each other. Pages are checked out from
+    an asyncio.Queue and returned after use.
     """
 
     def __init__(self) -> None:
         self._playwright = None
         self._browser = None
         self._browser_context = None
-        self._page = None
+        self._pages: list = []
+        self._page_pool: Optional[asyncio.Queue] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._fetch_lock: Optional[asyncio.Lock] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Launch Chrome with stealth flags, solve Cloudflare challenge.
+        """Launch Chrome with stealth flags, create page pool, solve challenge.
 
         Uses the system-installed Chrome (channel='chrome') with
         --disable-blink-features=AutomationControlled to avoid Cloudflare's
-        bot detection. Keeps a persistent page open for price fetches via
-        page.goto().
+        bot detection. Creates a pool of pages for concurrent price fetches.
         """
         from playwright.async_api import async_playwright
 
@@ -73,20 +77,26 @@ class PlaywrightPricesClient:
         await self._browser_context.add_init_script(
             'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
         )
-        self._page = await self._browser_context.new_page()
-        self._fetch_lock = asyncio.Lock()
 
-        # Solve Cloudflare challenge by navigating to a prices endpoint.
-        # First request triggers the challenge; waiting lets it resolve.
+        # Create page pool
+        self._page_pool = asyncio.Queue()
+        for _ in range(_PAGE_POOL_SIZE):
+            page = await self._browser_context.new_page()
+            self._pages.append(page)
+            self._page_pool.put_nowait(page)
+
+        # Solve Cloudflare challenge on the first page
         logger.info("PlaywrightPricesClient: solving Cloudflare challenge...")
         await self._resolve_challenge()
-        logger.info("PlaywrightPricesClient: browser started and challenge solved")
+        logger.info(
+            f"PlaywrightPricesClient: browser started with {_PAGE_POOL_SIZE} pages"
+        )
 
     async def stop(self) -> None:
-        """Close page, browser context, browser, and Playwright instance."""
+        """Close all pages, browser context, browser, and Playwright."""
         try:
-            if self._page:
-                await self._page.close()
+            for page in self._pages:
+                await page.close()
             if self._browser_context:
                 await self._browser_context.close()
             if self._browser:
@@ -96,7 +106,8 @@ class PlaywrightPricesClient:
         except Exception as exc:
             logger.error(f"PlaywrightPricesClient: error during stop: {exc}")
         finally:
-            self._page = None
+            self._pages.clear()
+            self._page_pool = None
             self._browser_context = None
             self._browser = None
             self._playwright = None
@@ -145,10 +156,12 @@ class PlaywrightPricesClient:
     # ── Internal async helpers ─────────────────────────────────────────────────
 
     async def _fetch_prices(self, ea_id: int) -> dict | None:
-        """Fetch player-prices by navigating the persistent page to the URL.
+        """Fetch player-prices by checking out a page and navigating to the URL.
 
-        On Cloudflare challenge (title = "Just a moment..."), waits for
-        resolution and retries once.
+        Acquires a page from the pool, navigates to the price endpoint,
+        parses the JSON response, and returns the page to the pool.
+
+        On Cloudflare challenge, waits for resolution and retries.
 
         Args:
             ea_id: EA resource ID of the player.
@@ -157,29 +170,31 @@ class PlaywrightPricesClient:
             The parsed ``data`` dict from the API response, or None on error.
         """
         url = _PRICES_URL.format(ea_id=ea_id)
+        page = await self._page_pool.get()
         try:
-            async with self._fetch_lock:
-                await self._page.goto(url, timeout=15000)
-                content = await self._page.content()
+            await page.goto(url, timeout=15000)
+            content = await page.content()
 
-                # Check for Cloudflare challenge
+            # Check for Cloudflare challenge
+            if "Just a moment" in content:
+                logger.warning(
+                    f"PlaywrightPricesClient: Cloudflare challenge for ea_id={ea_id} "
+                    "— waiting for resolution..."
+                )
+                await asyncio.sleep(5)
+                content = await page.content()
                 if "Just a moment" in content:
-                    logger.warning(
-                        f"PlaywrightPricesClient: Cloudflare challenge for ea_id={ea_id} "
-                        "— waiting for resolution..."
+                    logger.error(
+                        f"PlaywrightPricesClient: challenge not resolved for ea_id={ea_id}"
                     )
-                    await asyncio.sleep(5)
-                    content = await self._page.content()
-                    if "Just a moment" in content:
-                        logger.error(
-                            f"PlaywrightPricesClient: challenge not resolved for ea_id={ea_id}"
-                        )
-                        return None
+                    return None
 
-                return self._parse_json_response(content, ea_id)
+            return self._parse_json_response(content, ea_id)
         except Exception as exc:
             logger.error(f"PlaywrightPricesClient: error fetching prices for ea_id={ea_id}: {exc}")
             return None
+        finally:
+            self._page_pool.put_nowait(page)
 
     def _parse_json_response(self, content: str, ea_id: int) -> dict | None:
         """Extract and parse JSON data from the browser's rendered response.
@@ -208,18 +223,18 @@ class PlaywrightPricesClient:
     async def _resolve_challenge(self) -> None:
         """Navigate to a prices endpoint to trigger and solve the Cloudflare challenge.
 
-        The first navigation triggers the managed JS challenge. After ~5s the
-        challenge resolves and cookies are set in the browser context. All
-        subsequent navigations to price endpoints will return JSON directly.
+        Uses the first page in the pool. The challenge is solved once and
+        cookies are shared across all pages in the browser context.
         """
         test_url = _PRICES_URL.format(ea_id=50563721)
+        page = self._pages[0]
         try:
-            await self._page.goto(test_url, timeout=30000)
-            content = await self._page.content()
+            await page.goto(test_url, timeout=30000)
+            content = await page.content()
             if "Just a moment" in content:
                 logger.info("PlaywrightPricesClient: waiting for Cloudflare challenge...")
                 await asyncio.sleep(5)
-                content = await self._page.content()
+                content = await page.content()
                 if "Just a moment" in content:
                     logger.warning("PlaywrightPricesClient: challenge may not have resolved")
                 else:
