@@ -36,7 +36,7 @@ POSITION_MAP = {
 }
 
 # Global rate limit: max 10 requests/second across all clients.
-_MIN_REQUEST_INTERVAL = 0.1  # seconds between requests
+_MIN_REQUEST_INTERVAL = 0.25  # seconds between requests
 _last_request_time = 0.0
 _rate_lock = asyncio.Lock()
 _sync_rate_lock = None  # threading.Lock, created lazily
@@ -278,27 +278,13 @@ class FutGGClient:
             if not players:
                 break
 
-            ea_ids = []
-            player_map = {}
             for p in players:
                 ea_id = self._extract_ea_id(p)
                 if ea_id and ea_id not in seen_ids:
                     seen_ids.add(ea_id)
-                    ea_ids.append(ea_id)
-                    player_map[ea_id] = p
-
-            if ea_ids:
-                prices = await self.get_batch_prices(ea_ids)
-                price_map = {
-                    p["eaId"]: p["price"]
-                    for p in prices if p.get("price") is not None
-                }
-                for ea_id, player_data in player_map.items():
-                    price = price_map.get(ea_id, 0) or 0
-                    if min_price <= price <= max_price:
-                        player_data["ea_id"] = ea_id
-                        player_data["price"] = price
-                        all_candidates.append(player_data)
+                    p["ea_id"] = ea_id
+                    p["price"] = 0  # exact price fetched later during scan
+                    all_candidates.append(p)
 
             logger.info(
                 f"Page {page_num}: {len(players)} players, "
