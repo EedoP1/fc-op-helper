@@ -35,6 +35,7 @@ from src.config import (
 )
 from src.futgg_client import FutGGClient
 from src.server.circuit_breaker import CircuitBreaker
+from src.server.playwright_client import PlaywrightPricesClient
 from src.server.listing_tracker import record_listings, resolve_outcomes
 from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, ScannerStatus
 from src.server.scorer_v2 import score_player_v2
@@ -84,6 +85,7 @@ class ScannerService:
         self._active_tasks: set[asyncio.Task] = set()
         self._sync_client: Optional[CffiSession] = None
         self._scan_executor = None
+        self._pw_client: Optional[PlaywrightPricesClient] = None
         # Limit concurrent DB sessions from scanner so API handlers aren't starved.
         # HTTP concurrency is bounded by SCAN_CONCURRENCY (40); DB writes are
         # much tighter to keep the connection pool available for API endpoints.
@@ -118,11 +120,17 @@ class ScannerService:
             max_workers=SCAN_CONCURRENCY,
             thread_name_prefix="scanner",
         )
+        # Start Playwright browser for player-prices endpoint (Cloudflare bypass)
+        self._pw_client = PlaywrightPricesClient()
+        await self._pw_client.start()
+        self._pw_client.set_loop(asyncio.get_running_loop())
         self.is_running = True
-        logger.info("ScannerService started (HTTP via thread pool)")
+        logger.info("ScannerService started (HTTP via thread pool, prices via Playwright)")
 
     async def stop(self) -> None:
-        """Stop the scanner's HTTP client and thread pool."""
+        """Stop the scanner's HTTP client, Playwright browser, and thread pool."""
+        if self._pw_client:
+            await self._pw_client.stop()
         await self._client.stop()
         if self._sync_client:
             self._sync_client.close()
@@ -347,8 +355,15 @@ class ScannerService:
         market_data = None
 
         def _fetch_sync():
-            """Fetch market data using sync HTTP client (runs in thread pool)."""
-            return self._client.get_player_market_data_sync(ea_id, self._sync_client)
+            """Fetch market data using sync clients (runs in thread pool).
+
+            Definitions fetched via curl_cffi; prices via Playwright browser
+            (bypasses Cloudflare managed JS challenge on the prices endpoint).
+            """
+            return self._client.get_player_market_data_sync(
+                ea_id, self._sync_client,
+                prices_fetcher=self._pw_client.get_prices_sync if self._pw_client else None,
+            )
 
         @retry(
             retry=retry_if_exception_type((HTTPError, ConnectionError, TimeoutError)),

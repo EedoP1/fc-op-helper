@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 async def main():
     """Start scanner with all dependencies and block forever."""
+    import subprocess
+    import sys
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -27,6 +30,14 @@ async def main():
     # Suppress verbose httpx/httpcore logs (same as main.py pattern)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    # Ensure Playwright Chromium binary is present (idempotent on subsequent runs)
+    logger.info("Ensuring Playwright Chromium is installed...")
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=True,
+    )
+    logger.info("Playwright Chromium ready.")
 
     logger.info("Starting scanner process...")
 

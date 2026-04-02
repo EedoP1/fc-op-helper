@@ -148,16 +148,21 @@ class FutGGClient:
         )
 
     def get_player_market_data_sync(
-        self, ea_id: int, sync_client: Session
+        self, ea_id: int, sync_client: Session, prices_fetcher=None,
     ) -> Optional[PlayerMarketData]:
         """Synchronous version of get_player_market_data for thread-pool use.
 
-        Uses the provided sync curl_cffi Session (not the async self.client) so
-        it can run in a ThreadPoolExecutor without needing an event loop.
+        Uses the provided sync curl_cffi Session for the definitions call.
+        If prices_fetcher is provided, it is used for the prices call instead
+        of curl_cffi — enabling Playwright-based Cloudflare bypass.
 
         Args:
             ea_id: EA resource ID of the player.
-            sync_client: Synchronous curl_cffi Session for HTTP calls.
+            sync_client: Synchronous curl_cffi Session for definitions HTTP calls.
+            prices_fetcher: Optional callable ``(ea_id: int) -> dict | None``
+                that returns the prices ``data`` dict directly (already parsed).
+                Rate limiting is applied before calling it. If None, the
+                existing curl_cffi path is used (backward compat).
 
         Returns:
             PlayerMarketData or None if data is unavailable.
@@ -192,7 +197,19 @@ class FutGGClient:
                 return None
 
         defn_data = _get_sync(f"/api/fut/player-item-definitions/26/{ea_id}/")
-        prices_data = _get_sync(f"/api/fut/player-prices/26/{ea_id}/")
+
+        if prices_fetcher is not None:
+            # Rate-limit the Playwright call the same way as curl_cffi calls.
+            with _sync_rate_lock:
+                now = time.monotonic()
+                wait = _MIN_REQUEST_INTERVAL - (now - _last_request_time)
+                if wait > 0:
+                    time.sleep(wait)
+                _last_request_time = time.monotonic()
+            prices = prices_fetcher(ea_id)
+            prices_data = {"data": prices} if prices is not None else None
+        else:
+            prices_data = _get_sync(f"/api/fut/player-prices/26/{ea_id}/")
 
         defn = defn_data["data"] if defn_data and "data" in defn_data else None
         prices = prices_data["data"] if prices_data and "data" in prices_data else None
