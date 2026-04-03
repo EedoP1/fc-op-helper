@@ -180,8 +180,6 @@ async def delete_portfolio_player(
         if slot is None:
             raise HTTPException(status_code=404, detail="Player not in portfolio")
 
-        freed_budget = slot.buy_price
-
         # 2. Cancel pending/in-progress actions for this player
         await session.execute(
             update(TradeAction)
@@ -197,11 +195,21 @@ async def delete_portfolio_player(
             delete(PortfolioSlot).where(PortfolioSlot.ea_id == ea_id)
         )
 
-        # 4. Count + capture remaining ea_ids AFTER deletion, within the same transaction.
-        # This is the key race-condition fix: the count is atomic with the delete, so
-        # two concurrent removes each see their own correct post-delete portfolio size.
-        remaining_result = await session.execute(select(PortfolioSlot.ea_id))
-        remaining_ea_ids = {row[0] for row in remaining_result.all()}
+        # 4. Count + capture remaining ea_ids and buy_prices AFTER deletion, within the
+        # same transaction. This is the key race-condition fix: the count is atomic with
+        # the delete, so two concurrent removes each see their own correct post-delete
+        # portfolio size.
+        remaining_result = await session.execute(
+            select(PortfolioSlot.ea_id, PortfolioSlot.buy_price)
+        )
+        remaining_rows = remaining_result.all()
+        remaining_ea_ids = {row[0] for row in remaining_rows}
+        remaining_total_cost = sum(row[1] for row in remaining_rows)
+
+        # freed_budget = total budget minus what's still tied up in remaining slots.
+        # This is the correct amount available to the optimizer for replacements —
+        # not just the removed player's buy_price (which ignores unspent budget).
+        freed_budget = budget - remaining_total_cost
 
         await session.commit()
 

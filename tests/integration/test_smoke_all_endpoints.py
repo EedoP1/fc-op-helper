@@ -224,6 +224,12 @@ async def test_portfolio_delete(client):
     body = r.json()
     assert body["removed_ea_id"] == ea_id, f"Wrong removed_ea_id: {body['removed_ea_id']}"
     assert "freed_budget" in body
+    # After deleting the only slot, remaining_total_cost=0, so freed_budget must equal the full budget.
+    # This verifies freed_budget = budget - remaining_total_cost (not just slot.buy_price).
+    assert body["freed_budget"] == 2_000_000, (
+        f"freed_budget should equal full budget when no slots remain, "
+        f"got {body['freed_budget']} (expected 2_000_000)"
+    )
     assert "replacements" in body
 
 
