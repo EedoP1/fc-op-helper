@@ -182,9 +182,10 @@ None yet.
 | 260330-ujg | Factor op_sales count into portfolio scoring via log confidence multiplier | 2026-03-30 | a8e86c9 | [260330-ujg-factor-op-sale-count-into-portfolio-scor](./quick/260330-ujg-factor-op-sale-count-into-portfolio-scor/) |
 | 260331-vn2 | Fix 5 automation bugs: DOM wait after snipe, CAPTCHA threshold, listing verify, unassigned sweep, sleep display | 2026-03-31 | 41874d1 | [260331-vn2-fix-5-automation-bugs-dom-wait-after-sni](./quick/260331-vn2-fix-5-automation-bugs-dom-wait-after-sni/) |
 | 260402-enx | Replace curl_cffi with Playwright for player-prices endpoint Cloudflare bypass | 2026-04-02 | 5f599d9 | [260402-enx-replace-curl-cffi-with-playwright-for-pl](./quick/260402-enx-replace-curl-cffi-with-playwright-for-pl/) |
+| 260403-o5l | Fix freed_budget in DELETE /portfolio/{ea_id}: return budget - remaining_total_cost | 2026-04-03 | 8f78286 | [260403-o5l-fix-freed-budget-in-delete-portfolio-ea-](./quick/260403-o5l-fix-freed-budget-in-delete-portfolio-ea-/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-02 - Completed quick task 260402-enx: Replace curl_cffi with Playwright for player-prices endpoint Cloudflare bypass
-Stopped at: Completed quick-260402-enx
+Last activity: 2026-04-03 - Completed quick task 260403-o5l: Fix freed_budget in DELETE /portfolio/{ea_id}
+Stopped at: Completed quick-260403-o5l
 Resume file: None
