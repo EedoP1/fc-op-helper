@@ -14,6 +14,10 @@ class GenerateRequest(BaseModel):
     """Request body for POST /portfolio/generate."""
 
     budget: int = Field(..., gt=0, description="Total budget in coins")
+    banned_ea_ids: list[int] = Field(
+        default_factory=list,
+        description="EA IDs to exclude from portfolio generation",
+    )
 
 
 class ConfirmPlayer(BaseModel):

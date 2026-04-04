@@ -327,3 +327,65 @@ async def test_swap_preview_no_replacements_when_portfolio_full(db):
         "(no slots open). Portfolio is already at TARGET_PLAYER_COUNT."
     )
     assert body["count"] == 0
+
+
+# ── Test: generate endpoint accepts and respects banned_ea_ids ─────────────────
+
+async def test_generate_with_banned_ea_ids(seeded_portfolio_app):
+    """POST /portfolio/generate with banned_ea_ids excludes those players from the result.
+
+    The idempotent regenerate approach requires that any banned player never
+    appears in the returned portfolio — even if they would otherwise be optimal.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_portfolio_app), base_url="http://test"
+    ) as client:
+        # First: get a clean generate result to discover a real ea_id to ban
+        resp_clean = await client.post(
+            "/api/v1/portfolio/generate",
+            json={"budget": 500000},
+        )
+    assert resp_clean.status_code == 200
+    clean_body = resp_clean.json()
+    assert len(clean_body["data"]) > 0, "Need at least one player to ban"
+
+    # Pick the first returned player to ban
+    ban_id = clean_body["data"][0]["ea_id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_portfolio_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/v1/portfolio/generate",
+            json={"budget": 500000, "banned_ea_ids": [ban_id]},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Banned player must not appear in results
+    returned_ea_ids = {p["ea_id"] for p in body["data"]}
+    assert ban_id not in returned_ea_ids, (
+        f"Banned ea_id {ban_id} appeared in generate result — banned_ea_ids filter not working."
+    )
+
+    # Still returns other players
+    assert len(body["data"]) > 0, "Should still return non-banned players"
+
+
+async def test_generate_banned_ea_ids_empty_default(seeded_portfolio_app):
+    """POST /portfolio/generate without banned_ea_ids field works as before (backward compatible).
+
+    Callers that do not send banned_ea_ids must continue to receive a full portfolio.
+    The field must default to an empty list, not cause a 422 or empty result.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=seeded_portfolio_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/v1/portfolio/generate",
+            json={"budget": 500000},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "data" in body
+    assert len(body["data"]) > 0, "Generate without banned_ea_ids should return players"

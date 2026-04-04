@@ -129,6 +129,10 @@ async def generate_portfolio(
 
     scored_list = [_build_scored_entry(score, record) for score, record in rows]
 
+    # Exclude banned ea_ids before optimization — each removal regenerates from scratch
+    banned = set(body.banned_ea_ids)
+    scored_list = [e for e in scored_list if e["ea_id"] not in banned]
+
     if not scored_list:
         return {
             "error": "Not enough listing data yet. The system needs to accumulate market observations before it can recommend players. This typically takes a few hours of scanning.",
