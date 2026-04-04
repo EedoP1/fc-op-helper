@@ -114,7 +114,8 @@ export function createOverlayPanel(): OverlayPanel {
   let currentState: PanelState = 'empty';
   let draftPlayers: PortfolioPlayer[] = [];  // D-10: ephemeral draft, in-memory only
   let removedEaIds: Set<number> = new Set();  // Track removed players within draft session
-  let swapInFlight = false;  // Block removals while a swap request is pending
+  let swapInFlight = false;  // Block removals while a regenerate request is in flight
+  let regenerateQueued = false;  // True if a removal arrived while regenerate was in flight
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
@@ -1004,49 +1005,53 @@ export function createOverlayPanel(): OverlayPanel {
         });
 
         removeBtn.addEventListener('click', () => {
-          if (swapInFlight) return;  // Block until previous swap completes
-          swapInFlight = true;
-
-          const freed_budget = player.price;
-          // Track this player as removed for the entire draft session
+          // Track this player as banned for the entire draft session
           removedEaIds.add(player.ea_id);
-          // Exclude all remaining players + all previously removed players
-          const excluded_ea_ids = [
-            ...draftPlayers.map(p => p.ea_id),
-            ...removedEaIds,
-          ];
 
-          // Instant remove from in-memory draft (D-09)
+          // Instant remove from in-memory draft (D-09 instant visual feedback)
           draftPlayers.splice(idx, 1);
           renderPlayerList();
 
-          const current_count = draftPlayers.length;
+          if (swapInFlight) {
+            // A regenerate is already in flight — queue another one with the full banned set
+            regenerateQueued = true;
+            return;
+          }
 
-          chrome.runtime.sendMessage({
-            type: 'PORTFOLIO_SWAP',
-            ea_id: player.ea_id,
-            freed_budget,
-            excluded_ea_ids,
-            current_count,
-          } satisfies ExtensionMessage)
-            .then((res: ExtensionMessage) => {
-              if (res.type === 'PORTFOLIO_SWAP_RESULT') {
-                if (res.replacements && res.replacements.length > 0) {
-                  const insertIdx = Math.min(idx, draftPlayers.length);
-                  draftPlayers.splice(insertIdx, 0, ...res.replacements);
-                  draftBudgetUsed = draftPlayers.reduce((s, p) => s + p.price, 0);
-                  draftBudgetRemaining = Math.max(0, draftBudget - draftBudgetUsed);
-                  summary.textContent = `Used: ${fmt(draftBudgetUsed)} / Budget: ${fmt(draftBudget)} (${fmt(draftBudgetRemaining)} remaining)`;
-                  renderPlayerList();
+          // Fire full portfolio regeneration with accumulated banned IDs
+          function fireRegenerate(): void {
+            swapInFlight = true;
+            regenerateQueued = false;
+
+            chrome.runtime.sendMessage({
+              type: 'PORTFOLIO_GENERATE',
+              budget: draftBudget,
+              banned_ea_ids: [...removedEaIds],
+            } satisfies ExtensionMessage)
+              .then((res: ExtensionMessage) => {
+                if (res.type === 'PORTFOLIO_GENERATE_RESULT') {
+                  if (!res.error && res.data) {
+                    draftPlayers = [...res.data];
+                    draftBudgetUsed = res.budget_used;
+                    draftBudgetRemaining = res.budget_remaining;
+                    summary.textContent = `Used: ${fmt(draftBudgetUsed)} / Budget: ${fmt(draftBudget)} (${fmt(draftBudgetRemaining)} remaining)`;
+                    renderPlayerList();
+                  }
                 }
-              }
-            })
-            .catch(() => {
-              // Swap failed — draft already updated (player removed), continue without replacement
-            })
-            .finally(() => {
-              swapInFlight = false;
-            });
+              })
+              .catch(() => {
+                // Regenerate failed — draft already shows removal, continue without replacement
+              })
+              .finally(() => {
+                swapInFlight = false;
+                // If more bans arrived while this request was in flight, fire again
+                if (regenerateQueued) {
+                  fireRegenerate();
+                }
+              });
+          }
+
+          fireRegenerate();
         });
 
         row.appendChild(removeBtn);
@@ -1490,6 +1495,7 @@ export function createOverlayPanel(): OverlayPanel {
         draftPlayers = [];
         removedEaIds = new Set();  // Clear removed players for fresh generation
         swapInFlight = false;
+        regenerateQueued = false;
         renderEmpty();
         break;
       case 'draft':

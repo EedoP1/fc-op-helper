@@ -70,7 +70,7 @@ export type ExtensionMessage =
   | { type: 'PING' }
   | { type: 'PONG' }
   // Portfolio operations (content script -> service worker -> backend)
-  | { type: 'PORTFOLIO_GENERATE'; budget: number }
+  | { type: 'PORTFOLIO_GENERATE'; budget: number; banned_ea_ids?: number[] }
   | { type: 'PORTFOLIO_GENERATE_RESULT'; data: PortfolioPlayer[]; budget_used: number; budget_remaining: number; error?: string }
   | { type: 'PORTFOLIO_CONFIRM'; players: PortfolioPlayer[] }
   | { type: 'PORTFOLIO_CONFIRM_RESULT'; confirmed: number; error?: string }
