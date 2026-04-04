@@ -364,14 +364,18 @@ export async function executeBuyCycle(
         }
       }
 
-      // If all cards seen so far share the same price, paginate through ALL pages
-      // to find a cheaper card. EA sorts by time, not price — cheapest can be on
-      // any page. Stop when we find a different (cheaper) price or run out of pages.
-      while (seenPrices.size === 1 && binPrice < Infinity) {
+      // If all cards seen so far share the same price, paginate to find a cheaper
+      // card. EA sorts by time, not price — cheapest can be on any page.
+      // Cap at 10 pages: EA's "next" button wraps to page 1 instead of disabling,
+      // so without a limit this loop runs forever when all pages share one price.
+      const MAX_PAGINATION_PAGES = 10;
+      let pagesScanned = 0;
+      while (seenPrices.size === 1 && binPrice < Infinity && pagesScanned < MAX_PAGINATION_PAGES) {
         const nextBtn = document.querySelector<HTMLButtonElement>(SELECTORS.PAGINATION_NEXT);
         if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')) break;
 
         await clickElement(nextBtn);
+        pagesScanned++;
         await jitter(1000, 2000);
 
         const nextPageList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
@@ -386,7 +390,11 @@ export async function executeBuyCycle(
           if (isNaN(itemBin)) continue;
           if (!verifyCard(item, player.rating, player.position)) continue;
           seenPrices.add(itemBin);
-          if (itemBin < binPrice) {
+          // Use <= so cheapestItem tracks a card on the current page even when
+          // all pages share the same price. Without this, cheapestItem stays
+          // on page 1 while the DOM advances to a later page — clicking a
+          // detached page-1 element does nothing and the buy never proceeds.
+          if (itemBin <= binPrice) {
             binPrice = itemBin;
             cheapestItem = item;
           }
