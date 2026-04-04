@@ -183,9 +183,10 @@ None yet.
 | 260331-vn2 | Fix 5 automation bugs: DOM wait after snipe, CAPTCHA threshold, listing verify, unassigned sweep, sleep display | 2026-03-31 | 41874d1 | [260331-vn2-fix-5-automation-bugs-dom-wait-after-sni](./quick/260331-vn2-fix-5-automation-bugs-dom-wait-after-sni/) |
 | 260402-enx | Replace curl_cffi with Playwright for player-prices endpoint Cloudflare bypass | 2026-04-02 | 5f599d9 | [260402-enx-replace-curl-cffi-with-playwright-for-pl](./quick/260402-enx-replace-curl-cffi-with-playwright-for-pl/) |
 | 260403-o5l | Fix freed_budget in DELETE /portfolio/{ea_id}: return budget - remaining_total_cost | 2026-04-03 | 8f78286 | [260403-o5l-fix-freed-budget-in-delete-portfolio-ea-](./quick/260403-o5l-fix-freed-budget-in-delete-portfolio-ea-/) |
+| 260404-qwj | Fix portfolio removal race condition: replace swap-preview with idempotent regenerate-with-banned-ids | 2026-04-04 | e063cd0 | [260404-qwj-fix-portfolio-removal-race-condition-ext](./quick/260404-qwj-fix-portfolio-removal-race-condition-ext/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-03 - Completed quick task 260403-o5l: Fix freed_budget in DELETE /portfolio/{ea_id}
-Stopped at: Completed quick-260403-o5l
+Last activity: 2026-04-04 - Completed quick task 260404-qwj: Fix portfolio removal race condition (idempotent regenerate with banned_ea_ids)
+Stopped at: Completed quick-260404-qwj
 Resume file: None
