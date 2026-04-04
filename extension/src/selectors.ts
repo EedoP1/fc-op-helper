@@ -146,6 +146,9 @@ export const SEARCH_RESET_BUTTON = '.button-container > button.btn-standard:not(
 /** Paginated search results container */
 export const SEARCH_RESULTS_LIST = '.paginated-item-list.ut-pinned-list';
 
+/** Empty search results indicator shown by EA when no items match */
+export const SEARCH_NO_RESULTS = '.ut-no-results-view';
+
 /** Currently selected result item */
 export const SEARCH_RESULT_SELECTED = '.listFUTItem.selected';
 
