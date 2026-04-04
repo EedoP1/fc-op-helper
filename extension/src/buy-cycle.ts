@@ -364,29 +364,31 @@ export async function executeBuyCycle(
         }
       }
 
-      // If all cards on page 1 share the same price, check next page(s) for cheaper cards
-      // before assuming this is the best price. Only skip if no next page exists.
-      if (seenPrices.size === 1 && binPrice < Infinity) {
+      // If all cards seen so far share the same price, paginate through ALL pages
+      // to find a cheaper card. EA sorts by time, not price — cheapest can be on
+      // any page. Stop when we find a different (cheaper) price or run out of pages.
+      while (seenPrices.size === 1 && binPrice < Infinity) {
         const nextBtn = document.querySelector<HTMLButtonElement>(SELECTORS.PAGINATION_NEXT);
-        if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) {
-          // Scan next page for cheaper cards
-          await clickElement(nextBtn);
-          await jitter(1000, 2000);
+        if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')) break;
 
-          const nextPageList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
-          const nextPageItems = nextPageList
-            ? Array.from(nextPageList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
-            : [];
+        await clickElement(nextBtn);
+        await jitter(1000, 2000);
 
-          for (const item of nextPageItems) {
-            const itemBin = readBinPrice(item);
-            if (isNaN(itemBin)) continue;
-            if (!verifyCard(item, player.rating, player.position)) continue;
-            seenPrices.add(itemBin);
-            if (itemBin < binPrice) {
-              binPrice = itemBin;
-              cheapestItem = item;
-            }
+        const nextPageList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
+        const nextPageItems = nextPageList
+          ? Array.from(nextPageList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
+          : [];
+
+        if (nextPageItems.length === 0) break;
+
+        for (const item of nextPageItems) {
+          const itemBin = readBinPrice(item);
+          if (isNaN(itemBin)) continue;
+          if (!verifyCard(item, player.rating, player.position)) continue;
+          seenPrices.add(itemBin);
+          if (itemBin < binPrice) {
+            binPrice = itemBin;
+            cheapestItem = item;
           }
         }
       }
