@@ -115,7 +115,7 @@ export function createOverlayPanel(): OverlayPanel {
   let draftPlayers: PortfolioPlayer[] = [];  // D-10: ephemeral draft, in-memory only
   let removedEaIds: Set<number> = new Set();  // Track removed players within draft session
   let swapInFlight = false;  // Block removals while a regenerate request is in flight
-  let regenerateQueued = false;  // True if a removal arrived while regenerate was in flight
+
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
@@ -1012,46 +1012,31 @@ export function createOverlayPanel(): OverlayPanel {
           draftPlayers.splice(idx, 1);
           renderPlayerList();
 
-          if (swapInFlight) {
-            // A regenerate is already in flight — queue another one with the full banned set
-            regenerateQueued = true;
-            return;
-          }
+          if (swapInFlight) return; // Already in-flight — banned ID is tracked, skip request
 
-          // Fire full portfolio regeneration with accumulated banned IDs
-          function fireRegenerate(): void {
-            swapInFlight = true;
-            regenerateQueued = false;
-
-            chrome.runtime.sendMessage({
-              type: 'PORTFOLIO_GENERATE',
-              budget: draftBudget,
-              banned_ea_ids: [...removedEaIds],
-            } satisfies ExtensionMessage)
-              .then((res: ExtensionMessage) => {
-                if (res.type === 'PORTFOLIO_GENERATE_RESULT') {
-                  if (!res.error && res.data) {
-                    draftPlayers = [...res.data];
-                    draftBudgetUsed = res.budget_used;
-                    draftBudgetRemaining = res.budget_remaining;
-                    summary.textContent = `Used: ${fmt(draftBudgetUsed)} / Budget: ${fmt(draftBudget)} (${fmt(draftBudgetRemaining)} remaining)`;
-                    renderPlayerList();
-                  }
+          swapInFlight = true;
+          chrome.runtime.sendMessage({
+            type: 'PORTFOLIO_GENERATE',
+            budget: draftBudget,
+            banned_ea_ids: [...removedEaIds],
+          } satisfies ExtensionMessage)
+            .then((res: ExtensionMessage) => {
+              if (res.type === 'PORTFOLIO_GENERATE_RESULT') {
+                if (!res.error && res.data) {
+                  draftPlayers = [...res.data];
+                  draftBudgetUsed = res.budget_used;
+                  draftBudgetRemaining = res.budget_remaining;
+                  summary.textContent = `Used: ${fmt(draftBudgetUsed)} / Budget: ${fmt(draftBudget)} (${fmt(draftBudgetRemaining)} remaining)`;
+                  renderPlayerList();
                 }
-              })
-              .catch(() => {
-                // Regenerate failed — draft already shows removal, continue without replacement
-              })
-              .finally(() => {
-                swapInFlight = false;
-                // If more bans arrived while this request was in flight, fire again
-                if (regenerateQueued) {
-                  fireRegenerate();
-                }
-              });
-          }
-
-          fireRegenerate();
+              }
+            })
+            .catch(() => {
+              // Regenerate failed — draft already shows removal, continue without replacement
+            })
+            .finally(() => {
+              swapInFlight = false;
+            });
         });
 
         row.appendChild(removeBtn);
@@ -1495,7 +1480,6 @@ export function createOverlayPanel(): OverlayPanel {
         draftPlayers = [];
         removedEaIds = new Set();  // Clear removed players for fresh generation
         swapInFlight = false;
-        regenerateQueued = false;
         renderEmpty();
         break;
       case 'draft':
