@@ -21,6 +21,7 @@ import {
   requireElement,
   clickElement,
   waitForElement,
+  waitForSearchResults,
   typePrice,
   jitter,
   AutomationError,
@@ -315,16 +316,11 @@ export async function executeBuyCycle(
 
       // D-24: Cap increment moved to automation-loop on successful buy only.
 
-      // Wait for results to appear (up to 8 seconds)
-      await jitter(1500, 3000);
+      // Poll for search results — detects results, empty state, or timeout (up to 15s)
+      const searchResult = await waitForSearchResults();
 
-      const resultsList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST);
-      const resultItems = resultsList
-        ? Array.from(resultsList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM))
-        : [];
-
-      if (resultItems.length === 0) {
-        // No results — go back to search form before retrying
+      if (searchResult.outcome === 'timeout' || searchResult.outcome === 'empty') {
+        // No results or timeout — go back to search form before retrying
         const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
         if (backBtn) {
           await clickElement(backBtn);
@@ -341,6 +337,12 @@ export async function executeBuyCycle(
         // Continue to next step with higher maxBin
         continue;
       }
+
+      // outcome === 'results' — read the items
+      const resultsList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST)!;
+      const resultItems = Array.from(
+        resultsList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM),
+      );
 
       // Results found — scan page for cheapest verified card.
       // If multiple different prices exist, narrow maxBin down to the cheapest

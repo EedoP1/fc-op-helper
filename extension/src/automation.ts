@@ -18,6 +18,11 @@
 import type { AutomationStatusData } from './messages';
 import type { AutomationStatus, ActivityLogEntry } from './storage';
 import { automationStatusItem, activityLogItem } from './storage';
+import {
+  SEARCH_RESULTS_LIST,
+  TRANSFER_LIST_ITEM,
+  SEARCH_NO_RESULTS,
+} from './selectors';
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -129,6 +134,45 @@ export async function waitForElement<T extends Element = Element>(
     selectorName,
     `Timeout waiting for "${selectorName}" (selector: ${selector}) after ${timeoutMs}ms — possible CAPTCHA or DOM change`,
   );
+}
+
+/**
+ * Discriminated union describing the outcome of a search results wait.
+ *   'results' — one or more .listFUTItem elements appeared in the results list
+ *   'empty'   — EA's no-results indicator (.ut-no-results-view) was detected
+ *   'timeout' — neither condition met within timeoutMs
+ */
+export type SearchResultOutcome = { outcome: 'results' | 'empty' | 'timeout' };
+
+/**
+ * Poll the DOM for search results after submitting a Transfer Market search.
+ *
+ * Replaces the blind jitter wait with a proper polling loop that detects
+ * results, empty state, or timeout.
+ *
+ * @param root      DOM root to query (defaults to document)
+ * @param timeoutMs Maximum time to poll in ms (default 15000ms / 15s)
+ * @param pollMs    Interval between polls in ms (default 200ms)
+ */
+export async function waitForSearchResults(
+  root: Document | Element = document,
+  timeoutMs = 15000,
+  pollMs = 200,
+): Promise<SearchResultOutcome> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    // Check for result items inside the paginated results list
+    const resultsList = root.querySelector(SEARCH_RESULTS_LIST);
+    if (resultsList) {
+      const items = resultsList.querySelectorAll(TRANSFER_LIST_ITEM);
+      if (items.length > 0) return { outcome: 'results' };
+    }
+    // Check for EA empty results indicator
+    const noResults = root.querySelector(SEARCH_NO_RESULTS);
+    if (noResults) return { outcome: 'empty' };
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return { outcome: 'timeout' };
 }
 
 // ── State machine ─────────────────────────────────────────────────────────────
