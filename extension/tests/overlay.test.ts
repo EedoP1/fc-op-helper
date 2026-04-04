@@ -228,10 +228,12 @@ describe('overlay panel', () => {
     expect(panel.toggle.textContent).toBe('OP');
   });
 
-  it('clicking X on draft player row sends PORTFOLIO_SWAP message', async () => {
+  it('clicking X on draft player row sends PORTFOLIO_GENERATE message with banned_ea_ids', async () => {
     mockSendMessage.mockResolvedValue({
-      type: 'PORTFOLIO_SWAP_RESULT',
-      replacements: [],
+      type: 'PORTFOLIO_GENERATE_RESULT',
+      data: [PLAYER_B],
+      budget_used: 45000,
+      budget_remaining: 155000,
     });
 
     const panel = createOverlayPanel();
@@ -257,11 +259,12 @@ describe('overlay panel', () => {
     // Wait for the async sendMessage call
     await new Promise(r => setTimeout(r, 10));
 
+    // Must send PORTFOLIO_GENERATE with budget + banned_ea_ids containing the removed player
     expect(mockSendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'PORTFOLIO_SWAP',
-        ea_id: PLAYER_A.ea_id,
-        freed_budget: PLAYER_A.price,
+        type: 'PORTFOLIO_GENERATE',
+        budget: 200000,
+        banned_ea_ids: expect.arrayContaining([PLAYER_A.ea_id]),
       }),
     );
   });

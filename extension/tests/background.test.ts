@@ -229,6 +229,43 @@ describe('portfolio message handlers', () => {
     );
   });
 
+  it('PORTFOLIO_GENERATE with banned_ea_ids passes them in POST body to backend', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: MOCK_PORTFOLIO_PLAYERS.map(p => ({ ...p, buy_price: p.price })),
+        budget_used: 20000,
+        budget_remaining: 80000,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { portfolioListener } = await runBackgroundAndCapture();
+    expect(portfolioListener).toBeDefined();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener(
+      { type: 'PORTFOLIO_GENERATE', budget: 100000, banned_ea_ids: [111, 222] },
+      {},
+      sendResponse,
+    );
+
+    expect(returnVal).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The POST body must include banned_ea_ids
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/portfolio/generate',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"banned_ea_ids":[111,222]'),
+      }),
+    );
+    expect(sendResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PORTFOLIO_GENERATE_RESULT' }),
+    );
+  });
+
   it('PORTFOLIO_CONFIRM proxies POST to backend and stores portfolio in portfolioItem', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
