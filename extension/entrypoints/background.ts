@@ -44,7 +44,7 @@ export default defineBackground({
     chrome.runtime.onMessage.addListener((msg: ExtensionMessage, _sender, sendResponse) => {
       switch (msg.type) {
         case 'PORTFOLIO_GENERATE':
-          handlePortfolioGenerate(msg.budget, msg.banned_ea_ids ?? []).then(sendResponse);
+          handlePortfolioGenerate(msg.budget, msg.banned_ea_ids ?? [], msg.exclude_card_types ?? []).then(sendResponse);
           return true; // async response
         case 'PORTFOLIO_CONFIRM':
           handlePortfolioConfirm(msg.players).then(sendResponse);
@@ -161,12 +161,12 @@ function mapToPortfolioPlayer(p: any): PortfolioPlayer {
  * Request the backend to generate a portfolio for the given budget, excluding banned players.
  * POST /api/v1/portfolio/generate → PORTFOLIO_GENERATE_RESULT
  */
-async function handlePortfolioGenerate(budget: number, banned_ea_ids: number[] = []): Promise<ExtensionMessage> {
+async function handlePortfolioGenerate(budget: number, banned_ea_ids: number[] = [], exclude_card_types: string[] = []): Promise<ExtensionMessage> {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/portfolio/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ budget, banned_ea_ids }),
+      body: JSON.stringify({ budget, banned_ea_ids, exclude_card_types }),
     });
     if (!res.ok) {
       return {
