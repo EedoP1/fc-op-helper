@@ -4,11 +4,13 @@ Returns per-player trade status, cumulative stats, unrealized P&L,
 and summary totals in a single call (D-07).
 """
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from sqlalchemy import select, func, case
 
 from src.server.models_db import PortfolioSlot, TradeRecord, MarketSnapshot, PlayerRecord
+from src.server.api.profit import _parse_since
 from src.config import EA_TAX_RATE
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ HELD_STATUSES = {"BOUGHT", "LISTED"}
 
 
 @router.get("/portfolio/status")
-async def get_portfolio_status(request: Request):
+async def get_portfolio_status(request: Request, since: Optional[str] = Query(default=None)):
     """Return per-player trade status, cumulative stats, unrealized P&L, and summary totals.
 
     Queries portfolio_slots, trade_records, market_snapshots, and players tables.
@@ -37,6 +39,8 @@ async def get_portfolio_status(request: Request):
 
     Args:
         request: FastAPI Request (app.state carries session_factory).
+        since: Optional time filter (e.g. '1h', '24h', '7d', '30d', 'all').
+               Filters trade record aggregation only; status is always current.
 
     Returns:
         Dict with keys:
@@ -44,6 +48,7 @@ async def get_portfolio_status(request: Request):
             players: list of per-player dicts (ea_id, name, status, times_sold,
                      realized_profit, unrealized_pnl, buy_price, sell_price, current_bin)
     """
+    cutoff = _parse_since(since)
     session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
         # Query 1 — All active portfolio slots
@@ -65,7 +70,7 @@ async def get_portfolio_status(request: Request):
         ea_ids = [row.ea_id for row in slots]
 
         # Query 2 — Trade record aggregation per ea_id
-        agg_stmt = (
+        agg_base = (
             select(
                 TradeRecord.ea_id,
                 func.sum(
@@ -85,8 +90,10 @@ async def get_portfolio_status(request: Request):
                 ).label("expired_count"),
             )
             .where(TradeRecord.ea_id.in_(ea_ids))
-            .group_by(TradeRecord.ea_id)
         )
+        if cutoff is not None:
+            agg_base = agg_base.where(TradeRecord.recorded_at >= cutoff)
+        agg_stmt = agg_base.group_by(TradeRecord.ea_id)
         agg_result = await session.execute(agg_stmt)
         agg_rows = {row.ea_id: row for row in agg_result.all()}
 
