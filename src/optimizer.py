@@ -1,14 +1,13 @@
 """
 Portfolio optimizer.
 
-Selects the best players to fill the budget, maximizing total expected
-profit per hour.
+Selects the best players to fill the budget, maximizing total v3 score.
 
 Algorithm:
-1. Greedy fill by raw EPPH — pick the highest earners first.
+1. Greedy fill by score — pick the highest scored players first.
 2. Drop-and-backfill — if under 80 players, remove the most expensive
    player (ban it permanently), then backfill the freed budget with the
-   next-best EPPH players. Repeat until >= 80 or no progress.
+   next-best players. Repeat until >= 80 or no progress.
 3. Backfill any remaining budget slack.
 4. Upgrade loop — swap the weakest selected player for a stronger
    unselected player when the budget allows, excluding banned players.
@@ -17,47 +16,45 @@ Algorithm:
 from __future__ import annotations
 
 import logging
-import math
 
-from src.config import TARGET_PLAYER_COUNT, MIN_OP_OBSERVATIONS
+from src.config import TARGET_PLAYER_COUNT
 
 logger = logging.getLogger(__name__)
 
 _MIN_FILL_COUNT = 80  # trigger drop-and-backfill below this threshold
 
 
-def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
+def optimize_portfolio(
+    scored: list[dict],
+    budget: int,
+    exclude_card_types: list[str] | None = None,
+) -> list[dict]:
     """
     Select up to TARGET_PLAYER_COUNT players that fit within budget,
-    maximizing total expected profit per hour.
+    maximizing total weighted score.
 
-    Returns the selected list sorted by EPPH descending.
+    Args:
+        scored: List of scored player dicts.
+        budget: Total coin budget.
+        exclude_card_types: Card types to exclude (e.g. ["Team of the Week", "Rare"]).
+
+    Returns the selected list sorted by score descending.
     """
-    # Filter out players with no expected profit or OP sell rate below 4%
     before = len(scored)
     scored = [
         s for s in scored
         if (s.get("expected_profit_per_hour") or 0) > 0
-        and (s.get("op_ratio") or 0) >= 0.03
+        and (s.get("net_profit") or 0) >= 2000
     ]
-    logger.warning("OPTIMIZER v2: %d -> %d after EPPH + op_sell_rate filter", before, len(scored))
+    if exclude_card_types:
+        exclude_set = set(exclude_card_types)
+        scored = [s for s in scored if s.get("card_type") not in exclude_set]
+    logger.warning("OPTIMIZER v3: %d -> %d after filters (excl=%s)", before, len(scored), exclude_card_types)
 
-    # Compute ranking values with op_sales confidence boost.
-    # Confidence multiplier: log(1+op_sales) / log(1+MIN_OP_OBSERVATIONS)
-    # At minimum qualifying count (MIN_OP_OBSERVATIONS=3): multiplier = 1.0 (no boost)
-    # At 20 OP sales: ~2.2x, at 50: ~2.8x, at 100: ~3.3x
-    _log_min = math.log(1 + MIN_OP_OBSERVATIONS)
-    for s in scored:
-        epph = s.get("expected_profit_per_hour") or 0
-        s["efficiency"] = epph / s["buy_price"] if s["buy_price"] > 0 else 0
-        op_count = s.get("op_sales") or 0
-        confidence = math.log(1 + op_count) / _log_min if op_count > 0 else 1.0
-        s["_ranking_profit"] = epph * confidence
+    # Sort by score descending for greedy fill
+    scored.sort(key=lambda s: s.get("expected_profit_per_hour") or 0, reverse=True)
 
-    # Sort by EPPH descending for greedy fill
-    scored.sort(key=lambda s: s["_ranking_profit"], reverse=True)
-
-    # ── 1. Greedy fill by EPPH ───────────────────────────────────────────────
+    # ── 1. Greedy fill by score ──────────────────────────────────────────────
     selected: list[dict] = []
     total_used = 0
     used_ids: set[int] = set()
@@ -81,11 +78,9 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
     # ── 2. Drop-and-backfill: remove expensive players to free budget ────────
     drops = 0
     while len(selected) < _MIN_FILL_COUNT and selected:
-        # Find most expensive selected player
         exp_idx = max(range(len(selected)), key=lambda i: selected[i]["buy_price"])
         expensive = selected[exp_idx]
 
-        # Remove and ban
         freed = expensive["buy_price"]
         used_ids.discard(expensive["player"].resource_id)
         banned_ids.add(expensive["player"].resource_id)
@@ -93,7 +88,6 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
         total_used -= freed
         drops += 1
 
-        # Backfill freed budget with best available EPPH players
         remaining = budget - total_used
         added = 0
         for s in scored:
@@ -109,7 +103,6 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
                 remaining -= s["buy_price"]
                 added += 1
 
-        # No new players fit — stop to avoid stripping the portfolio empty
         if added == 0:
             break
 
@@ -138,20 +131,18 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
             break
         remaining = budget - total_used
 
-        # Find worst selected player by EPPH
-        worst_idx = min(range(len(selected)), key=lambda i: selected[i]["_ranking_profit"])
+        worst_idx = min(range(len(selected)), key=lambda i: selected[i].get("expected_profit_per_hour") or 0)
         worst = selected[worst_idx]
-        worst_epph = worst["_ranking_profit"]
+        worst_score = worst.get("expected_profit_per_hour") or 0
 
-        # Find best unselected player with higher EPPH that fits
         affordable = worst["buy_price"] + remaining
         best_upgrade = None
         for s in scored:
             pid = s["player"].resource_id
             if pid in used_ids or pid in banned_ids:
                 continue
-            if s["_ranking_profit"] <= worst_epph:
-                break  # sorted by EPPH desc, no better candidates
+            if (s.get("expected_profit_per_hour") or 0) <= worst_score:
+                break
             if s["buy_price"] <= affordable:
                 best_upgrade = s
                 break
@@ -159,7 +150,6 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
         if best_upgrade is None:
             break
 
-        # Swap: remove worst, add upgrade
         used_ids.discard(worst["player"].resource_id)
         total_used -= worst["buy_price"]
         selected.pop(worst_idx)
@@ -172,11 +162,6 @@ def optimize_portfolio(scored: list[dict], budget: int) -> list[dict]:
     if upgrades:
         logger.info("Upgrade loop: %d upgrades applied", upgrades)
 
-    # Sort final output by EPPH descending
     selected.sort(key=lambda s: s.get("expected_profit_per_hour") or 0, reverse=True)
-
-    # Remove internal key before returning
-    for s in selected:
-        s.pop("_ranking_profit", None)
 
     return selected

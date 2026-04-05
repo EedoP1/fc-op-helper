@@ -18,6 +18,10 @@ class GenerateRequest(BaseModel):
         default_factory=list,
         description="EA IDs to exclude from portfolio generation",
     )
+    exclude_card_types: list[str] = Field(
+        default_factory=list,
+        description="Card types to exclude (e.g. ['Trophy Titans ICON', 'Rare'])",
+    )
 
 
 class ConfirmPlayer(BaseModel):

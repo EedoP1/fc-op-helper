@@ -38,6 +38,7 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "name": record.name,
         "rating": record.rating,
         "position": record.position,
+        "card_type": record.card_type,
         "scan_tier": record.scan_tier,
         "last_scanned_at": record.last_scanned_at,
         "expected_profit_per_hour": score.expected_profit_per_hour,
