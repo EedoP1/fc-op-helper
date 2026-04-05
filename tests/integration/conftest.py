@@ -228,6 +228,32 @@ def real_ea_id(test_db_url):
     return asyncio.run(_query())
 
 
+@pytest.fixture(scope="session")
+def real_ea_ids(test_db_url):
+    """Return up to 5 real ea_ids from the cloned test data.
+
+    For tests that need multiple distinct players (concurrent removes,
+    batch operations, confirm-twice, etc.).
+    """
+    import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+
+    async def _query():
+        engine = create_async_engine(test_db_url)
+        async with engine.connect() as conn:
+            result = await conn.execute(text(
+                "SELECT ea_id FROM players "
+                "WHERE is_active = true "
+                "ORDER BY ea_id LIMIT 5"
+            ))
+            rows = result.fetchall()
+            await engine.dispose()
+            return [row[0] for row in rows]
+
+    return asyncio.run(_query())
+
+
 # -- Seed helper (real ea_id) --------------------------------------------------
 
 @pytest.fixture
