@@ -53,3 +53,30 @@ async def test_profit_summary_invalid_since(client):
     """GET /profit/summary?since=bogus returns 422."""
     r = await client.get("/api/v1/profit/summary", params={"since": "bogus"})
     assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"
+
+
+# -- Portfolio status since param ----------------------------------------------
+
+@pytest.mark.asyncio
+async def test_portfolio_status_since_param_accepted(client):
+    """GET /portfolio/status?since=7d returns 200 with correct response shape."""
+    r = await client.get("/api/v1/portfolio/status", params={"since": "7d"})
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert "summary" in body, f"Missing 'summary' key in response: {body}"
+    assert "players" in body, f"Missing 'players' key in response: {body}"
+
+    summary = body["summary"]
+    for key in ("realized_profit", "unrealized_pnl", "trade_counts"):
+        assert key in summary, f"Missing '{key}' in summary: {summary}"
+
+    counts = summary["trade_counts"]
+    for key in ("bought", "sold", "expired"):
+        assert key in counts, f"Missing '{key}' in trade_counts: {counts}"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_status_invalid_since(client):
+    """GET /portfolio/status?since=bogus returns 422."""
+    r = await client.get("/api/v1/portfolio/status", params={"since": "bogus"})
+    assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"
