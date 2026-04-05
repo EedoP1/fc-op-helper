@@ -80,3 +80,27 @@ async def test_portfolio_status_invalid_since(client):
     """GET /portfolio/status?since=bogus returns 422."""
     r = await client.get("/api/v1/portfolio/status", params={"since": "bogus"})
     assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"
+
+
+# -- Dashboard serving ---------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dashboard_serves_html(client):
+    """GET /dashboard returns HTML with Alpine.js."""
+    resp = await client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "alpinejs" in resp.text
+    assert "OP Seller Dashboard" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_profit_summary_includes_profit_rate_fields(client):
+    """Profit summary per_player entries include profit rate fields."""
+    resp = await client.get("/api/v1/profit/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    for player in data["per_player"]:
+        assert "profit_per_hour" in player
+        assert "first_buy_at" in player
+        assert "last_sell_at" in player
+        assert "active_hours" in player
