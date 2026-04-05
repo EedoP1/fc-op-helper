@@ -147,7 +147,7 @@ async def generate_portfolio(
             "budget_remaining": body.budget,
         }
 
-    selected = optimize_portfolio(scored_list, body.budget)
+    selected = optimize_portfolio(scored_list, body.budget, exclude_card_types=body.exclude_card_types or None)
     budget_used = sum(entry["buy_price"] for entry in selected)
 
     stale_cutoff = datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_HOURS)

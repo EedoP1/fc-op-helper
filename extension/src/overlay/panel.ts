@@ -119,6 +119,7 @@ export function createOverlayPanel(): OverlayPanel {
   let draftBudget = 0;
   let draftBudgetUsed = 0;
   let draftBudgetRemaining = 0;
+  let draftExcludedCardTypes: string[] = [];  // Persisted across draft regenerates
   let sortKey: SortKey = 'efficiency';
   let sortDir: SortDir = 'desc';
   let activeTab: 'actions' | 'portfolio' | 'dashboard' = 'actions';
@@ -802,6 +803,91 @@ export function createOverlayPanel(): OverlayPanel {
     });
     container.appendChild(input);
 
+    // ── Exclude card types ────────────────────────────────────────────────────
+    const excludeLabel = document.createElement('label');
+    excludeLabel.textContent = 'Exclude card types:';
+    Object.assign(excludeLabel.style, { color: '#aaa', fontSize: '12px', marginTop: '12px', display: 'block' });
+    container.appendChild(excludeLabel);
+
+    const CARD_TYPES = [
+      'Rare', 'Team of the Week', 'FUT Birthday', 'FUT Birthday Icon', 'FUT Birthday Hero',
+      'Trophy Titans ICON', 'Trophy Titans Hero', 'Star Performer', 'Fantasy UT', 'Fantasy UT Hero',
+      'FoF: Answer the Call', 'Knockout Royalty', 'Knockout Royalty Icon', 'Thunderstruck',
+      'Thunderstruck ICON', 'Winter Wildcards', 'Winter Wildcards Icon', 'Time Warp', 'Time Warp Icon',
+      'Unbreakables', 'Unbreakables Icon', 'Champion Icon', 'TOTY ICON',
+      'Future Stars', 'Future Stars Icon', 'Cornerstones', 'Joga Bonito', 'Joga Bonito Hero',
+      'TOTY Honourable Mentions', 'Ratings Reload',
+      'UCL Road to the Knockouts', 'UEFA Champions League Road to the Final',
+      'UEL Road to the Final', 'UECL Road to the Final',
+      'UEFA Women\'s Champions League Road to the Final',
+      'Festival of Football: Captains', 'Ultimate Scream Hero',
+    ];
+
+    const excludedTypes: Set<string> = new Set();
+
+    const excludeRow = document.createElement('div');
+    Object.assign(excludeRow.style, { display: 'flex', gap: '4px', marginTop: '4px' });
+
+    const excludeSelect = document.createElement('select');
+    Object.assign(excludeSelect.style, {
+      flex: '1',
+      background: '#2a2a3e',
+      color: '#ccc',
+      border: '1px solid #444',
+      borderRadius: '3px',
+      padding: '4px 6px',
+      fontSize: '12px',
+    });
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '+ Add exclusion...';
+    excludeSelect.appendChild(defaultOpt);
+    CARD_TYPES.forEach(ct => {
+      const opt = document.createElement('option');
+      opt.value = ct;
+      opt.textContent = ct;
+      excludeSelect.appendChild(opt);
+    });
+    excludeRow.appendChild(excludeSelect);
+    container.appendChild(excludeRow);
+
+    const excludeTags = document.createElement('div');
+    Object.assign(excludeTags.style, {
+      display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px', minHeight: '0',
+    });
+    container.appendChild(excludeTags);
+
+    function renderExcludeTags(): void {
+      excludeTags.innerHTML = '';
+      excludedTypes.forEach(ct => {
+        const tag = document.createElement('span');
+        tag.textContent = ct + ' ×';
+        Object.assign(tag.style, {
+          background: '#3a1a1a',
+          color: '#ff6b6b',
+          padding: '2px 8px',
+          borderRadius: '3px',
+          fontSize: '11px',
+          cursor: 'pointer',
+          border: '1px solid #ff6b6b44',
+        });
+        tag.addEventListener('click', () => {
+          excludedTypes.delete(ct);
+          renderExcludeTags();
+        });
+        excludeTags.appendChild(tag);
+      });
+    }
+
+    excludeSelect.addEventListener('change', () => {
+      if (excludeSelect.value) {
+        excludedTypes.add(excludeSelect.value);
+        excludeSelect.value = '';
+        renderExcludeTags();
+      }
+    });
+
+    // ── Generate button ─────────────────────────────────────────────────────────
     const loading = document.createElement('div');
     loading.textContent = 'Generating...';
     loading.style.display = 'none';
@@ -828,7 +914,9 @@ export function createOverlayPanel(): OverlayPanel {
         loading.textContent = `Generating... (${elapsed}s)`;
       }, 1000);
 
-      chrome.runtime.sendMessage({ type: 'PORTFOLIO_GENERATE', budget } satisfies ExtensionMessage)
+      draftExcludedCardTypes = excludedTypes.size > 0 ? [...excludedTypes] : [];
+      const exclude_card_types = draftExcludedCardTypes.length > 0 ? draftExcludedCardTypes : undefined;
+      chrome.runtime.sendMessage({ type: 'PORTFOLIO_GENERATE', budget, exclude_card_types } satisfies ExtensionMessage)
         .then((res: ExtensionMessage) => {
           clearInterval(timer);
           loading.style.display = 'none';
@@ -1019,6 +1107,7 @@ export function createOverlayPanel(): OverlayPanel {
             type: 'PORTFOLIO_GENERATE',
             budget: draftBudget,
             banned_ea_ids: [...removedEaIds],
+            exclude_card_types: draftExcludedCardTypes.length > 0 ? draftExcludedCardTypes : undefined,
           } satisfies ExtensionMessage)
             .then((res: ExtensionMessage) => {
               if (res.type === 'PORTFOLIO_GENERATE_RESULT') {
