@@ -240,6 +240,27 @@ export async function executeTransferListCycle(
     }
   }
 
+  // Step 5b — Report sold outcomes to backend
+  // Mirrors the expired TRADE_REPORT_BATCH above. ea_id=0 because name+rating
+  // resolution happens in the main loop (Plan 05); the backend accepts ea_id=0
+  // and uses it for profit tracking. Reporting here (before Phase B fetches
+  // actions_needed) ensures the backend marks the player as sold so it does NOT
+  // return a duplicate BUY action that would cause a double-rebuy via Phase C.
+  if (sold.length > 0) {
+    try {
+      await sendMessage({
+        type: 'TRADE_REPORT_BATCH',
+        reports: sold.map(item => ({
+          ea_id: 0, // Resolved by main loop via name+rating matching
+          price: item.price,
+          outcome: 'sold' as const,
+        })),
+      });
+    } catch {
+      console.warn('[transfer-list-cycle] TRADE_REPORT_BATCH failed for sold items');
+    }
+  }
+
   // Step 6 — Clear sold cards (D-02)
   let soldCleared = 0;
   if (sold.length > 0) {

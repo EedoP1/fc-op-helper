@@ -96,6 +96,13 @@ export async function runAutomationLoop(
   const signal = engine.getAbortSignal();
   const stopped = () => signal?.aborted ?? false;
 
+  // Price guard cooldown: tracks ea_ids that were skipped due to price being above guard,
+  // with the timestamp of the skip. Prevents retrying the same overpriced player on every
+  // outer cycle iteration — prices don't change that fast between consecutive scans.
+  // Cleared entry-by-entry when the cooldown window expires (5 minutes per player).
+  const PRICE_GUARD_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+  const priceGuardCooldown = new Map<number, number>(); // ea_id -> skippedAt ms
+
   try {
     while (!stopped()) {
       // ── Phase 0: Sweep unassigned pile for orphaned cards ────────────
@@ -186,6 +193,20 @@ export async function runAutomationLoop(
           await engine.log(`Cleared ${cycleResult.soldCleared} sold cards`);
         }
 
+        // Log profit for sold cards now that the transfer list cycle has reported
+        // them to the backend. Phase D rebuy is removed — the backend already
+        // returns action=BUY for sold players, so Phase C handles the rebuy.
+        // Profit tracking stays here so it isn't lost.
+        for (const soldItem of cycleResult.scanned.sold) {
+          // Match sold DOM item to a portfolio player by name (endsWith) + rating.
+          // actionsNeeded is not yet populated at this point, so we approximate
+          // buy_price as 0 for the log; backend tracks exact profit via trade records.
+          await engine.log(
+            `Sold: ${soldItem.playerName} (${soldItem.rating}) for ${soldItem.price.toLocaleString()} — rebuy queued via backend`,
+          );
+          engine.addProfit(soldItem.price); // gross proceeds; backend computes net
+        }
+
         await engine.setState('SCANNING', 'Transfer list cycle complete');
 
       } catch (err) {
@@ -233,7 +254,19 @@ export async function runAutomationLoop(
         await engine.log('DAILY_CAP_REQUEST failed — assuming not capped');
       }
 
-      const buyPlayers = actionsNeeded.filter(a => a.action === 'BUY');
+      // Purge expired cooldown entries before building the buy list.
+      const now = Date.now();
+      for (const [ea_id, skippedAt] of priceGuardCooldown) {
+        if (now - skippedAt >= PRICE_GUARD_COOLDOWN_MS) {
+          priceGuardCooldown.delete(ea_id);
+        }
+      }
+
+      // Filter out players still within their price-guard cooldown window so the outer
+      // loop does not retry players whose market price was already confirmed above guard.
+      const buyPlayers = actionsNeeded.filter(
+        a => a.action === 'BUY' && !priceGuardCooldown.has(a.ea_id),
+      );
       let outOfCoins = false;
 
       // D-36: Track transfer list occupancy — EA caps at 100 active listings.
@@ -364,6 +397,18 @@ export async function runAutomationLoop(
             } else {
               consecutiveFailures = 0;
             }
+
+            // Price-guard skip: market price is above our tolerance. Record a cooldown
+            // so this player is not retried on the next outer cycle iteration. Without
+            // this, the backend returns the same BUY list every cycle (no trade record
+            // is written for a skip), causing the loop to retry overpriced players
+            // indefinitely instead of moving on to unprocessed players.
+            const isPriceGuard = result.reason.toLowerCase().includes('price guard')
+              || result.reason.toLowerCase().includes('above guard');
+            if (isPriceGuard) {
+              priceGuardCooldown.set(player.ea_id, Date.now());
+            }
+
             await engine.setLastEvent(`Skipped ${player.name}: ${result.reason}`);
           } else if (result.outcome === 'error') {
             consecutiveFailures++;
@@ -404,144 +449,6 @@ export async function runAutomationLoop(
         await engine.log('Daily cap reached — skipping buy phase');
       } else if (buyPlayers.length === 0) {
         await engine.log(`No BUY actions from backend (TL: ${transferListCount}/${EA_TRANSFER_LIST_MAX}, ${actionsNeeded.length} total actions)`);
-      }
-
-      if (stopped()) return;
-
-      // ── Phase D: Handle sold players — rebuy (D-14, D-15) ─────────────────
-
-      if (cycleResult && cycleResult.scanned.sold.length > 0 && !outOfCoins) {
-        // Re-check daily cap before rebuy phase
-        let cappedForRebuy = false;
-        try {
-          const capRebuyRes = await sendMessage({ type: 'DAILY_CAP_REQUEST' } satisfies ExtensionMessage);
-          if (capRebuyRes && capRebuyRes.type === 'DAILY_CAP_RESULT') {
-            cappedForRebuy = capRebuyRes.capped === true;
-          }
-        } catch { /* ignore */ }
-
-        if (!cappedForRebuy) {
-          for (const soldItem of cycleResult.scanned.sold) {
-            if (stopped()) return;
-
-            // Match sold DOM item to a portfolio player by name (endsWith) + rating
-            const domName = soldItem.playerName.toLowerCase();
-            const matched = actionsNeeded.find(a =>
-              a.name.toLowerCase().endsWith(domName) && a.rating === soldItem.rating,
-            );
-
-            if (!matched) {
-              await engine.log(`Sold item not in portfolio: ${soldItem.playerName} — skipping rebuy`);
-              // Report the sale even without a matched ea_id if we have a listing ea_id
-              // ea_id=0 here since we can't match; backend will ignore or log
-              try {
-                await sendMessage({
-                  type: 'TRADE_REPORT',
-                  ea_id: 0,
-                  price: soldItem.price,
-                  outcome: 'sold',
-                } satisfies ExtensionMessage);
-              } catch { /* unmatched sale — best effort */ }
-              continue;
-            }
-
-            // Report the sale (D-30) — await so backend state is current
-            try {
-              await sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: matched.ea_id,
-                price: soldItem.price,
-                outcome: 'sold',
-              } satisfies ExtensionMessage);
-            } catch {
-              await engine.log(`Sale report failed for ${matched.name}`);
-            }
-
-            // Track profit (approximate — EA tax applied backend-side per D-14)
-            const approxProfit = soldItem.price - matched.buy_price;
-            engine.addProfit(approxProfit);
-
-            await engine.log(
-              `Sold: ${matched.name} for ${soldItem.price.toLocaleString()} (approx profit: ${approxProfit.toLocaleString()})`,
-            );
-
-            // D-14: Fetch fresh price and rebuy
-            let rebuyPlayer = { ...matched };
-            try {
-              const priceRes = await sendMessage({
-                type: 'FRESH_PRICE_REQUEST',
-                ea_id: matched.ea_id,
-              } satisfies ExtensionMessage);
-              if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
-                rebuyPlayer = {
-                  ...matched,
-                  buy_price: priceRes.buy_price,
-                  sell_price: priceRes.sell_price,
-                };
-              }
-            } catch {
-              await engine.log(`Fresh price unavailable for rebuy of ${matched.name}`);
-            }
-
-            // D-36: Check transfer list space before rebuy
-            if (transferListCount >= EA_TRANSFER_LIST_MAX) {
-              await engine.log(`Transfer list full — skipping rebuy of ${matched.name}`);
-              continue;
-            }
-
-            await engine.setState('BUYING', `Rebuying: ${matched.name}`);
-            const rebuyResult = await executeBuyCycle(rebuyPlayer, sendMessage);
-
-            if (rebuyResult.outcome === 'bought') {
-              transferListCount++;  // D-36: track new listing
-              await engine.setLastEvent(
-                `Rebought ${matched.name} for ${rebuyResult.buyPrice.toLocaleString()}`,
-              );
-              try {
-                await sendMessage({
-                  type: 'TRADE_REPORT',
-                  ea_id: matched.ea_id,
-                  price: rebuyResult.buyPrice,
-                  outcome: 'bought',
-                } satisfies ExtensionMessage);
-                await sendMessage({
-                  type: 'TRADE_REPORT',
-                  ea_id: matched.ea_id,
-                  price: rebuyPlayer.sell_price,
-                  outcome: 'listed',
-                } satisfies ExtensionMessage);
-              } catch {
-                await engine.log(`Trade report failed for rebuy of ${matched.name}`);
-              }
-            } else if (rebuyResult.outcome === 'error') {
-              // Check for critical failures
-              const isAutomationFailure =
-                rebuyResult.reason.includes('DOM mismatch') ||
-                rebuyResult.reason.includes('CAPTCHA') ||
-                rebuyResult.reason.includes('Timeout waiting');
-              if (isAutomationFailure) {
-                if (isSessionExpired()) {
-                  await engine.setError('EA session expired — please log in and restart automation');
-                  return;
-                }
-                await engine.setError(rebuyResult.reason);
-                return;
-              }
-              if (isInsufficientCoinsError(rebuyResult.reason)) {
-                outOfCoins = true;
-                await engine.log('Out of coins during rebuy — stopping buy phase');
-                break;
-              }
-              await engine.log(`Rebuy error for ${matched.name}: ${rebuyResult.reason}`);
-            } else {
-              await engine.log(`Rebuy skipped for ${matched.name}: ${rebuyResult.reason}`);
-            }
-
-            if (!stopped()) {
-              await jitter();
-            }
-          }
-        }
       }
 
       if (stopped()) return;
