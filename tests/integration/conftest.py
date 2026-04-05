@@ -95,6 +95,16 @@ def test_db_url() -> str:
 
 # -- Live server (API + Scanner via Docker Compose) ----------------------------
 
+def _api_is_healthy() -> bool:
+    """Check if the test API is already running and healthy."""
+    try:
+        r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=2.0)
+        return r.status_code == 200
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+            httpx.TimeoutException, httpx.RemoteProtocolError):
+        return False
+
+
 @pytest.fixture(scope="session", autouse=True)
 def live_server(test_db_url):
     """Start API and scanner via Docker Compose with test override (D-07, D-08).
@@ -103,11 +113,23 @@ def live_server(test_db_url):
     event loop scoping issue where session-scoped async fixtures fail because
     pytest-asyncio defaults to function-scoped event loops.
 
+    If the API is already healthy on the test port, skips the Docker build/start
+    to avoid unnecessary rebuilds and container recreation. This makes repeated
+    test runs fast during development.
+
     Uses docker-compose.test.yml override which:
     - Points DATABASE_URL at postgres-test service (Docker DNS, not localhost)
     - Maps API to host port 8001 (avoids prod conflict)
     - Sets restart: "no" (tests should not auto-restart on failure)
     """
+    already_running = _api_is_healthy()
+
+    if already_running:
+        # API is already up — skip Docker build/start entirely
+        yield
+        # Don't tear down containers we didn't start
+        return
+
     # Build and start api + scanner containers (postgres-test should already be running)
     subprocess.run(
         _compose_cmd("up", "-d", "--build", "api", "scanner"),
@@ -117,12 +139,8 @@ def live_server(test_db_url):
     # Phase 1: Wait for API HTTP health endpoint to respond with 200
     # Allow up to 180s — Docker build can take 60-90s before the container starts
     for i in range(1800):
-        try:
-            r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=2.0)
-            if r.status_code == 200:
-                break
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException, httpx.RemoteProtocolError):
-            pass
+        if _api_is_healthy():
+            break
         time.sleep(0.1)
     else:
         # Dump logs for debugging before tearing down
@@ -133,26 +151,24 @@ def live_server(test_db_url):
             "Check Docker Compose logs above."
         )
 
-    # Phase 2: Wait for scanner to write first scanner_status row (Warning 2).
-    # The scanner needs ~30s to complete its first dispatch cycle and upsert
-    # scanner_status. Without this wait, tests checking health response fields
-    # would see scanner_status="unknown" intermittently.
-    for i in range(900):  # 90 seconds max
+    # Phase 2: Wait for scanner to write first scanner_status row.
+    # Cap at 30s — this is best-effort. Tests that need scanner data
+    # should handle scanner_status="unknown" gracefully.
+    for i in range(300):  # 30 seconds max
         try:
             r = httpx.get(f"{TEST_API_BASE}/api/v1/health", timeout=2.0)
             if r.status_code == 200:
                 data = r.json()
                 if data.get("scanner_status") != "unknown":
                     break
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException, httpx.RemoteProtocolError):
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                httpx.TimeoutException, httpx.RemoteProtocolError):
             pass
         time.sleep(0.1)
     else:
-        # Scanner didn't write status in 90s -- warn but don't fail.
-        # Tests that check scanner health fields may see "unknown".
         import warnings
         warnings.warn(
-            "Scanner did not write scanner_status within 90s. "
+            "Scanner did not write scanner_status within 30s. "
             "Health endpoint may return 'unknown' for scanner fields.",
             stacklevel=2,
         )
@@ -189,8 +205,9 @@ async def client(base_url):
 def real_ea_id(test_db_url):
     """Return a real ea_id from the cloned test data.
 
-    Queries player_scores for a viable active player. With the full cloned
-    dataset this should always return a valid ea_id.
+    Queries players table for any active player. Tests that use this fixture
+    seed their own portfolio slots with custom prices, so viability doesn't
+    matter — we just need a valid ea_id that exists in the DB.
     """
     import asyncio
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -200,10 +217,9 @@ def real_ea_id(test_db_url):
         engine = create_async_engine(test_db_url)
         async with engine.connect() as conn:
             result = await conn.execute(text(
-                "SELECT ps.ea_id FROM player_scores ps "
-                "JOIN players pr ON pr.ea_id = ps.ea_id "
-                "WHERE ps.is_viable = true AND pr.is_active = true "
-                "ORDER BY ps.efficiency DESC LIMIT 1"
+                "SELECT ea_id FROM players "
+                "WHERE is_active = true "
+                "ORDER BY ea_id LIMIT 1"
             ))
             row = result.first()
             await engine.dispose()
