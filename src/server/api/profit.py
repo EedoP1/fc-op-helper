@@ -43,7 +43,7 @@ def _parse_since(since: Optional[str]) -> Optional[datetime]:
     if since is None or since == "all":
         return None
     if since in _SINCE_OFFSETS:
-        return datetime.now(timezone.utc) - _SINCE_OFFSETS[since]
+        return datetime.now(timezone.utc).replace(tzinfo=None) - _SINCE_OFFSETS[since]
     raise HTTPException(
         status_code=422,
         detail=f"Invalid since value '{since}'. Must be one of: 1h, 24h, 7d, 30d, all",

@@ -712,34 +712,24 @@ function dashboard() {
 
     async fetchProfit() {
       const data = await this._fetch('/api/v1/profit/summary' + this._sinceParam(this.filters.profit));
-      if (data) {
-        this.profitData = {
-          totals: data.totals || {},
-          per_player: data.per_player || [],
-        };
-      }
+      this.profitData = data
+        ? { totals: data.totals || {}, per_player: data.per_player || [] }
+        : { totals: {}, per_player: [] };
     },
 
     async fetchStale(source) {
-      // Use the filter for whichever section was just changed
       const filterValue = source === 'unsold' ? this.filters.staleUnsold : this.filters.staleAvg;
       const data = await this._fetch('/api/v1/portfolio/stale' + this._sinceParam(filterValue));
-      if (data) {
-        this.staleData = {
-          longest_unsold: data.longest_unsold || [],
-          avg_sale_time: data.avg_sale_time || [],
-        };
-      }
+      this.staleData = data
+        ? { longest_unsold: data.longest_unsold || [], avg_sale_time: data.avg_sale_time || [] }
+        : { longest_unsold: [], avg_sale_time: [] };
     },
 
     async fetchPortfolio() {
       const data = await this._fetch('/api/v1/portfolio/status' + this._sinceParam(this.filters.portfolio));
-      if (data) {
-        this.portfolioData = {
-          summary: data.summary || {},
-          players: data.players || [],
-        };
-      }
+      this.portfolioData = data
+        ? { summary: data.summary || {}, players: data.players || [] }
+        : { summary: {}, players: [] };
     },
 
     async fetchHealth() {
