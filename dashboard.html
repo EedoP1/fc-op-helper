@@ -554,6 +554,42 @@
   </div>
 </div>
 
+<!-- ═══ Tab 5: Recent Sales ═══ -->
+<div x-show="activeTab === 'recent'" x-cloak>
+  <div class="time-filter">
+    <template x-for="opt in sinceOptions" :key="'recent-' + opt.label">
+      <button :class="{ active: filters.recent === opt.value }"
+              @click="filters.recent = opt.value; fetchRecent()"
+              x-text="opt.label"></button>
+    </template>
+  </div>
+  <h3 class="section-title">Recent Sales</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('recent', 'name')">Name <span class="sort-arrow" x-text="sortArrow('recent', 'name')"></span></th>
+          <th @click="sortTable('recent', 'buy_price')">Buy Price <span class="sort-arrow" x-text="sortArrow('recent', 'buy_price')"></span></th>
+          <th @click="sortTable('recent', 'sell_price')">Sell Price <span class="sort-arrow" x-text="sortArrow('recent', 'sell_price')"></span></th>
+          <th @click="sortTable('recent', 'profit')">Profit <span class="sort-arrow" x-text="sortArrow('recent', 'profit')"></span></th>
+          <th @click="sortTable('recent', 'sold_at')">Time <span class="sort-arrow" x-text="sortArrow('recent', 'sold_at')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="s in sorted('recent')" :key="s.ea_id + '-' + s.sold_at">
+          <tr>
+            <td x-text="s.name"></td>
+            <td x-text="fmt(s.buy_price)"></td>
+            <td x-text="fmt(s.sell_price)"></td>
+            <td :class="s.profit >= 0 ? 'text-green' : 'text-red'" x-text="fmt(s.profit)"></td>
+            <td x-text="timeAgo(s.sold_at)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 </div><!-- .content -->
 
 <script>
@@ -566,6 +602,7 @@ function dashboard() {
       { id: 'stale', label: 'Stale Cards' },
       { id: 'portfolio', label: 'Portfolio' },
       { id: 'scanner', label: 'Scanner' },
+      { id: 'recent', label: 'Recent Sales' },
     ],
     sinceOptions: [
       { value: '1h', label: '1h' },
@@ -579,6 +616,7 @@ function dashboard() {
       staleUnsold: null,
       staleAvg: null,
       portfolio: null,
+      recent: null,
     },
     profitData: { totals: {}, per_player: [] },
     staleData: { longest_unsold: [], avg_sale_time: [] },
@@ -586,6 +624,7 @@ function dashboard() {
     health: {},
     dailyCap: { count: 0, cap: 500 },
     scoredPlayers: [],
+    recentSales: [],
     sortState: {
       profitters: { col: 'realized_profit', dir: 'desc' },
       profitRate: { col: 'profit_per_hour', dir: 'desc' },
@@ -593,6 +632,7 @@ function dashboard() {
       avgSale: { col: 'avg_hours_between_sales', dir: 'desc' },
       portfolio: { col: 'name', dir: 'asc' },
       scored: { col: 'efficiency', dir: 'desc' },
+      recent: { col: 'sold_at', dir: 'desc' },
     },
     lastUpdated: null,
 
@@ -682,6 +722,7 @@ function dashboard() {
         avgSale: this.staleData.avg_sale_time,
         portfolio: this.portfolioData.players,
         scored: this.scoredPlayers,
+        recent: this.recentSales,
       };
       const arr = dataMap[tableName] || [];
       const st = this.sortState[tableName];
@@ -747,6 +788,11 @@ function dashboard() {
       if (data) this.scoredPlayers = data.data || [];
     },
 
+    async fetchRecent() {
+      const data = await this._fetch('/api/v1/trades/recent' + this._sinceParam(this.filters.recent));
+      this.recentSales = data ? (data.sales || []) : [];
+    },
+
     async refreshAll() {
       await Promise.all([
         this.fetchProfit(),
@@ -755,6 +801,7 @@ function dashboard() {
         this.fetchHealth(),
         this.fetchDailyCap(),
         this.fetchScored(),
+        this.fetchRecent(),
       ]);
       this.lastUpdated = new Date().toISOString();
     },
