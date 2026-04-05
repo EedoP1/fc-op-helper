@@ -18,27 +18,12 @@ import pytest
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _get_real_players(client, count: int = 3) -> list[dict]:
-    """Call POST /portfolio/generate to get real scored players.
-
-    Returns a list of player dicts (ea_id, price, sell_price).
-    """
-    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
-    assert r.status_code == 200, f"generate failed: {r.status_code} {r.text}"
-    body = r.json()
-    return body["data"][:count]
-
-
-async def _confirm_players(client, players: list[dict]) -> None:
-    """Seed portfolio via POST /portfolio/confirm."""
+async def _confirm_ea_ids(client, ea_ids: list[int], buy_price: int = 50000, sell_price: int = 70000) -> None:
+    """Seed portfolio via POST /portfolio/confirm with fixed prices."""
     confirm_payload = {
         "players": [
-            {
-                "ea_id": p["ea_id"],
-                "buy_price": p["price"],
-                "sell_price": p["sell_price"],
-            }
-            for p in players
+            {"ea_id": eid, "buy_price": buy_price, "sell_price": sell_price}
+            for eid in ea_ids
         ]
     }
     r = await client.post("/api/v1/portfolio/confirm", json=confirm_payload)
@@ -48,7 +33,7 @@ async def _confirm_players(client, players: list[dict]) -> None:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_rebalance_normal_flow(client):
+async def test_rebalance_normal_flow(client, real_ea_ids):
     """POST /portfolio/rebalance with budget > sum(existing) keeps players and fills new.
 
     Verifies:
@@ -58,14 +43,13 @@ async def test_rebalance_normal_flow(client):
     - budget_remaining = budget - budget_used
     - Response has kept, new, dropped, budget, budget_used, budget_remaining keys
     """
-    players = await _get_real_players(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    buy_price = 50000
 
     # Confirm 2 players into portfolio
-    await _confirm_players(client, players[:2])
-    confirmed_ea_ids = {p["ea_id"] for p in players[:2]}
-    confirmed_cost = sum(p["price"] for p in players[:2])
+    await _confirm_ea_ids(client, real_ea_ids[:2])
+    confirmed_ea_ids = set(real_ea_ids[:2])
+    confirmed_cost = buy_price * 2
 
     # Rebalance with a large budget (much more than confirmed cost)
     large_budget = max(confirmed_cost * 5, 2_000_000)
@@ -112,17 +96,14 @@ async def test_rebalance_normal_flow(client):
 
 
 @pytest.mark.asyncio
-async def test_rebalance_no_duplicates(client):
+async def test_rebalance_no_duplicates(client, real_ea_ids):
     """Kept players' ea_ids do not appear in the new candidates (no duplicates).
 
     After seeding 2 players and rebalancing, ea_ids in 'new' must not
     overlap with ea_ids in 'kept'.
     """
-    players = await _get_real_players(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
-
-    await _confirm_players(client, players[:2])
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    await _confirm_ea_ids(client, real_ea_ids[:2])
 
     r = await client.post("/api/v1/portfolio/rebalance", json={"budget": 2_000_000})
     assert r.status_code == 200, f"rebalance failed: {r.status_code} {r.text}"
@@ -139,13 +120,10 @@ async def test_rebalance_no_duplicates(client):
 
 
 @pytest.mark.asyncio
-async def test_rebalance_budget_accounting(client):
+async def test_rebalance_budget_accounting(client, real_ea_ids):
     """budget_used = sum(kept prices) + sum(new prices), budget_remaining = budget - budget_used."""
-    players = await _get_real_players(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
-
-    await _confirm_players(client, players[:2])
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    await _confirm_ea_ids(client, real_ea_ids[:2])
 
     budget = 2_000_000
     r = await client.post("/api/v1/portfolio/rebalance", json={"budget": budget})
@@ -174,24 +152,19 @@ async def test_rebalance_budget_accounting(client):
 
 
 @pytest.mark.asyncio
-async def test_rebalance_budget_too_small_drops_expensive(client):
+async def test_rebalance_budget_too_small_drops_expensive(client, real_ea_ids):
     """POST /portfolio/rebalance with budget < existing portfolio drops least efficient players.
 
     Seeds 2 players, then rebalances with a tiny budget (less than sum of both).
     Expects some to be in 'dropped', the rest in 'kept', budget math still correct.
     """
-    players = await _get_real_players(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    buy_price = 50000
+    await _confirm_ea_ids(client, real_ea_ids[:2], buy_price=buy_price)
 
-    await _confirm_players(client, players[:2])
-
-    # Budget smaller than total cost of both players but larger than the cheapest
-    total_cost = sum(p["price"] for p in players[:2])
-    min_price = min(p["price"] for p in players[:2])
-
-    # Set budget to just a little more than the cheapest player but less than both
-    tiny_budget = min_price + 1
+    # Budget smaller than total cost of both players but larger than one
+    total_cost = buy_price * 2
+    tiny_budget = buy_price + 1
 
     r = await client.post("/api/v1/portfolio/rebalance", json={"budget": tiny_budget})
     assert r.status_code == 200, f"rebalance failed: {r.status_code} {r.text}"
@@ -258,17 +231,14 @@ async def test_rebalance_empty_portfolio_all_new(client):
 
 
 @pytest.mark.asyncio
-async def test_rebalance_response_player_fields(client):
+async def test_rebalance_response_player_fields(client, real_ea_ids):
     """Response kept and new arrays have required player fields.
 
     Each player dict in kept/new/dropped must have: ea_id, name, rating,
     position, price, sell_price, margin_pct.
     """
-    players = await _get_real_players(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    await _confirm_players(client, players[:1])
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    await _confirm_ea_ids(client, real_ea_ids[:1])
 
     r = await client.post("/api/v1/portfolio/rebalance", json={"budget": 2_000_000})
     assert r.status_code == 200, f"rebalance failed: {r.status_code} {r.text}"

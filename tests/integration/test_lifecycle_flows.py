@@ -15,25 +15,6 @@ import pytest
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _get_real_ea_ids(client, count: int = 3) -> list[dict]:
-    """Call POST /portfolio/generate to get real scored players.
-
-    Returns a list of player dicts (ea_id, price, sell_price) from the
-    real scored DB. If generate returns an empty list (no viable players),
-    the caller should skip the test.
-
-    Args:
-        client: async httpx client pointed at the live server.
-        count:  maximum number of players to return.
-
-    Returns:
-        List of player dicts (may be shorter than count if DB has fewer).
-    """
-    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
-    assert r.status_code == 200, f"generate failed: {r.status_code} {r.text}"
-    body = r.json()
-    return body["data"][:count]
-
 
 async def _seed_slot(client, ea_id: int, buy_price: int, sell_price: int) -> None:
     """Seed a single portfolio slot via POST /portfolio/slots."""
@@ -73,7 +54,7 @@ async def _complete(client, action_id: int, outcome: str, price: int) -> dict:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_full_buy_list_sold_cycle(client):
+async def test_full_buy_list_sold_cycle(client, real_ea_ids):
     """BUY -> bought -> LIST -> sold -> next BUY confirmed by /actions/pending (D-07, D-10).
 
     This exercises the happy-path full trade cycle that the extension
@@ -87,14 +68,10 @@ async def test_full_buy_list_sold_cycle(client):
       7. GET /portfolio/status -> player status SOLD
       8. GET /profit/summary -> net_profit != 0
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB — cannot run lifecycle test")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -165,21 +142,17 @@ async def test_full_buy_list_sold_cycle(client):
 
 
 @pytest.mark.asyncio
-async def test_buy_list_expired_relist_cycle(client):
+async def test_buy_list_expired_relist_cycle(client, real_ea_ids):
     """BUY -> bought -> LIST -> expired -> RELIST -> listed -> waiting (D-10).
 
     Tests the expired/relist branch of the lifecycle state machine:
       - expired leads to RELIST action
       - after relist completes with listed, card is on market (no more actions)
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -215,20 +188,16 @@ async def test_buy_list_expired_relist_cycle(client):
 
 
 @pytest.mark.asyncio
-async def test_listed_means_waiting(client):
+async def test_listed_means_waiting(client, real_ea_ids):
     """After BUY+bought+LIST+listed, no more actions should be pending (D-10).
 
     When the most recent trade record is 'listed', the card is on the
     transfer market. The server must return null from /actions/pending.
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -251,20 +220,16 @@ async def test_listed_means_waiting(client):
 
 
 @pytest.mark.asyncio
-async def test_direct_trade_record_advances_lifecycle(client):
+async def test_direct_trade_record_advances_lifecycle(client, real_ea_ids):
     """POST /trade-records/direct with outcome=bought should derive LIST next.
 
     Direct records bypass the action queue — used for bootstrap when the
     extension scans the Transfer List before any actions exist.
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -291,21 +256,17 @@ async def test_direct_trade_record_advances_lifecycle(client):
 
 
 @pytest.mark.asyncio
-async def test_direct_trade_record_deduplication(client):
+async def test_direct_trade_record_deduplication(client, real_ea_ids):
     """POST /trade-records/direct twice with same outcome returns deduplicated=True.
 
     Server-side dedup: if the latest trade record has the same outcome as
     the new request, return deduplicated=True and trade_record_id=-1.
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
 
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-
-    await _seed_slot(client, ea_id, buy_price, p["sell_price"])
+    await _seed_slot(client, ea_id, buy_price, 70000)
 
     # First direct record: bought
     r = await client.post(
@@ -335,7 +296,7 @@ async def test_direct_trade_record_deduplication(client):
 
 
 @pytest.mark.asyncio
-async def test_batch_trade_records_mixed(client):
+async def test_batch_trade_records_mixed(client, real_ea_ids):
     """POST /trade-records/batch with 2 valid + 1 invalid ea_id handles partial failures.
 
     The batch endpoint must:
@@ -343,12 +304,9 @@ async def test_batch_trade_records_mixed(client):
     - fail for invalid ea_ids (not in portfolio or invalid outcome)
     - return succeeded and failed arrays
     """
-    players = await _get_real_ea_ids(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
-
-    ea_id_1 = players[0]["ea_id"]
-    ea_id_2 = players[1]["ea_id"]
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    ea_id_1 = real_ea_ids[0]
+    ea_id_2 = real_ea_ids[1]
     invalid_ea_id = 999_999_999
 
     # Seed both valid slots
@@ -358,14 +316,14 @@ async def test_batch_trade_records_mixed(client):
             "slots": [
                 {
                     "ea_id": ea_id_1,
-                    "buy_price": players[0]["price"],
-                    "sell_price": players[0]["sell_price"],
+                    "buy_price": 50000,
+                    "sell_price": 70000,
                     "player_name": f"Player {ea_id_1}",
                 },
                 {
                     "ea_id": ea_id_2,
-                    "buy_price": players[1]["price"],
-                    "sell_price": players[1]["sell_price"],
+                    "buy_price": 50000,
+                    "sell_price": 70000,
                     "player_name": f"Player {ea_id_2}",
                 },
             ]
@@ -378,8 +336,8 @@ async def test_batch_trade_records_mixed(client):
         "/api/v1/trade-records/batch",
         json={
             "records": [
-                {"ea_id": ea_id_1, "price": players[0]["price"], "outcome": "bought"},
-                {"ea_id": ea_id_2, "price": players[1]["price"], "outcome": "bought"},
+                {"ea_id": ea_id_1, "price": 50000, "outcome": "bought"},
+                {"ea_id": ea_id_2, "price": 50000, "outcome": "bought"},
                 {"ea_id": invalid_ea_id, "price": 50000, "outcome": "bought"},
             ]
         },
@@ -400,20 +358,16 @@ async def test_batch_trade_records_mixed(client):
 
 
 @pytest.mark.asyncio
-async def test_batch_trade_records_dedup(client):
+async def test_batch_trade_records_dedup(client, real_ea_ids):
     """Batch record for same ea_id+outcome that was already direct-recorded is deduped.
 
     Dedup should be success: the batch endpoint treats deduplicated records
     as succeeded (not failed). Lifecycle must be unaffected.
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -449,18 +403,17 @@ async def test_batch_trade_records_dedup(client):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_status_reflects_lifecycle(client):
+async def test_portfolio_status_reflects_lifecycle(client, real_ea_ids):
     """GET /portfolio/status status field reflects the most recent trade record (D-07).
 
     Seeds 2 slots, drives slot1 to BOUGHT and slot2 to SOLD.
     Verifies the status endpoint reports the correct per-player status.
     """
-    players = await _get_real_ea_ids(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players in DB")
-
-    p1 = players[0]
-    p2 = players[1]
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    slot1_ea_id = real_ea_ids[0]
+    slot2_ea_id = real_ea_ids[1]
+    buy_price = 50000
+    sell_price = 70000
 
     # Seed both slots at once
     r = await client.post(
@@ -468,16 +421,16 @@ async def test_portfolio_status_reflects_lifecycle(client):
         json={
             "slots": [
                 {
-                    "ea_id": p1["ea_id"],
-                    "buy_price": p1["price"],
-                    "sell_price": p1["sell_price"],
-                    "player_name": f"Player {p1['ea_id']}",
+                    "ea_id": slot1_ea_id,
+                    "buy_price": buy_price,
+                    "sell_price": sell_price,
+                    "player_name": f"Player {slot1_ea_id}",
                 },
                 {
-                    "ea_id": p2["ea_id"],
-                    "buy_price": p2["price"],
-                    "sell_price": p2["sell_price"],
-                    "player_name": f"Player {p2['ea_id']}",
+                    "ea_id": slot2_ea_id,
+                    "buy_price": buy_price,
+                    "sell_price": sell_price,
+                    "player_name": f"Player {slot2_ea_id}",
                 },
             ]
         },
@@ -489,11 +442,9 @@ async def test_portfolio_status_reflects_lifecycle(client):
     # slots without ORDER BY), so we consume actions by ea_id rather than
     # assuming a fixed order.
     prices = {
-        p1["ea_id"]: {"buy": p1["price"], "sell": p1["sell_price"]},
-        p2["ea_id"]: {"buy": p2["price"], "sell": p2["sell_price"]},
+        slot1_ea_id: {"buy": buy_price, "sell": sell_price},
+        slot2_ea_id: {"buy": buy_price, "sell": sell_price},
     }
-    slot1_ea_id = p1["ea_id"]
-    slot2_ea_id = p2["ea_id"]
 
     # Track per-slot state so we know when we're done
     bought = set()   # ea_ids that have been bought
@@ -557,7 +508,7 @@ async def test_portfolio_status_reflects_lifecycle(client):
 
 
 @pytest.mark.asyncio
-async def test_profit_summary_after_full_cycle(client):
+async def test_profit_summary_after_full_cycle(client, real_ea_ids):
     """GET /profit/summary after buy+sold cycle returns correct totals.
 
     Uses buy_price=50000, sell_price=70000.
@@ -566,12 +517,8 @@ async def test_profit_summary_after_full_cycle(client):
       total_earned = int(70000 * 0.95)  = 66500
       net_profit   = 66500 - 50000      = 16500
     """
-    players = await _get_real_ea_ids(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
     buy_price = 50_000
     sell_price = 70_000
 
@@ -608,24 +555,19 @@ async def test_profit_summary_after_full_cycle(client):
 
 
 @pytest.mark.asyncio
-async def test_confirm_then_lifecycle(client):
+async def test_confirm_then_lifecycle(client, real_ea_ids):
     """POST /portfolio/confirm seeds portfolio; GET /actions/pending derives BUY.
 
-    Two-step flow: generate -> confirm -> get pending action.
     After confirm, the portfolio is seeded and the action queue should
     derive BUY for the first slot.
     """
-    # Generate
-    r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
-    assert r.status_code == 200
-    gen_body = r.json()
-    assert gen_body["count"] > 0, "No players generated — cannot test confirm flow"
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
+    ea_ids = real_ea_ids[:2]
 
-    players = gen_body["data"][:2]
     confirm_payload = {
         "players": [
-            {"ea_id": p["ea_id"], "buy_price": p["price"], "sell_price": p["sell_price"]}
-            for p in players
+            {"ea_id": eid, "buy_price": 50000, "sell_price": 70000}
+            for eid in ea_ids
         ]
     }
 
@@ -633,8 +575,8 @@ async def test_confirm_then_lifecycle(client):
     r = await client.post("/api/v1/portfolio/confirm", json=confirm_payload)
     assert r.status_code == 200, f"confirm failed: {r.status_code} {r.text}"
     conf_body = r.json()
-    assert conf_body["confirmed"] == len(players), (
-        f"Expected confirmed={len(players)}, got {conf_body['confirmed']}"
+    assert conf_body["confirmed"] == len(ea_ids), (
+        f"Expected confirmed={len(ea_ids)}, got {conf_body['confirmed']}"
     )
     assert conf_body["status"] == "ok"
 
@@ -642,8 +584,8 @@ async def test_confirm_then_lifecycle(client):
     r = await client.get("/api/v1/portfolio/confirmed")
     assert r.status_code == 200
     confirmed_body = r.json()
-    assert confirmed_body["count"] == len(players), (
-        f"Expected {len(players)} confirmed slots, got {confirmed_body['count']}"
+    assert confirmed_body["count"] == len(ea_ids), (
+        f"Expected {len(ea_ids)} confirmed slots, got {confirmed_body['count']}"
     )
 
     # GET /actions/pending -> should derive BUY for first slot
@@ -656,7 +598,7 @@ async def test_confirm_then_lifecycle(client):
         f"Expected BUY action for confirmed slot, got {action['action_type']}"
     )
     # ea_id should be one of the confirmed players
-    confirmed_ea_ids = {p["ea_id"] for p in players}
+    confirmed_ea_ids = set(ea_ids)
     assert action["ea_id"] in confirmed_ea_ids, (
         f"Action ea_id={action['ea_id']} not in confirmed portfolio {confirmed_ea_ids}"
     )

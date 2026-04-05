@@ -18,16 +18,8 @@ import pytest
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _generate_players(client, count: int = 5) -> list[dict]:
-    """Return real scored players from POST /portfolio/generate."""
-    r = await client.post("/api/v1/portfolio/generate", json={"budget": 5_000_000})
-    assert r.status_code == 200, f"generate failed: {r.status_code} {r.text}"
-    body = r.json()
-    return body["data"][:count]
-
-
-async def _confirm_players(client, players: list[dict]) -> int:
-    """Confirm a list of generated players into portfolio_slots.
+async def _confirm_ea_ids(client, ea_ids: list[int]) -> int:
+    """Confirm a list of ea_ids into portfolio_slots with fixed prices.
 
     Returns confirmed count.
     """
@@ -35,8 +27,8 @@ async def _confirm_players(client, players: list[dict]) -> int:
         "/api/v1/portfolio/confirm",
         json={
             "players": [
-                {"ea_id": p["ea_id"], "buy_price": p["price"], "sell_price": p["sell_price"]}
-                for p in players
+                {"ea_id": eid, "buy_price": 50000, "sell_price": 70000}
+                for eid in ea_ids
             ]
         },
     )
@@ -72,32 +64,20 @@ async def _get_confirmed_ea_ids(client) -> list[int]:
 # ── Concurrent remove tests ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_concurrent_remove_two_players_no_duplicates(client):
+async def test_concurrent_remove_two_players_no_duplicates(client, real_ea_ids):
     """Fire 2 concurrent DELETE /portfolio/{ea_id} and assert NO duplicates in portfolio (D-08).
 
-    This is the KNOWN BUG: when two players are removed concurrently, the
-    server may suggest the same replacement player twice (once per remove
-    response). If both gets added to the portfolio, a duplicate appears.
-
-    The test only checks the portfolio state after both removes complete —
-    it does NOT test the replace/add workflow (that is the extension's job).
     The server-side invariant: concurrent removes must NOT produce duplicate
     entries in portfolio_slots.
-
-    Note: This test may FAIL because the concurrent-remove duplicate bug
-    is a known server issue. A failure confirms the bug; it is not a test
-    defect.
     """
-    players = await _generate_players(client, count=5)
-    if len(players) < 4:
-        pytest.skip("Need at least 4 viable scored players for concurrent remove test")
+    assert len(real_ea_ids) >= 4, "Need at least 4 active players in DB"
 
-    confirmed = await _confirm_players(client, players[:4])
+    confirmed = await _confirm_ea_ids(client, real_ea_ids[:4])
     assert confirmed >= 3, f"Expected at least 3 confirmed, got {confirmed}"
 
     # Pick 2 players to remove concurrently
-    remove_1 = players[0]["ea_id"]
-    remove_2 = players[1]["ea_id"]
+    remove_1 = real_ea_ids[0]
+    remove_2 = real_ea_ids[1]
     budget = 5_000_000
 
     # Fire both DELETEs simultaneously
@@ -131,22 +111,16 @@ async def test_concurrent_remove_two_players_no_duplicates(client):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_remove_three_players(client):
+async def test_concurrent_remove_three_players(client, real_ea_ids):
     """Fire 3 concurrent DELETE /portfolio/{ea_id} — higher chance of triggering races (D-08 extended).
-
-    Same as the 2-player test but with 3 concurrent removes, which increases
-    the probability of triggering the optimizer race condition where multiple
-    removes read the same portfolio state and suggest overlapping replacements.
     """
-    players = await _generate_players(client, count=7)
-    if len(players) < 5:
-        pytest.skip("Need at least 5 viable scored players for 3-concurrent remove test")
+    assert len(real_ea_ids) >= 5, "Need at least 5 active players in DB"
 
-    confirmed = await _confirm_players(client, players[:5])
+    confirmed = await _confirm_ea_ids(client, real_ea_ids[:5])
     assert confirmed >= 4, f"Expected at least 4 confirmed, got {confirmed}"
 
     # Pick 3 players to remove concurrently
-    remove_ids = [players[0]["ea_id"], players[1]["ea_id"], players[2]["ea_id"]]
+    remove_ids = real_ea_ids[:3]
     budget = 5_000_000
 
     async def _delete(ea_id: int) -> dict:
@@ -176,25 +150,16 @@ async def test_concurrent_remove_three_players(client):
 
 
 @pytest.mark.asyncio
-async def test_rapid_pending_action_polling(client):
+async def test_rapid_pending_action_polling(client, real_ea_ids):
     """Fire 10 concurrent GET /actions/pending — all must return 200, no duplicate actions (D-11).
-
-    Real behavior with SQLite serialization:
-    - The first concurrent call derives and claims the action (IN_PROGRESS).
-    - Subsequent calls should see the IN_PROGRESS action and return it
-      idempotently (same id) without creating a new action.
 
     Assertions:
     1. All 10 responses return 200.
     2. All non-null actions have the same id (no duplicate actions created).
     3. No response is a 500 or other error.
     """
-    players = await _generate_players(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    await _seed_slot(client, p["ea_id"], p["price"], p["sell_price"])
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    await _seed_slot(client, real_ea_ids[0], 50000, 70000)
 
     async def _get_pending() -> dict:
         r = await client.get("/api/v1/actions/pending")
@@ -227,22 +192,17 @@ async def test_rapid_pending_action_polling(client):
 
 
 @pytest.mark.asyncio
-async def test_rapid_complete_same_action(client):
+async def test_rapid_complete_same_action(client, real_ea_ids):
     """Fire 3 concurrent POST /actions/{id}/complete — lifecycle state must be consistent (D-11).
 
-    The server may accept all 3 (no guard against re-completing DONE actions
-    per the Phase 09 decision). The key invariant: after all 3 complete,
-    GET /actions/pending should still derive LIST (correct state), and
-    GET /portfolio/status should show BOUGHT (not corrupted).
+    The key invariant: after all 3 complete, GET /actions/pending should
+    still derive LIST (correct state), and GET /portfolio/status should
+    show BOUGHT (not corrupted).
     """
-    players = await _generate_players(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -294,21 +254,17 @@ async def test_rapid_complete_same_action(client):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_slot_seeding(client):
+async def test_concurrent_slot_seeding(client, real_ea_ids):
     """Fire 5 concurrent POST /portfolio/slots with the same ea_id — no duplicates (D-11).
 
     ea_id has a UNIQUE constraint in portfolio_slots. Concurrent inserts must
     not create duplicate rows — the server must handle the conflict gracefully
     (upsert or ignore).
     """
-    players = await _generate_players(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     payload = {
         "slots": [
@@ -345,20 +301,16 @@ async def test_concurrent_slot_seeding(client):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_direct_trade_records(client):
+async def test_concurrent_direct_trade_records(client, real_ea_ids):
     """Fire 5 concurrent POST /trade-records/direct with same ea_id+outcome (D-11).
 
     Server-side dedup should ensure only 1 trade record is created. After
     dedup, lifecycle should correctly derive LIST (not confused by duplicates).
     """
-    players = await _generate_players(client, count=1)
-    if not players:
-        pytest.skip("No viable scored players in DB")
-
-    p = players[0]
-    ea_id = p["ea_id"]
-    buy_price = p["price"]
-    sell_price = p["sell_price"]
+    assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
+    ea_id = real_ea_ids[0]
+    buy_price = 50000
+    sell_price = 70000
 
     await _seed_slot(client, ea_id, buy_price, sell_price)
 
@@ -392,7 +344,7 @@ async def test_concurrent_direct_trade_records(client):
 
 
 @pytest.mark.asyncio
-async def test_remove_during_action_lifecycle(client):
+async def test_remove_during_action_lifecycle(client, real_ea_ids):
     """DELETE a slot while its BUY action is IN_PROGRESS — action should be cancelled (D-10).
 
     Workflow:
@@ -402,12 +354,7 @@ async def test_remove_during_action_lifecycle(client):
       4. The delete should cancel slot1's pending/in-progress actions
       5. GET /actions/pending -> should return action for slot2 (not the cancelled slot1)
     """
-    players = await _generate_players(client, count=2)
-    if len(players) < 2:
-        pytest.skip("Need at least 2 viable scored players")
-
-    p1 = players[0]
-    p2 = players[1]
+    assert len(real_ea_ids) >= 2, "Need at least 2 active players in DB"
 
     # Seed 2 slots
     r = await client.post(
@@ -415,16 +362,16 @@ async def test_remove_during_action_lifecycle(client):
         json={
             "slots": [
                 {
-                    "ea_id": p1["ea_id"],
-                    "buy_price": p1["price"],
-                    "sell_price": p1["sell_price"],
-                    "player_name": f"Player {p1['ea_id']}",
+                    "ea_id": real_ea_ids[0],
+                    "buy_price": 50000,
+                    "sell_price": 70000,
+                    "player_name": f"Player {real_ea_ids[0]}",
                 },
                 {
-                    "ea_id": p2["ea_id"],
-                    "buy_price": p2["price"],
-                    "sell_price": p2["sell_price"],
-                    "player_name": f"Player {p2['ea_id']}",
+                    "ea_id": real_ea_ids[1],
+                    "buy_price": 50000,
+                    "sell_price": 70000,
+                    "player_name": f"Player {real_ea_ids[1]}",
                 },
             ]
         },

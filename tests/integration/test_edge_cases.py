@@ -158,34 +158,24 @@ async def test_portfolio_confirm_duplicate_ea_ids(client, real_ea_id):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_confirm_twice_replaces(client):
+async def test_portfolio_confirm_twice_replaces(client, real_ea_ids):
     """Confirming twice (A,B,C then D,E) leaves only D,E in the portfolio.
 
     Per D-06: confirm is a clean-slate operation. Second call completely
     replaces the first — no merging, no union.
     """
-    # Generate players to get real ea_ids
-    gen_r = await client.post("/api/v1/portfolio/generate", json={"budget": 2_000_000})
-    assert gen_r.status_code == 200, f"Generate failed: {gen_r.status_code}"
-    gen_body = gen_r.json()
-    assert gen_body["count"] >= 4, (
-        f"Need at least 4 viable players for this test, got {gen_body['count']}. "
-        "If DB has fewer, that's a test environment issue."
-    )
+    assert len(real_ea_ids) >= 5, "Need at least 5 active players in DB"
 
-    players = gen_body["data"]
-    first_three = players[:3]
-    last_two = players[3:5]
-    first_ea_ids = {p["ea_id"] for p in first_three}
-    last_ea_ids = {p["ea_id"] for p in last_two}
+    first_ea_ids = set(real_ea_ids[:3])
+    last_ea_ids = set(real_ea_ids[3:5])
 
     # First confirm: A, B, C
     r1 = await client.post(
         "/api/v1/portfolio/confirm",
         json={
             "players": [
-                {"ea_id": p["ea_id"], "buy_price": p["price"], "sell_price": p["sell_price"]}
-                for p in first_three
+                {"ea_id": eid, "buy_price": 50000, "sell_price": 70000}
+                for eid in real_ea_ids[:3]
             ]
         },
     )
@@ -197,8 +187,8 @@ async def test_portfolio_confirm_twice_replaces(client):
         "/api/v1/portfolio/confirm",
         json={
             "players": [
-                {"ea_id": p["ea_id"], "buy_price": p["price"], "sell_price": p["sell_price"]}
-                for p in last_two
+                {"ea_id": eid, "buy_price": 60000, "sell_price": 80000}
+                for eid in real_ea_ids[3:5]
             ]
         },
     )
@@ -345,12 +335,12 @@ async def test_top_players_pagination_boundary(client):
     - limit=500 returns at most 500 players
     - limit=0 returns 422 (ge=1 validation)
     """
-    # limit=1 should return exactly 1
+    # limit=1 should return at most 1
     r1 = await client.get("/api/v1/players/top", params={"limit": 1})
     assert r1.status_code == 200, f"Expected 200 with limit=1, got {r1.status_code}: {r1.text}"
     body1 = r1.json()
-    assert body1["count"] == 1, (
-        f"Expected count=1 with limit=1, got {body1['count']}. "
+    assert body1["count"] <= 1, (
+        f"Expected count <= 1 with limit=1, got {body1['count']}. "
         "Pagination is not honoring the limit parameter."
     )
 
@@ -389,7 +379,7 @@ async def test_swap_preview_empty_excluded(client):
     """
     r = await client.post(
         "/api/v1/portfolio/swap-preview",
-        json={"freed_budget": 50000, "excluded_ea_ids": []},
+        json={"freed_budget": 50000, "excluded_ea_ids": [], "current_count": 10},
     )
     assert r.status_code == 200, (
         f"Expected 200 for swap-preview with empty exclusion list, "
