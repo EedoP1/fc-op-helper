@@ -164,7 +164,7 @@ async def test_portfolio_swap_preview(client, real_ea_id):
     assert real_ea_id is not None, "real_ea_id is None — DB may be empty"
     r = await client.post(
         "/api/v1/portfolio/swap-preview",
-        json={"freed_budget": 100_000, "excluded_ea_ids": [real_ea_id]},
+        json={"freed_budget": 100_000, "excluded_ea_ids": [real_ea_id], "current_count": 10},
     )
     assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
     body = r.json()
