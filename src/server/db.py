@@ -1,7 +1,12 @@
 """Database engine, session factory, and table creation for async PostgreSQL."""
+import asyncio
+import logging
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 from src.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -49,6 +54,10 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Create engine, create all ORM tables, return engine and session factory.
 
+    Retries the initial DB connection up to 5 times with a 2-second delay
+    between attempts. This handles the Docker startup race where Postgres
+    accepts TCP connections but rejects queries with CannotConnectNowError.
+
     Args:
         db_url: SQLAlchemy database URL string. Defaults to DATABASE_URL from config.
 
@@ -56,9 +65,27 @@ async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEng
         Tuple of (AsyncEngine, async_sessionmaker).
     """
     engine = create_engine(db_url)
-    async with engine.begin() as conn:
-        from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus, DailyTransactionCount  # noqa: F401
-        await conn.run_sync(Base.metadata.create_all)
+    max_retries = 5
+    delay = 2
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with engine.begin() as conn:
+                from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus, DailyTransactionCount  # noqa: F401
+                await conn.run_sync(Base.metadata.create_all)
+            break
+        except Exception as e:
+            if attempt < max_retries:
+                logger.warning(
+                    f"DB connection attempt {attempt}/{max_retries} failed: {e}. Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    f"DB connection attempt {attempt}/{max_retries} failed: {e}. All retries exhausted."
+                )
+                raise
+
     session_factory = create_session_factory(engine)
     return engine, session_factory
 
