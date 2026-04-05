@@ -4,25 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OP Seller Dashboard</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --surface2: #232736;
-    --border: #2d3148;
-    --text: #e4e6ef;
-    --text-dim: #8b8fa3;
+    --bg: #1a1a2e;
+    --surface: #16213e;
     --accent: #6c5ce7;
-    --accent-glow: rgba(108,92,231,0.15);
-    --green: #00d68f;
-    --green-dim: rgba(0,214,143,0.12);
-    --red: #ff6b6b;
-    --red-dim: rgba(255,107,107,0.12);
+    --text: #e0e0e0;
+    --text-dim: #8b8fa3;
+    --green: #00b894;
+    --red: #d63031;
     --yellow: #ffc048;
-    --yellow-dim: rgba(255,192,72,0.12);
-    --blue: #4fc3f7;
-    --radius: 14px;
+    --border: #2d3148;
+    --radius: 10px;
     --shadow: 0 2px 12px rgba(0,0,0,0.25);
   }
 
@@ -39,877 +34,742 @@
   .header {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 16px 32px;
+    padding: 14px 24px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 16px;
     position: sticky;
     top: 0;
     z-index: 100;
-    backdrop-filter: blur(12px);
+    flex-wrap: wrap;
   }
-  .header h1 {
-    font-size: 20px;
-    font-weight: 700;
-    letter-spacing: -0.3px;
-  }
-  .header h1 span { color: var(--accent); }
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
+  .header h1 { font-size: 1.15rem; white-space: nowrap; }
+
   .status-pill {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 14px;
+    padding: 4px 12px;
     border-radius: 20px;
-    font-size: 12px;
+    font-size: 0.78rem;
     font-weight: 600;
-    background: var(--surface2);
-    border: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--green);
-    animation: pulse 2s ease-in-out infinite;
+  .status-pill.running { background: rgba(0,184,148,0.15); color: var(--green); }
+  .status-pill.stopped { background: rgba(214,48,49,0.15); color: var(--red); }
+  .status-pill.unknown { background: rgba(255,192,72,0.15); color: var(--yellow); }
+
+  .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
   }
-  .status-dot.stopped { background: var(--red); animation: none; }
-  .status-dot.unknown { background: var(--yellow); animation: none; }
+  .status-pill.running .pulse-dot {
+    animation: pulse 1.5s infinite;
+  }
   @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
   }
-  .refresh-btn {
+
+  .header input[type="text"] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    width: 240px;
+  }
+  .header input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+  .btn {
     background: var(--accent);
+    color: #fff;
     border: none;
-    color: white;
-    padding: 8px 18px;
-    border-radius: 8px;
+    padding: 6px 16px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 0.85rem;
     font-weight: 600;
-    transition: all 0.2s;
   }
-  .refresh-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
-  .refresh-btn:active { transform: translateY(0); }
+  .btn:hover { opacity: 0.85; }
 
-  /* ── Layout ───────────────────────────────────────────────── */
-  .container {
-    max-width: 1440px;
-    margin: 0 auto;
-    padding: 24px 32px;
+  .updated-text {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    white-space: nowrap;
   }
 
-  /* ── Stat Cards Row ───────────────────────────────────────── */
+  /* ── Tabs ──────────────────────────────────────────────────── */
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+  .tab-btn {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Content ───────────────────────────────────────────────── */
+  .content { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+  /* ── Time filter ───────────────────────────────────────────── */
+  .time-filter {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+  }
+  .time-filter button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .time-filter button:hover { border-color: var(--accent); color: var(--text); }
+  .time-filter button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ── Stat cards ────────────────────────────────────────────── */
   .stats-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 16px;
-    margin-bottom: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
   }
   .stat-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 20px 22px;
-    transition: all 0.25s;
-    position: relative;
-    overflow: hidden;
+    padding: 16px;
   }
-  .stat-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    border-radius: var(--radius) var(--radius) 0 0;
-  }
-  .stat-card.profit::before { background: var(--green); }
-  .stat-card.spent::before { background: var(--red); }
-  .stat-card.earned::before { background: var(--blue); }
-  .stat-card.trades::before { background: var(--accent); }
-  .stat-card.unrealized::before { background: var(--yellow); }
-  .stat-card.cap::before { background: var(--text-dim); }
-
-  .stat-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow);
-    border-color: var(--accent);
-  }
-  .stat-label {
-    font-size: 11px;
+  .stat-card .label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
     text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
   }
-  .stat-value {
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    line-height: 1;
-  }
-  .stat-value.positive { color: var(--green); }
-  .stat-value.negative { color: var(--red); }
-  .stat-sub {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 6px;
-  }
-
-  /* ── Grid ──────────────────────────────────────────────────── */
-  .grid-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 24px;
-  }
-  @media (max-width: 900px) {
-    .grid-2 { grid-template-columns: 1fr; }
-    .container { padding: 16px; }
-    .header { padding: 12px 16px; }
-  }
-
-  /* ── Panel ─────────────────────────────────────────────────── */
-  .panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .panel-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .panel-title {
-    font-size: 14px;
+  .stat-card .value {
+    font-size: 1.4rem;
     font-weight: 700;
-    letter-spacing: -0.2px;
-  }
-  .panel-badge {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    color: var(--text-dim);
-    font-weight: 600;
-  }
-  .panel-body { padding: 16px 20px; }
-  .chart-container {
-    position: relative;
-    height: 260px;
   }
 
-  /* ── Table ─────────────────────────────────────────────────── */
-  .table-wrapper {
+  /* ── Section titles ────────────────────────────────────────── */
+  .section-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 10px;
+    margin-top: 20px;
+    color: var(--text);
+  }
+
+  /* ── Tables ────────────────────────────────────────────────── */
+  .table-wrap {
     overflow-x: auto;
-    max-height: 520px;
-    overflow-y: auto;
+    margin-bottom: 20px;
   }
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: 0.85rem;
   }
-  thead th {
-    position: sticky;
-    top: 0;
-    background: var(--surface2);
-    padding: 10px 14px;
+  th {
+    background: var(--surface);
+    border-bottom: 2px solid var(--border);
+    padding: 8px 12px;
     text-align: left;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
     color: var(--text-dim);
     font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+  }
+  th:hover { color: var(--text); }
+  .sort-arrow { font-size: 0.7rem; margin-left: 3px; }
+
+  td {
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
-    z-index: 1;
   }
-  tbody td {
-    padding: 10px 14px;
-    border-bottom: 1px solid rgba(45,49,72,0.5);
-    white-space: nowrap;
-  }
-  tbody tr {
-    transition: background 0.15s;
-  }
-  tbody tr:hover {
-    background: var(--accent-glow);
-  }
-  .text-green { color: var(--green); }
-  .text-red { color: var(--red); }
-  .text-yellow { color: var(--yellow); }
-  .text-dim { color: var(--text-dim); }
-  .text-blue { color: var(--blue); }
-  .text-right { text-align: right; }
-  .font-mono { font-family: 'Cascadia Code', 'JetBrains Mono', monospace; font-size: 12px; }
+  tr:hover td { background: rgba(108,92,231,0.06); }
 
-  /* ── Status badges ─────────────────────────────────────────── */
-  .badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-  }
-  .badge-bought { background: var(--green-dim); color: var(--green); }
-  .badge-listed { background: var(--yellow-dim); color: var(--yellow); }
-  .badge-sold { background: rgba(79,195,247,0.12); color: var(--blue); }
-  .badge-expired { background: var(--red-dim); color: var(--red); }
-  .badge-pending { background: rgba(139,143,163,0.12); color: var(--text-dim); }
-
-  /* ── Loading / Error ───────────────────────────────────────── */
-  .loading-overlay {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 60px;
-    color: var(--text-dim);
-    font-size: 14px;
-  }
-  .spinner {
-    width: 24px;
-    height: 24px;
-    border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin-right: 12px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .error-msg {
-    padding: 20px;
-    text-align: center;
-    color: var(--red);
-    font-size: 13px;
-  }
+  .positive { color: var(--green); }
+  .negative { color: var(--red); }
 
   /* ── Progress bar ──────────────────────────────────────────── */
   .progress-bar {
+    width: 100%;
     height: 8px;
-    background: var(--surface2);
+    background: var(--bg);
     border-radius: 4px;
+    margin-top: 6px;
     overflow: hidden;
-    margin-top: 10px;
   }
-  .progress-fill {
+  .progress-bar .fill {
     height: 100%;
     border-radius: 4px;
-    transition: width 0.5s ease;
+    background: var(--accent);
+    transition: width 0.3s;
   }
 
-  /* ── Health metrics ────────────────────────────────────────── */
-  .health-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-  }
-  .health-item {
-    background: var(--surface2);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .health-item .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: var(--text-dim);
-    margin-bottom: 6px;
-    font-weight: 600;
-  }
-  .health-item .value {
-    font-size: 18px;
-    font-weight: 700;
-  }
-
-  /* ── Scrollbar ─────────────────────────────────────────────── */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-
-  /* ── Config bar ────────────────────────────────────────────── */
-  .config-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-    padding: 12px 18px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-  .config-bar label {
-    font-size: 12px;
-    color: var(--text-dim);
-    font-weight: 600;
-  }
-  .config-bar input {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    width: 240px;
-    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
-  }
-  .config-bar input:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
-
-  .last-updated {
-    font-size: 11px;
-    color: var(--text-dim);
+  /* ── Responsive ────────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .header { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .header input[type="text"] { width: 100%; }
+    .updated-text { margin-left: 0; }
+    .stats-row { grid-template-columns: 1fr; }
+    .tab-btn { padding: 8px 12px; font-size: 0.82rem; }
+    .content { padding: 14px; }
   }
 </style>
 </head>
-<body>
 
-<div class="header">
-  <h1><span>OP</span> Seller Dashboard</h1>
-  <div class="header-right">
-    <span class="last-updated" id="lastUpdated"></span>
-    <div class="status-pill" id="scannerPill">
-      <div class="status-dot unknown" id="scannerDot"></div>
-      <span id="scannerLabel">Connecting...</span>
+<body x-data="dashboard()" x-init="init()">
+
+<!-- ── Header ──────────────────────────────────────────────── -->
+<header class="header">
+  <h1>OP Seller Dashboard</h1>
+
+  <span class="status-pill"
+        :class="scannerClass">
+    <span class="pulse-dot"></span>
+    <span x-text="scannerLabel"></span>
+  </span>
+
+  <input type="text" placeholder="API URL (e.g. http://localhost:8000)"
+         x-model="apiUrl"
+         @input="localStorage.setItem('dashboard_api_url', apiUrl)">
+
+  <button class="btn" @click="refreshAll()">Refresh</button>
+
+  <span class="updated-text" x-text="lastUpdated ? 'Updated ' + timeAgo(lastUpdated) : ''"></span>
+</header>
+
+<!-- ── Tabs ─────────────────────────────────────────────────── -->
+<nav class="tab-bar">
+  <template x-for="tab in tabs" :key="tab.id">
+    <button class="tab-btn"
+            :class="{ active: activeTab === tab.id }"
+            @click="activeTab = tab.id"
+            x-text="tab.label"></button>
+  </template>
+</nav>
+
+<div class="content">
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 1 — PROFIT
+     ═══════════════════════════════════════════════════════════ -->
+<div x-show="activeTab === 'profit'" x-cloak>
+
+  <!-- Time filter -->
+  <div class="time-filter">
+    <template x-for="opt in sinceOptions" :key="opt.label">
+      <button :class="{ active: filters.profit === opt.value }"
+              @click="filters.profit = opt.value; fetchProfit()"
+              x-text="opt.label"></button>
+    </template>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="label">Total Spent</div>
+      <div class="value" x-text="fmt(profitData.totals.total_spent)"></div>
     </div>
-    <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+    <div class="stat-card">
+      <div class="label">Total Earned</div>
+      <div class="value" x-text="fmt(profitData.totals.total_earned)"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Realized Profit</div>
+      <div class="value" :class="profitData.totals.realized_profit >= 0 ? 'positive' : 'negative'"
+           x-text="fmt(profitData.totals.realized_profit)"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Unrealized P&amp;L</div>
+      <div class="value" :class="profitData.totals.unrealized_pnl >= 0 ? 'positive' : 'negative'"
+           x-text="fmt(profitData.totals.unrealized_pnl)"></div>
+    </div>
+  </div>
+
+  <!-- Top Profitters -->
+  <div class="section-title">Top Profitters</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('profitters','name')">Name <span class="sort-arrow" x-text="sortArrow('profitters','name')"></span></th>
+          <th @click="sortTable('profitters','sell_count')">Times Sold <span class="sort-arrow" x-text="sortArrow('profitters','sell_count')"></span></th>
+          <th @click="sortTable('profitters','total_spent')">Total Spent <span class="sort-arrow" x-text="sortArrow('profitters','total_spent')"></span></th>
+          <th @click="sortTable('profitters','total_earned')">Total Earned <span class="sort-arrow" x-text="sortArrow('profitters','total_earned')"></span></th>
+          <th @click="sortTable('profitters','realized_profit')">Realized Profit <span class="sort-arrow" x-text="sortArrow('profitters','realized_profit')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('profitters')" :key="p.ea_id">
+          <tr>
+            <td x-text="p.name"></td>
+            <td x-text="fmt(p.sell_count)"></td>
+            <td x-text="fmt(p.total_spent)"></td>
+            <td x-text="fmt(p.total_earned)"></td>
+            <td :class="p.realized_profit >= 0 ? 'positive' : 'negative'" x-text="fmt(p.realized_profit)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Profit Rate -->
+  <div class="section-title">Profit Rate</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('profitRate','name')">Name <span class="sort-arrow" x-text="sortArrow('profitRate','name')"></span></th>
+          <th @click="sortTable('profitRate','profit_per_hour')">Profit/hr <span class="sort-arrow" x-text="sortArrow('profitRate','profit_per_hour')"></span></th>
+          <th @click="sortTable('profitRate','realized_profit')">Total Profit <span class="sort-arrow" x-text="sortArrow('profitRate','realized_profit')"></span></th>
+          <th @click="sortTable('profitRate','active_hours')">Time Active <span class="sort-arrow" x-text="sortArrow('profitRate','active_hours')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('profitRate')" :key="p.ea_id">
+          <tr>
+            <td x-text="p.name"></td>
+            <td x-text="fmt(p.profit_per_hour)"></td>
+            <td :class="p.realized_profit >= 0 ? 'positive' : 'negative'" x-text="fmt(p.realized_profit)"></td>
+            <td x-text="fmtHours(p.active_hours)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
   </div>
 </div>
 
-<div class="container">
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 2 — STALE CARDS
+     ═══════════════════════════════════════════════════════════ -->
+<div x-show="activeTab === 'stale'" x-cloak>
 
-  <div class="config-bar">
-    <label>API Base URL</label>
-    <input type="text" id="apiUrl" value="" onchange="refreshAll()" />
+  <!-- Longest Unsold -->
+  <div class="section-title">Longest Unsold</div>
+  <div class="time-filter">
+    <template x-for="opt in sinceOptions" :key="'unsold-' + opt.label">
+      <button :class="{ active: filters.staleUnsold === opt.value }"
+              @click="filters.staleUnsold = opt.value; fetchStale('unsold')"
+              x-text="opt.label"></button>
+    </template>
   </div>
-
-  <!-- ── Stat Cards ───────────────────────────────────────── -->
-  <div class="stats-row" id="statsRow">
-    <div class="stat-card profit">
-      <div class="stat-label">Realized Profit</div>
-      <div class="stat-value" id="statProfit">--</div>
-      <div class="stat-sub" id="statProfitSub"></div>
-    </div>
-    <div class="stat-card unrealized">
-      <div class="stat-label">Unrealized P&L</div>
-      <div class="stat-value" id="statUnrealized">--</div>
-      <div class="stat-sub" id="statUnrealizedSub"></div>
-    </div>
-    <div class="stat-card earned">
-      <div class="stat-label">Total Earned</div>
-      <div class="stat-value" id="statEarned">--</div>
-      <div class="stat-sub">after 5% EA tax</div>
-    </div>
-    <div class="stat-card spent">
-      <div class="stat-label">Total Spent</div>
-      <div class="stat-value" id="statSpent">--</div>
-      <div class="stat-sub" id="statSpentSub"></div>
-    </div>
-    <div class="stat-card trades">
-      <div class="stat-label">Buys / Sells</div>
-      <div class="stat-value" id="statTrades">--</div>
-      <div class="stat-sub" id="statTradesSub"></div>
-    </div>
-    <div class="stat-card cap">
-      <div class="stat-label">Daily Cap</div>
-      <div class="stat-value" id="statCap">--</div>
-      <div class="progress-bar"><div class="progress-fill" id="capProgress" style="width:0%; background: var(--accent);"></div></div>
-    </div>
-  </div>
-
-  <!-- ── Charts Row ───────────────────────────────────────── -->
-  <div class="grid-2">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Profit by Player</span>
-        <span class="panel-badge" id="profitPlayerCount">0 players</span>
-      </div>
-      <div class="panel-body">
-        <div class="chart-container">
-          <canvas id="profitChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Trade Status Breakdown</span>
-        <span class="panel-badge" id="tradeStatusBadge">portfolio</span>
-      </div>
-      <div class="panel-body">
-        <div class="chart-container">
-          <canvas id="statusChart"></canvas>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Scanner Health + Top Players Row ─────────────────── -->
-  <div class="grid-2">
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Scanner Health</span>
-      </div>
-      <div class="panel-body">
-        <div class="health-grid" id="healthGrid">
-          <div class="health-item">
-            <div class="label">Success Rate (1h)</div>
-            <div class="value" id="healthSuccess">--</div>
-          </div>
-          <div class="health-item">
-            <div class="label">Players in DB</div>
-            <div class="value" id="healthPlayers">--</div>
-          </div>
-          <div class="health-item">
-            <div class="label">Queue Depth</div>
-            <div class="value" id="healthQueue">--</div>
-          </div>
-          <div class="health-item">
-            <div class="label">Circuit Breaker</div>
-            <div class="value" id="healthCB">--</div>
-          </div>
-          <div class="health-item">
-            <div class="label">Last Scan</div>
-            <div class="value" id="healthLastScan" style="font-size:14px;">--</div>
-          </div>
-          <div class="health-item">
-            <div class="label">Scanner Status</div>
-            <div class="value" id="healthStatus">--</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Top Efficiency Players</span>
-        <span class="panel-badge" id="topPlayersBadge">top 10</span>
-      </div>
-      <div class="panel-body">
-        <div class="chart-container">
-          <canvas id="efficiencyChart"></canvas>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Portfolio Table ──────────────────────────────────── -->
-  <div class="panel" style="margin-bottom: 24px;">
-    <div class="panel-header">
-      <span class="panel-title">Portfolio Players</span>
-      <span class="panel-badge" id="portfolioBadge">0 slots</span>
-    </div>
-    <div class="table-wrapper">
-      <table>
-        <thead>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('unsold','name')">Name <span class="sort-arrow" x-text="sortArrow('unsold','name')"></span></th>
+          <th @click="sortTable('unsold','buy_price')">Buy Price <span class="sort-arrow" x-text="sortArrow('unsold','buy_price')"></span></th>
+          <th @click="sortTable('unsold','time_since_buy_hours')">Time Since Buy <span class="sort-arrow" x-text="sortArrow('unsold','time_since_buy_hours')"></span></th>
+          <th @click="sortTable('unsold','status')">Status <span class="sort-arrow" x-text="sortArrow('unsold','status')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('unsold')" :key="p.ea_id">
           <tr>
-            <th>Player</th>
-            <th>Status</th>
-            <th class="text-right">Buy Price</th>
-            <th class="text-right">Sell Price</th>
-            <th class="text-right">Current BIN</th>
-            <th class="text-right">Realized P&L</th>
-            <th class="text-right">Unrealized P&L</th>
-            <th class="text-right">Times Sold</th>
+            <td x-text="p.name"></td>
+            <td x-text="fmt(p.buy_price)"></td>
+            <td x-text="fmtHours(p.time_since_buy_hours)"></td>
+            <td x-text="p.status"></td>
           </tr>
-        </thead>
-        <tbody id="portfolioBody">
-          <tr><td colspan="8" class="loading-overlay"><div class="spinner"></div>Loading...</td></tr>
-        </tbody>
-      </table>
-    </div>
+        </template>
+      </tbody>
+    </table>
   </div>
 
-  <!-- ── Top Players Table ────────────────────────────────── -->
-  <div class="panel" style="margin-bottom: 24px;">
-    <div class="panel-header">
-      <span class="panel-title">Top Scored Players</span>
-      <span class="panel-badge" id="topScoredBadge">0 players</span>
-    </div>
-    <div class="table-wrapper">
-      <table>
-        <thead>
+  <!-- Avg Sale Time -->
+  <div class="section-title" style="margin-top: 30px;">Avg Sale Time</div>
+  <div class="time-filter">
+    <template x-for="opt in sinceOptions" :key="'avg-' + opt.label">
+      <button :class="{ active: filters.staleAvg === opt.value }"
+              @click="filters.staleAvg = opt.value; fetchStale('avg')"
+              x-text="opt.label"></button>
+    </template>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('avgSale','name')">Name <span class="sort-arrow" x-text="sortArrow('avgSale','name')"></span></th>
+          <th @click="sortTable('avgSale','total_sales')">Total Sales <span class="sort-arrow" x-text="sortArrow('avgSale','total_sales')"></span></th>
+          <th @click="sortTable('avgSale','time_period_hours')">Time Period <span class="sort-arrow" x-text="sortArrow('avgSale','time_period_hours')"></span></th>
+          <th @click="sortTable('avgSale','avg_hours_between_sales')">Avg Time Between Sales <span class="sort-arrow" x-text="sortArrow('avgSale','avg_hours_between_sales')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('avgSale')" :key="p.ea_id">
           <tr>
-            <th>#</th>
-            <th>Player</th>
-            <th class="text-right">Price</th>
-            <th class="text-right">Margin</th>
-            <th class="text-right">OP Ratio</th>
-            <th class="text-right">Expected Profit</th>
-            <th class="text-right">EPPH</th>
-            <th class="text-right">Efficiency</th>
-            <th>Stale</th>
+            <td x-text="p.name"></td>
+            <td x-text="fmt(p.total_sales)"></td>
+            <td x-text="fmtHours(p.time_period_hours)"></td>
+            <td x-text="p.avg_hours_between_sales != null ? fmtHours(p.avg_hours_between_sales) : 'No sales'"></td>
           </tr>
-        </thead>
-        <tbody id="topPlayersBody">
-          <tr><td colspan="9" class="loading-overlay"><div class="spinner"></div>Loading...</td></tr>
-        </tbody>
-      </table>
-    </div>
+        </template>
+      </tbody>
+    </table>
   </div>
-
-  <!-- ── Profit per Player Table ──────────────────────────── -->
-  <div class="panel" style="margin-bottom: 24px;">
-    <div class="panel-header">
-      <span class="panel-title">Profit Breakdown by Player</span>
-      <span class="panel-badge" id="profitBreakdownBadge">all time</span>
-    </div>
-    <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th class="text-right">Spent</th>
-            <th class="text-right">Earned</th>
-            <th class="text-right">Realized</th>
-            <th class="text-right">Unrealized</th>
-            <th class="text-right">Buys</th>
-            <th class="text-right">Sells</th>
-            <th class="text-right">Held</th>
-          </tr>
-        </thead>
-        <tbody id="profitBody">
-          <tr><td colspan="8" class="loading-overlay"><div class="spinner"></div>Loading...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 3 — PORTFOLIO
+     ═══════════════════════════════════════════════════════════ -->
+<div x-show="activeTab === 'portfolio'" x-cloak>
+
+  <div class="time-filter">
+    <template x-for="opt in sinceOptions" :key="'port-' + opt.label">
+      <button :class="{ active: filters.portfolio === opt.value }"
+              @click="filters.portfolio = opt.value; fetchPortfolio()"
+              x-text="opt.label"></button>
+    </template>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('portfolio','name')">Name <span class="sort-arrow" x-text="sortArrow('portfolio','name')"></span></th>
+          <th @click="sortTable('portfolio','status')">Status <span class="sort-arrow" x-text="sortArrow('portfolio','status')"></span></th>
+          <th @click="sortTable('portfolio','buy_price')">Buy Price <span class="sort-arrow" x-text="sortArrow('portfolio','buy_price')"></span></th>
+          <th @click="sortTable('portfolio','sell_price')">Sell Price <span class="sort-arrow" x-text="sortArrow('portfolio','sell_price')"></span></th>
+          <th @click="sortTable('portfolio','sell_count')">Times Sold <span class="sort-arrow" x-text="sortArrow('portfolio','sell_count')"></span></th>
+          <th @click="sortTable('portfolio','realized_pnl')">Realized P&amp;L <span class="sort-arrow" x-text="sortArrow('portfolio','realized_pnl')"></span></th>
+          <th @click="sortTable('portfolio','unrealized_pnl')">Unrealized P&amp;L <span class="sort-arrow" x-text="sortArrow('portfolio','unrealized_pnl')"></span></th>
+          <th @click="sortTable('portfolio','current_bin')">Current BIN <span class="sort-arrow" x-text="sortArrow('portfolio','current_bin')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('portfolio')" :key="p.ea_id">
+          <tr>
+            <td x-text="p.name"></td>
+            <td x-text="p.status"></td>
+            <td x-text="fmt(p.buy_price)"></td>
+            <td x-text="fmt(p.sell_price)"></td>
+            <td x-text="fmt(p.sell_count)"></td>
+            <td :class="(p.realized_pnl || 0) >= 0 ? 'positive' : 'negative'" x-text="fmt(p.realized_pnl)"></td>
+            <td :class="(p.unrealized_pnl || 0) >= 0 ? 'positive' : 'negative'" x-text="fmt(p.unrealized_pnl)"></td>
+            <td x-text="fmt(p.current_bin)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 4 — SCANNER
+     ═══════════════════════════════════════════════════════════ -->
+<div x-show="activeTab === 'scanner'" x-cloak>
+
+  <!-- Stats grid -->
+  <div class="stats-row" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+    <div class="stat-card">
+      <div class="label">Success Rate (1h)</div>
+      <div class="value" x-text="health.scan_success_rate_1h != null ? (health.scan_success_rate_1h * 100).toFixed(1) + '%' : '-'"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Players in DB</div>
+      <div class="value" x-text="fmt(health.players_in_db)"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Queue Depth</div>
+      <div class="value" x-text="fmt(health.queue_depth)"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Circuit Breaker</div>
+      <div class="value" :class="health.circuit_breaker === 'closed' ? 'positive' : 'negative'"
+           x-text="health.circuit_breaker || '-'"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Last Scan</div>
+      <div class="value" style="font-size:1rem;" x-text="health.last_scan_at ? timeAgo(health.last_scan_at) : '-'"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Daily Cap</div>
+      <div class="value" x-text="dailyCap.count + ' / ' + dailyCap.cap"></div>
+      <div class="progress-bar">
+        <div class="fill" :style="'width:' + Math.min(100, (dailyCap.count / (dailyCap.cap || 1)) * 100) + '%'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top Scored Players -->
+  <div class="section-title">Top Scored Players</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th @click="sortTable('scored','name')">Name <span class="sort-arrow" x-text="sortArrow('scored','name')"></span></th>
+          <th @click="sortTable('scored','rating')">Rating <span class="sort-arrow" x-text="sortArrow('scored','rating')"></span></th>
+          <th @click="sortTable('scored','position')">Position <span class="sort-arrow" x-text="sortArrow('scored','position')"></span></th>
+          <th @click="sortTable('scored','price')">Buy Price <span class="sort-arrow" x-text="sortArrow('scored','price')"></span></th>
+          <th @click="sortTable('scored','margin_pct')">Margin <span class="sort-arrow" x-text="sortArrow('scored','margin_pct')"></span></th>
+          <th @click="sortTable('scored','op_ratio')">OP Ratio <span class="sort-arrow" x-text="sortArrow('scored','op_ratio')"></span></th>
+          <th @click="sortTable('scored','expected_profit_per_hour')">Profit/hr <span class="sort-arrow" x-text="sortArrow('scored','expected_profit_per_hour')"></span></th>
+          <th @click="sortTable('scored','efficiency')">Efficiency <span class="sort-arrow" x-text="sortArrow('scored','efficiency')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in sorted('scored')" :key="p.ea_id">
+          <tr>
+            <td x-text="p.name"></td>
+            <td x-text="p.rating"></td>
+            <td x-text="p.position"></td>
+            <td x-text="fmt(p.price)"></td>
+            <td x-text="p.margin_pct != null ? (p.margin_pct * 100).toFixed(1) + '%' : '-'"></td>
+            <td x-text="p.op_ratio != null ? (p.op_ratio * 100).toFixed(1) + '%' : '-'"></td>
+            <td x-text="fmt(p.expected_profit_per_hour)"></td>
+            <td x-text="p.efficiency != null ? p.efficiency.toFixed(3) : '-'"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- .content -->
 
 <script>
-// ── Helpers ──────────────────────────────────────────────────
-function getBase() {
-  return document.getElementById('apiUrl').value.replace(/\/+$/, '');
-}
-
-function fmt(n) {
-  if (n == null) return '--';
-  return n.toLocaleString('en-US');
-}
-
-function fmtCoins(n) {
-  if (n == null) return '--';
-  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return n.toLocaleString('en-US');
-}
-
-function pctStr(n) {
-  if (n == null) return '--';
-  return (n * 100).toFixed(1) + '%';
-}
-
-function profitClass(n) {
-  if (n > 0) return 'positive';
-  if (n < 0) return 'negative';
-  return '';
-}
-
-function profitTextClass(n) {
-  if (n > 0) return 'text-green';
-  if (n < 0) return 'text-red';
-  return 'text-dim';
-}
-
-function statusBadge(status) {
-  const s = (status || 'PENDING').toUpperCase();
-  const cls = {
-    'BOUGHT': 'badge-bought', 'LISTED': 'badge-listed',
-    'SOLD': 'badge-sold', 'EXPIRED': 'badge-expired',
-    'PENDING': 'badge-pending'
-  }[s] || 'badge-pending';
-  return `<span class="badge ${cls}">${s}</span>`;
-}
-
-function timeAgo(iso) {
-  if (!iso) return '--';
-  const d = new Date(iso);
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return Math.floor(diff) + 's ago';
-  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-  return Math.floor(diff / 86400) + 'd ago';
-}
-
-async function apiFetch(path) {
-  const resp = await fetch(getBase() + path);
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-  return resp.json();
-}
-
-// ── Charts ──────────────────────────────────────────────────
-let profitChart, statusChart, efficiencyChart;
-
-const chartDefaults = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { labels: { color: '#8b8fa3', font: { size: 11, weight: '600' } } }
-  }
-};
-
-function initCharts() {
-  profitChart = new Chart(document.getElementById('profitChart'), {
-    type: 'bar',
-    data: { labels: [], datasets: [{ label: 'Net Profit', data: [], backgroundColor: [], borderRadius: 6 }] },
-    options: {
-      ...chartDefaults,
-      indexAxis: 'y',
-      plugins: {
-        ...chartDefaults.plugins,
-        legend: { display: false },
-        tooltip: {
-          callbacks: { label: ctx => fmt(ctx.raw) + ' coins' }
-        }
-      },
-      scales: {
-        x: { grid: { color: 'rgba(45,49,72,0.4)' }, ticks: { color: '#8b8fa3', font: { size: 11 } } },
-        y: { grid: { display: false }, ticks: { color: '#e4e6ef', font: { size: 11 } } }
-      }
-    }
-  });
-
-  statusChart = new Chart(document.getElementById('statusChart'), {
-    type: 'doughnut',
-    data: {
-      labels: ['Bought', 'Listed', 'Sold', 'Expired', 'Pending'],
-      datasets: [{
-        data: [0, 0, 0, 0, 0],
-        backgroundColor: ['#00d68f', '#ffc048', '#4fc3f7', '#ff6b6b', '#8b8fa3'],
-        borderWidth: 0,
-        hoverOffset: 8
-      }]
+function dashboard() {
+  return {
+    apiUrl: localStorage.getItem('dashboard_api_url') || 'http://localhost:8000',
+    activeTab: 'profit',
+    tabs: [
+      { id: 'profit', label: 'Profit' },
+      { id: 'stale', label: 'Stale Cards' },
+      { id: 'portfolio', label: 'Portfolio' },
+      { id: 'scanner', label: 'Scanner' },
+    ],
+    sinceOptions: [
+      { value: '1h', label: '1h' },
+      { value: '24h', label: '24h' },
+      { value: '7d', label: '7d' },
+      { value: '30d', label: '30d' },
+      { value: null, label: 'All' },
+    ],
+    filters: {
+      profit: null,
+      staleUnsold: null,
+      staleAvg: null,
+      portfolio: null,
     },
-    options: {
-      ...chartDefaults,
-      cutout: '65%',
-      plugins: {
-        ...chartDefaults.plugins,
-        tooltip: { callbacks: { label: ctx => ctx.label + ': ' + ctx.raw } }
-      }
-    }
-  });
+    profitData: { totals: {}, per_player: [] },
+    staleData: { longest_unsold: [], avg_sale_time: [] },
+    portfolioData: { summary: {}, players: [] },
+    health: {},
+    dailyCap: { count: 0, cap: 500 },
+    scoredPlayers: [],
+    sortState: {
+      profitters: { col: 'realized_profit', dir: 'desc' },
+      profitRate: { col: 'profit_per_hour', dir: 'desc' },
+      unsold: { col: 'time_since_buy_hours', dir: 'desc' },
+      avgSale: { col: 'avg_hours_between_sales', dir: 'desc' },
+      portfolio: { col: 'name', dir: 'asc' },
+      scored: { col: 'efficiency', dir: 'desc' },
+    },
+    lastUpdated: null,
 
-  efficiencyChart = new Chart(document.getElementById('efficiencyChart'), {
-    type: 'bar',
-    data: { labels: [], datasets: [{ label: 'Efficiency', data: [], backgroundColor: '#6c5ce7', borderRadius: 6 }] },
-    options: {
-      ...chartDefaults,
-      indexAxis: 'y',
-      plugins: {
-        ...chartDefaults.plugins,
-        legend: { display: false },
-        tooltip: {
-          callbacks: { label: ctx => ctx.raw.toFixed(4) }
+    init() {
+      this.refreshAll();
+    },
+
+    // ── Helpers ──────────────────────────────────────────────
+
+    async _fetch(path) {
+      try {
+        const url = this.apiUrl.replace(/\/+$/, '') + path;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        console.error('Fetch error:', path, e);
+        return null;
+      }
+    },
+
+    _sinceParam(filterValue) {
+      return filterValue ? '?since=' + filterValue : '';
+    },
+
+    fmt(n) {
+      if (n == null) return '-';
+      if (typeof n !== 'number') return n;
+      return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    },
+
+    fmtHours(h) {
+      if (h == null) return '-';
+      if (h < 1) return Math.round(h * 60) + 'm';
+      if (h < 24) return h.toFixed(1) + 'h';
+      const days = Math.floor(h / 24);
+      const hrs = Math.round(h % 24);
+      return days + 'd ' + hrs + 'h';
+    },
+
+    timeAgo(iso) {
+      if (!iso) return '';
+      const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+      if (diff < 60) return Math.round(diff) + 's ago';
+      if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+      if (diff < 86400) return (diff / 3600).toFixed(1) + 'h ago';
+      return Math.round(diff / 86400) + 'd ago';
+    },
+
+    // ── Scanner status ──────────────────────────────────────
+
+    get scannerClass() {
+      const s = this.health.scanner_status;
+      if (s === 'running') return 'running';
+      if (s === 'stopped') return 'stopped';
+      return 'unknown';
+    },
+
+    get scannerLabel() {
+      return this.health.scanner_status || 'unknown';
+    },
+
+    // ── Sorting ─────────────────────────────────────────────
+
+    sortTable(tableName, col) {
+      const st = this.sortState[tableName];
+      if (st.col === col) {
+        st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        st.col = col;
+        // Default to desc for numeric columns, asc for name/status
+        st.dir = (col === 'name' || col === 'status' || col === 'position') ? 'asc' : 'desc';
+      }
+    },
+
+    sortArrow(tableName, col) {
+      const st = this.sortState[tableName];
+      if (st.col !== col) return '';
+      return st.dir === 'asc' ? '\u25B2' : '\u25BC';
+    },
+
+    sorted(tableName) {
+      const dataMap = {
+        profitters: this.profitData.per_player,
+        profitRate: this.profitData.per_player.filter(p => p.sell_count > 0),
+        unsold: this.staleData.longest_unsold,
+        avgSale: this.staleData.avg_sale_time,
+        portfolio: this.portfolioData.players,
+        scored: this.scoredPlayers,
+      };
+      const arr = dataMap[tableName] || [];
+      const st = this.sortState[tableName];
+      if (!st || !st.col) return arr;
+
+      return [...arr].sort((a, b) => {
+        let va = a[st.col];
+        let vb = b[st.col];
+
+        // Null values always sort to bottom
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+
+        // String comparison
+        if (typeof va === 'string' && typeof vb === 'string') {
+          const cmp = va.localeCompare(vb);
+          return st.dir === 'asc' ? cmp : -cmp;
         }
-      },
-      scales: {
-        x: { grid: { color: 'rgba(45,49,72,0.4)' }, ticks: { color: '#8b8fa3', font: { size: 11 } } },
-        y: { grid: { display: false }, ticks: { color: '#e4e6ef', font: { size: 11 } } }
+
+        // Numeric comparison
+        const cmp = va - vb;
+        return st.dir === 'asc' ? cmp : -cmp;
+      });
+    },
+
+    // ── Fetchers ────────────────────────────────────────────
+
+    async fetchProfit() {
+      const data = await this._fetch('/api/v1/profit/summary' + this._sinceParam(this.filters.profit));
+      if (data) {
+        this.profitData = {
+          totals: data.totals || {},
+          per_player: data.per_player || [],
+        };
       }
-    }
-  });
+    },
+
+    async fetchStale(source) {
+      // Use the filter for whichever section was just changed
+      const filterValue = source === 'unsold' ? this.filters.staleUnsold : this.filters.staleAvg;
+      const data = await this._fetch('/api/v1/portfolio/stale' + this._sinceParam(filterValue));
+      if (data) {
+        this.staleData = {
+          longest_unsold: data.longest_unsold || [],
+          avg_sale_time: data.avg_sale_time || [],
+        };
+      }
+    },
+
+    async fetchPortfolio() {
+      const data = await this._fetch('/api/v1/portfolio/status' + this._sinceParam(this.filters.portfolio));
+      if (data) {
+        this.portfolioData = {
+          summary: data.summary || {},
+          players: data.players || [],
+        };
+      }
+    },
+
+    async fetchHealth() {
+      const data = await this._fetch('/api/v1/health');
+      if (data) this.health = data;
+    },
+
+    async fetchDailyCap() {
+      const data = await this._fetch('/api/v1/automation/daily-cap');
+      if (data) this.dailyCap = { count: data.count || 0, cap: data.cap || 500 };
+    },
+
+    async fetchScored() {
+      const data = await this._fetch('/api/v1/players/top?limit=100');
+      if (data) this.scoredPlayers = data.data || [];
+    },
+
+    async refreshAll() {
+      await Promise.all([
+        this.fetchProfit(),
+        this.fetchStale('unsold'),
+        this.fetchPortfolio(),
+        this.fetchHealth(),
+        this.fetchDailyCap(),
+        this.fetchScored(),
+      ]);
+      this.lastUpdated = new Date().toISOString();
+    },
+  };
 }
-
-// ── Data Loaders ────────────────────────────────────────────
-async function loadProfit() {
-  try {
-    const data = await apiFetch('/api/v1/profit/summary');
-    const t = data.totals;
-
-    document.getElementById('statProfit').textContent = fmtCoins(t.realized_profit);
-    document.getElementById('statProfit').className = 'stat-value ' + profitClass(t.realized_profit);
-    document.getElementById('statProfitSub').textContent = fmt(t.realized_profit) + ' coins';
-
-    document.getElementById('statUnrealized').textContent = fmtCoins(t.unrealized_pnl);
-    document.getElementById('statUnrealized').className = 'stat-value ' + profitClass(t.unrealized_pnl);
-    document.getElementById('statUnrealizedSub').textContent = fmt(t.held_count) + ' held';
-
-    document.getElementById('statEarned').textContent = fmtCoins(t.total_earned);
-    document.getElementById('statSpent').textContent = fmtCoins(t.total_spent);
-    document.getElementById('statSpentSub').textContent = fmt(t.total_spent) + ' coins';
-
-    document.getElementById('statTrades').textContent = t.buy_count + ' / ' + t.sell_count;
-    document.getElementById('statTradesSub').textContent = t.held_count + ' still held';
-
-    // Profit chart — top 10 by |realized_profit|
-    const sorted = [...data.per_player].sort((a, b) => Math.abs(b.realized_profit) - Math.abs(a.realized_profit)).slice(0, 10);
-    profitChart.data.labels = sorted.map(p => p.name.length > 18 ? p.name.slice(0, 16) + '...' : p.name);
-    profitChart.data.datasets[0].data = sorted.map(p => p.realized_profit);
-    profitChart.data.datasets[0].backgroundColor = sorted.map(p => p.realized_profit >= 0 ? '#00d68f' : '#ff6b6b');
-    profitChart.update();
-    document.getElementById('profitPlayerCount').textContent = data.per_player.length + ' players';
-
-    // Profit table
-    const sortedAll = [...data.per_player].sort((a, b) => b.realized_profit - a.realized_profit);
-    document.getElementById('profitBody').innerHTML = sortedAll.length === 0
-      ? '<tr><td colspan="8" class="text-dim" style="text-align:center;padding:30px;">No trade data yet</td></tr>'
-      : sortedAll.map(p => `
-        <tr>
-          <td>${p.name}</td>
-          <td class="text-right font-mono">${fmt(p.total_spent)}</td>
-          <td class="text-right font-mono">${fmt(p.total_earned)}</td>
-          <td class="text-right font-mono ${profitTextClass(p.realized_profit)}">${fmt(p.realized_profit)}</td>
-          <td class="text-right font-mono ${p.unrealized_pnl != null ? profitTextClass(p.unrealized_pnl) : 'text-dim'}">${p.unrealized_pnl ? fmt(p.unrealized_pnl) : '--'}</td>
-          <td class="text-right font-mono">${p.buy_count}</td>
-          <td class="text-right font-mono">${p.sell_count}</td>
-          <td class="text-right font-mono">${p.held_count}</td>
-        </tr>
-      `).join('');
-  } catch (e) {
-    console.error('Profit load failed:', e);
-    document.getElementById('profitBody').innerHTML = `<tr><td colspan="8" class="error-msg">Failed to load profit data</td></tr>`;
-  }
-}
-
-async function loadPortfolioStatus() {
-  try {
-    const data = await apiFetch('/api/v1/portfolio/status');
-    const s = data.summary;
-
-    // Unrealized and trade counts now come from loadProfit()
-
-    // Status donut
-    const players = data.players;
-    const counts = { BOUGHT: 0, LISTED: 0, SOLD: 0, EXPIRED: 0, PENDING: 0 };
-    players.forEach(p => counts[p.status] = (counts[p.status] || 0) + 1);
-    statusChart.data.datasets[0].data = [counts.BOUGHT, counts.LISTED, counts.SOLD, counts.EXPIRED, counts.PENDING];
-    statusChart.update();
-    document.getElementById('tradeStatusBadge').textContent = players.length + ' slots';
-    document.getElementById('portfolioBadge').textContent = players.length + ' slots';
-
-    // Portfolio table
-    const sorted = [...players].sort((a, b) => b.realized_profit - a.realized_profit);
-    document.getElementById('portfolioBody').innerHTML = sorted.length === 0
-      ? '<tr><td colspan="8" class="text-dim" style="text-align:center;padding:30px;">No portfolio yet</td></tr>'
-      : sorted.map(p => `
-        <tr>
-          <td>${p.name}${p.is_leftover ? ' <span class="text-dim">(L)</span>' : ''}</td>
-          <td>${statusBadge(p.status)}</td>
-          <td class="text-right font-mono">${fmt(p.buy_price)}</td>
-          <td class="text-right font-mono">${fmt(p.sell_price)}</td>
-          <td class="text-right font-mono">${p.current_bin != null ? fmt(p.current_bin) : '<span class="text-dim">--</span>'}</td>
-          <td class="text-right font-mono ${profitTextClass(p.realized_profit)}">${fmt(p.realized_profit)}</td>
-          <td class="text-right font-mono ${p.unrealized_pnl != null ? profitTextClass(p.unrealized_pnl) : 'text-dim'}">${p.unrealized_pnl != null ? fmt(p.unrealized_pnl) : '--'}</td>
-          <td class="text-right font-mono">${p.times_sold}</td>
-        </tr>
-      `).join('');
-  } catch (e) {
-    console.error('Portfolio status load failed:', e);
-    document.getElementById('portfolioBody').innerHTML = `<tr><td colspan="8" class="error-msg">Failed to load portfolio</td></tr>`;
-  }
-}
-
-async function loadTopPlayers() {
-  try {
-    const data = await apiFetch('/api/v1/players/top?limit=50');
-    const players = data.data;
-
-    document.getElementById('topScoredBadge').textContent = players.length + ' players';
-    document.getElementById('topPlayersBadge').textContent = 'top ' + Math.min(10, players.length);
-
-    // Efficiency chart - top 10
-    const top10 = players.slice(0, 10);
-    efficiencyChart.data.labels = top10.map(p => p.name.length > 18 ? p.name.slice(0, 16) + '...' : p.name);
-    efficiencyChart.data.datasets[0].data = top10.map(p => p.efficiency);
-    efficiencyChart.update();
-
-    // Table
-    document.getElementById('topPlayersBody').innerHTML = players.length === 0
-      ? '<tr><td colspan="9" class="text-dim" style="text-align:center;padding:30px;">No scored players</td></tr>'
-      : players.map((p, i) => `
-        <tr>
-          <td class="text-dim">${i + 1}</td>
-          <td>${p.name} <span class="text-dim">${p.rating} ${p.position || ''}</span></td>
-          <td class="text-right font-mono">${fmt(p.price)}</td>
-          <td class="text-right font-mono">${p.margin_pct}%</td>
-          <td class="text-right font-mono">${pctStr(p.op_ratio)}</td>
-          <td class="text-right font-mono text-green">${fmt(Math.round(p.expected_profit))}</td>
-          <td class="text-right font-mono text-blue">${p.expected_profit_per_hour != null ? p.expected_profit_per_hour.toFixed(0) : '--'}</td>
-          <td class="text-right font-mono" style="color:var(--accent)">${p.efficiency.toFixed(4)}</td>
-          <td>${p.is_stale ? '<span class="text-yellow">STALE</span>' : '<span class="text-green">OK</span>'}</td>
-        </tr>
-      `).join('');
-  } catch (e) {
-    console.error('Top players load failed:', e);
-    document.getElementById('topPlayersBody').innerHTML = `<tr><td colspan="9" class="error-msg">Failed to load players</td></tr>`;
-  }
-}
-
-async function loadHealth() {
-  try {
-    const data = await apiFetch('/api/v1/health');
-    const dot = document.getElementById('scannerDot');
-    const label = document.getElementById('scannerLabel');
-
-    dot.className = 'status-dot ' + (data.scanner_status === 'running' ? '' : data.scanner_status === 'stopped' ? 'stopped' : 'unknown');
-    label.textContent = data.scanner_status === 'running' ? 'Scanner Active' : data.scanner_status === 'stopped' ? 'Scanner Stopped' : 'Unknown';
-
-    document.getElementById('healthSuccess').textContent = data.scan_success_rate_1h != null ? (data.scan_success_rate_1h * 100).toFixed(1) + '%' : '--';
-    document.getElementById('healthSuccess').className = 'value ' + (data.scan_success_rate_1h >= 0.9 ? 'text-green' : data.scan_success_rate_1h >= 0.7 ? 'text-yellow' : 'text-red');
-    document.getElementById('healthPlayers').textContent = fmt(data.players_in_db);
-    document.getElementById('healthQueue').textContent = fmt(data.queue_depth);
-    document.getElementById('healthCB').textContent = data.circuit_breaker || '--';
-    document.getElementById('healthCB').className = 'value ' + (data.circuit_breaker === 'closed' ? 'text-green' : data.circuit_breaker === 'open' ? 'text-red' : 'text-yellow');
-    document.getElementById('healthLastScan').textContent = timeAgo(data.last_scan_at);
-    document.getElementById('healthStatus').textContent = data.scanner_status;
-    document.getElementById('healthStatus').className = 'value ' + (data.scanner_status === 'running' ? 'text-green' : 'text-red');
-  } catch (e) {
-    console.error('Health load failed:', e);
-    document.getElementById('scannerDot').className = 'status-dot unknown';
-    document.getElementById('scannerLabel').textContent = 'Offline';
-  }
-}
-
-async function loadDailyCap() {
-  try {
-    const data = await apiFetch('/api/v1/automation/daily-cap');
-    document.getElementById('statCap').textContent = data.count + ' / ' + data.cap;
-    const pct = Math.min(100, (data.count / data.cap) * 100);
-    const bar = document.getElementById('capProgress');
-    bar.style.width = pct + '%';
-    bar.style.background = pct >= 90 ? 'var(--red)' : pct >= 70 ? 'var(--yellow)' : 'var(--accent)';
-  } catch (e) {
-    console.error('Daily cap load failed:', e);
-  }
-}
-
-// ── Main refresh ────────────────────────────────────────────
-async function refreshAll() {
-  document.getElementById('lastUpdated').textContent = 'Refreshing...';
-  await Promise.allSettled([
-    loadProfit(),
-    loadPortfolioStatus(),
-    loadTopPlayers(),
-    loadHealth(),
-    loadDailyCap(),
-  ]);
-  document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-}
-
-// ── Init ────────────────────────────────────────────────────
-initCharts();
-refreshAll();
-
-// Auto-refresh every 60 seconds
-setInterval(refreshAll, 60_000);
 </script>
+
 </body>
 </html>
