@@ -23,6 +23,7 @@ class PlayerRecord(Base):
     next_scan_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     listing_count: Mapped[int] = mapped_column(Integer, default=0)
+    listings_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
     sales_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
     futgg_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

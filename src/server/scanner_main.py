@@ -57,6 +57,18 @@ async def main():
             ))
             logger.info("Migrated players: added last_resolved_at column")
 
+        # Migrate: add listings_per_hour column for v3 scorer
+        def _check_lph_col(connection):
+            insp = sa_inspect(connection)
+            cols = [c["name"] for c in insp.get_columns("players")]
+            return "listings_per_hour" in cols
+        has_lph = await conn.run_sync(_check_lph_col)
+        if not has_lph:
+            await conn.execute(text(
+                "ALTER TABLE players ADD COLUMN listings_per_hour FLOAT DEFAULT 0.0"
+            ))
+            logger.info("Migrated players: added listings_per_hour column")
+
     cb = CircuitBreaker()
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
