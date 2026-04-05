@@ -42,7 +42,12 @@ AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggre
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
 # OP sell margin tiers (highest first)
-MARGINS = [40, 35, 30, 25]
+MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
+
+# Scorer v3 weights: score = sell_ratio^W1 × sph^W2 × net_profit^W3
+SCORER_V3_W1 = 1  # sell_ratio weight (demand vs supply)
+SCORER_V3_W2 = 1  # sales_per_hour weight (liquidity)
+SCORER_V3_W3 = 1  # net_profit weight (profit per sale)
 MAX_OP_MARGIN_PCT = 44  # ignore listings priced above this margin (junk/troll listings)
 
 # Database
