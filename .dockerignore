@@ -12,3 +12,9 @@ node_modules/
 *.egg-info/
 .env
 .env.*
+brand/
+docs/
+.idea/
+*.csv
+*.db
+*.sqlite
