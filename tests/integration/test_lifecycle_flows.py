@@ -66,7 +66,7 @@ async def test_full_buy_list_sold_cycle(client, real_ea_ids):
       5. Complete LIST with outcome=sold
       6. GET pending -> BUY (new cycle)
       7. GET /portfolio/status -> player status SOLD
-      8. GET /profit/summary -> net_profit != 0
+      8. GET /profit/summary -> realized_profit != 0
     """
     assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
     ea_id = real_ea_ids[0]
@@ -131,12 +131,12 @@ async def test_full_buy_list_sold_cycle(client, real_ea_ids):
         f"Expected status=SOLD after sold record, got {player_status['status']}"
     )
 
-    # Step 7: GET /profit/summary -> net_profit != 0 (there was a complete buy+sell)
+    # Step 7: GET /profit/summary -> realized_profit != 0 (there was a complete buy+sell)
     r = await client.get("/api/v1/profit/summary")
     assert r.status_code == 200
     profit_body = r.json()
-    assert profit_body["totals"]["net_profit"] != 0, (
-        "Expected non-zero net_profit after completed buy+sell cycle, got 0. "
+    assert profit_body["totals"]["realized_profit"] != 0, (
+        "Expected non-zero realized_profit after completed buy+sell cycle, got 0. "
         "Either the profit calculation is broken or the records were not persisted."
     )
 
@@ -515,7 +515,7 @@ async def test_profit_summary_after_full_cycle(client, real_ea_ids):
     Expected:
       total_spent  = 50000
       total_earned = int(70000 * 0.95)  = 66500
-      net_profit   = 66500 - 50000      = 16500
+      realized_profit   = 66500 - 50000      = 16500
     """
     assert len(real_ea_ids) >= 1, "Need at least 1 active player in DB"
     ea_id = real_ea_ids[0]
@@ -549,8 +549,8 @@ async def test_profit_summary_after_full_cycle(client, real_ea_ids):
     assert totals["total_earned"] == expected_earned, (
         f"Expected total_earned={expected_earned} (after EA 5% tax), got {totals['total_earned']}"
     )
-    assert totals["net_profit"] == expected_net, (
-        f"Expected net_profit={expected_net}, got {totals['net_profit']}"
+    assert totals["realized_profit"] == expected_net, (
+        f"Expected realized_profit={expected_net}, got {totals['realized_profit']}"
     )
 
 
