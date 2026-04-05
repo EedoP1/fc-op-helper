@@ -5,9 +5,9 @@ Selects the best players to fill the budget, maximizing total v3 score.
 
 Algorithm:
 1. Greedy fill by score — pick the highest scored players first.
-2. Drop-and-backfill — if under 80 players, remove the most expensive
+2. Drop-and-backfill — if under 90 players, remove the most expensive
    player (ban it permanently), then backfill the freed budget with the
-   next-best players. Repeat until >= 80 or no progress.
+   next-best players. Repeat until >= 90 or no progress.
 3. Backfill any remaining budget slack.
 4. Upgrade loop — swap the weakest selected player for a stronger
    unselected player when the budget allows, excluding banned players.
@@ -21,7 +21,7 @@ from src.config import TARGET_PLAYER_COUNT
 
 logger = logging.getLogger(__name__)
 
-_MIN_FILL_COUNT = 80  # trigger drop-and-backfill below this threshold
+_MIN_FILL_COUNT = 90  # trigger drop-and-backfill below this threshold
 
 
 def optimize_portfolio(
