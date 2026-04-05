@@ -1,4 +1,4 @@
-"""Smoke tests for all 16 API endpoints using real DB data.
+"""Smoke tests for all API endpoints using real DB data.
 
 These tests hit the REAL running server (started by conftest.live_server)
 against a COPY of the production DB. No mocks. No fake ea_ids.
@@ -26,6 +26,11 @@ Covered endpoints:
     POST /api/v1/trade-records/batch
     GET  /api/v1/portfolio/status
     GET  /api/v1/profit/summary
+    GET  /api/v1/portfolio/actions-needed
+    GET  /api/v1/portfolio/player-price/{ea_id}
+    GET  /api/v1/automation/daily-cap
+    POST /api/v1/automation/daily-cap/increment
+    GET  /dashboard
 """
 import pytest
 import pytest_asyncio
@@ -369,3 +374,122 @@ async def test_profit_summary_empty(client):
     assert "total_earned" in totals, f"Missing total_earned in totals: {totals}"
     assert "realized_profit" in totals, f"Missing realized_profit in totals: {totals}"
     assert "total_profit" in totals, f"Missing total_profit in totals: {totals}"
+
+
+# ── Actions needed ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_actions_needed_empty(client):
+    """GET /portfolio/actions-needed with no portfolio returns 200 with zero summary."""
+    r = await client.get("/api/v1/portfolio/actions-needed")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert "actions" in body, f"Missing actions key in {body}"
+    assert "summary" in body, f"Missing summary key in {body}"
+    summary = body["summary"]
+    assert "to_buy" in summary, f"Missing to_buy in summary: {summary}"
+    assert "to_list" in summary, f"Missing to_list in summary: {summary}"
+    assert "to_relist" in summary, f"Missing to_relist in summary: {summary}"
+
+
+@pytest.mark.asyncio
+async def test_actions_needed_with_slot(client, seed_real_portfolio_slot, real_ea_id):
+    """GET /portfolio/actions-needed after seeding slot shows to_buy > 0."""
+    assert real_ea_id is not None
+    assert seed_real_portfolio_slot is not None
+    assert seed_real_portfolio_slot.status_code == 201
+
+    r = await client.get("/api/v1/portfolio/actions-needed")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["summary"]["to_buy"] >= 1, (
+        f"Expected to_buy >= 1 after seeding a slot, got {body['summary']}"
+    )
+
+
+# ── Player price (price guard) ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_player_price_with_slot(client, seed_real_portfolio_slot, real_ea_id):
+    """GET /portfolio/player-price/{ea_id} returns buy/sell price for a portfolio player."""
+    assert real_ea_id is not None
+    assert seed_real_portfolio_slot is not None
+    assert seed_real_portfolio_slot.status_code == 201
+
+    r = await client.get(f"/api/v1/portfolio/player-price/{real_ea_id}")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert "buy_price" in body, f"Missing buy_price in {body}"
+    assert "sell_price" in body, f"Missing sell_price in {body}"
+    assert body["buy_price"] == 50000, f"Expected buy_price=50000, got {body['buy_price']}"
+    assert body["sell_price"] == 70000, f"Expected sell_price=70000, got {body['sell_price']}"
+
+
+@pytest.mark.asyncio
+async def test_player_price_not_in_portfolio(client):
+    """GET /portfolio/player-price/{ea_id} returns 404 for player not in portfolio."""
+    r = await client.get("/api/v1/portfolio/player-price/999999999")
+    assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
+
+
+# ── Automation daily cap ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_daily_cap_response_shape(client):
+    """GET /automation/daily-cap returns 200 with required fields."""
+    r = await client.get("/api/v1/automation/daily-cap")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    body = r.json()
+    assert "count" in body, f"Missing count in {body}"
+    assert "cap" in body, f"Missing cap in {body}"
+    assert "capped" in body, f"Missing capped in {body}"
+    assert "date" in body, f"Missing date in {body}"
+    assert isinstance(body["count"], int), f"count should be int, got {type(body['count'])}"
+    assert isinstance(body["cap"], int), f"cap should be int, got {type(body['cap'])}"
+    assert isinstance(body["capped"], bool), f"capped should be bool, got {type(body['capped'])}"
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_increment(client):
+    """POST /automation/daily-cap/increment increases count by 1."""
+    # Get initial count
+    r1 = await client.get("/api/v1/automation/daily-cap")
+    assert r1.status_code == 200
+    initial_count = r1.json()["count"]
+
+    # Increment
+    r2 = await client.post("/api/v1/automation/daily-cap/increment")
+    assert r2.status_code == 200, f"Expected 200, got {r2.status_code}: {r2.text}"
+    body = r2.json()
+    assert body["count"] == initial_count + 1, (
+        f"Expected count={initial_count + 1} after increment, got {body['count']}"
+    )
+    assert "capped" in body, f"Missing capped in {body}"
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_increment_twice(client):
+    """POST /automation/daily-cap/increment twice increases count by 2."""
+    r0 = await client.get("/api/v1/automation/daily-cap")
+    initial = r0.json()["count"]
+
+    await client.post("/api/v1/automation/daily-cap/increment")
+    r = await client.post("/api/v1/automation/daily-cap/increment")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == initial + 2, (
+        f"Expected count={initial + 2} after 2 increments, got {body['count']}"
+    )
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_dashboard_returns_html(client):
+    """GET /dashboard returns 200 with HTML content."""
+    r = await client.get("/dashboard")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    assert "text/html" in r.headers.get("content-type", ""), (
+        f"Expected HTML content-type, got {r.headers.get('content-type')}"
+    )
+    assert "<html" in r.text.lower(), "Response doesn't contain <html> tag"

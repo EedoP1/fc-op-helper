@@ -305,4 +305,11 @@ async def cleanup_tables(test_db_url):
         await conn.execute(text("DELETE FROM trade_actions"))
         await conn.execute(text("DELETE FROM portfolio_slots"))
         await conn.execute(text("DELETE FROM scanner_status"))
+        # Table may not exist if test DB was cloned before this migration
+        await conn.execute(text(
+            "DO $$ BEGIN "
+            "DELETE FROM daily_transaction_counts; "
+            "EXCEPTION WHEN undefined_table THEN NULL; "
+            "END $$"
+        ))
     await engine.dispose()
