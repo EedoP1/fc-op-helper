@@ -20,6 +20,7 @@ router = APIRouter()
 async def get_portfolio(
     request: Request,
     budget: int = Query(..., gt=0, description="Total budget in coins"),
+    exclude_card_types: str = Query(None, description="Comma-separated card types to exclude"),
 ):
     """Return an optimized portfolio of players to OP sell within the given budget.
 
@@ -51,8 +52,11 @@ async def get_portfolio(
             "budget_remaining": budget,
         }
 
+    # Parse excluded card types
+    excl = [t.strip() for t in exclude_card_types.split(",")] if exclude_card_types else None
+
     # Run optimizer
-    selected = optimize_portfolio(scored_list, budget)
+    selected = optimize_portfolio(scored_list, budget, exclude_card_types=excl)
 
     # Compute budget summary
     budget_used = sum(entry["buy_price"] for entry in selected)

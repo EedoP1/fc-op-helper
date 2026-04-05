@@ -32,6 +32,7 @@ from src.server.playwright_client import PlaywrightPricesClient
 from src.server.listing_tracker import record_listings, resolve_outcomes
 from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ScannerStatus
 from src.server.scorer_v2 import score_player_v2
+from src.server.scorer_v3 import score_player_v3
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,42 @@ def _compute_sales_per_hour(sales) -> float:
     if span_hrs <= 0:
         return 0.0
     return len(sales) / span_hrs
+
+
+def _compute_listings_per_hour(live_auctions_raw: list[dict]) -> float:
+    """Compute listings/hour from liveAuctions expiry timestamps.
+
+    Each listing has an expiresOn field. Since EA listings last 1 hour,
+    listed_at = expiresOn - 1 hour. We compute the time span of all
+    listings and normalize to per-hour, same approach as sales_per_hour.
+    """
+    if len(live_auctions_raw) < 2:
+        return 0.0
+
+    listed_times = []
+    for entry in live_auctions_raw:
+        expires = entry.get("endDate") or entry.get("expiresOn") or entry.get("expires")
+        if not expires:
+            continue
+        try:
+            if isinstance(expires, (int, float)):
+                expiry_dt = datetime.fromtimestamp(expires, tz=timezone.utc)
+            else:
+                expiry_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+            listed_at = expiry_dt - timedelta(hours=1)
+            listed_times.append(listed_at)
+        except (ValueError, TypeError, OSError):
+            continue
+
+    if len(listed_times) < 2:
+        return 0.0
+
+    oldest = min(listed_times)
+    newest = max(listed_times)
+    span_hrs = (newest - oldest).total_seconds() / 3600
+    if span_hrs <= 0:
+        return 0.0
+    return len(listed_times) / span_hrs
 
 
 class ScannerService:
@@ -272,20 +309,27 @@ class ScannerService:
             if market_data is not None and market_data.sales:
                 sph = _compute_sales_per_hour(market_data.sales)
 
-            # --- V2 scoring ---
-            v2_result = None
+            # --- Compute listings/hour from liveAuctions ---
+            lph = 0.0
+            if market_data is not None and market_data.live_auctions_raw:
+                lph = _compute_listings_per_hour(market_data.live_auctions_raw)
+
+            # --- V3 scoring (weighted supply/demand) ---
+            v3_result = None
             if market_data is not None and market_data.current_lowest_bin > 0:
-                v2_result = await score_player_v2(
+                v3_result = await score_player_v3(
                     ea_id=ea_id,
-                    session=session,
                     buy_price=market_data.current_lowest_bin,
+                    sales_per_hour=sph,
+                    visible_lph=lph,
+                    session=session,
                     max_price_range=market_data.max_price_range,
                 )
 
             t_score = time.monotonic()
 
-            # Write PlayerScore row built entirely from v2 result
-            if v2_result is not None:
+            # Write PlayerScore row from v3 result
+            if v3_result is not None:
                 viable = sph >= MIN_SALES_PER_HOUR
                 if not viable:
                     logger.debug(
@@ -295,19 +339,19 @@ class ScannerService:
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
-                    buy_price=v2_result["buy_price"],
-                    sell_price=v2_result["sell_price"],
-                    net_profit=v2_result["net_profit"],
-                    margin_pct=v2_result["margin_pct"],
-                    op_sales=v2_result["op_sold"],
-                    total_sales=v2_result["op_total"],
-                    op_ratio=v2_result["op_sell_rate"],
-                    expected_profit=v2_result["expected_profit_per_hour"],
-                    efficiency=v2_result["expected_profit_per_hour"] / v2_result["buy_price"],
+                    buy_price=v3_result["buy_price"],
+                    sell_price=v3_result["sell_price"],
+                    net_profit=v3_result["net_profit"],
+                    margin_pct=v3_result["margin_pct"],
+                    op_sales=0,
+                    total_sales=0,
+                    op_ratio=v3_result["sell_ratio"],
+                    expected_profit=v3_result["weighted_score"],
+                    efficiency=v3_result["weighted_score"] / v3_result["buy_price"],
                     sales_per_hour=sph,
                     is_viable=viable,
-                    expected_profit_per_hour=v2_result["expected_profit_per_hour"],
-                    scorer_version="v2",
+                    expected_profit_per_hour=v3_result["weighted_score"],
+                    scorer_version="v3",
                     max_sell_price=market_data.max_price_range,
                 )
             else:
@@ -344,6 +388,7 @@ class ScannerService:
                 record.last_scanned_at = now
                 if market_data is not None:
                     record.listing_count = market_data.listing_count
+                    record.listings_per_hour = lph
                     # Populate player name from API data
                     if market_data.player and market_data.player.name:
                         record.name = market_data.player.name
