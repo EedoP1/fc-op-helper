@@ -19,7 +19,7 @@
 set -euo pipefail
 
 COMPOSE_TEST_FLAGS="-f docker-compose.yml -f docker-compose.test.yml -p op_seller_test"
-API_HEALTH_URL="http://localhost:8001/health"
+API_HEALTH_URL="http://localhost:8001/api/v1/health"
 HEALTH_MAX_WAIT=30
 
 # Tear down api + scanner on exit (postgres-test persists across runs)
