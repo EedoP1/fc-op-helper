@@ -6,8 +6,10 @@ Buy-anchored FIFO profit calculation:
 - Sells without buys are ignored (ghost / pre-bot events).
 """
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select, func
 
 from src.server.models_db import TradeRecord, PlayerRecord, MarketSnapshot
@@ -17,9 +19,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
+# Valid since parameter values and their timedelta offsets
+_SINCE_OFFSETS = {
+    "1h": timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+
+def _parse_since(since: Optional[str]) -> Optional[datetime]:
+    """Parse a ``since`` query parameter into a UTC datetime cutoff.
+
+    Args:
+        since: One of '1h', '24h', '7d', '30d', 'all', or None.
+
+    Returns:
+        UTC datetime cutoff, or None when no filter should be applied.
+
+    Raises:
+        HTTPException: 422 for unrecognised values.
+    """
+    if since is None or since == "all":
+        return None
+    if since in _SINCE_OFFSETS:
+        return datetime.now(timezone.utc) - _SINCE_OFFSETS[since]
+    raise HTTPException(
+        status_code=422,
+        detail=f"Invalid since value '{since}'. Must be one of: 1h, 24h, 7d, 30d, all",
+    )
+
 
 @router.get("/profit/summary")
-async def get_profit_summary(request: Request):
+async def get_profit_summary(
+    request: Request,
+    since: Optional[str] = Query(default=None),
+):
     """Return total and per-player profit breakdown using FIFO buy→sell matching.
 
     For each ea_id, trade records are sorted chronologically. Each 'bought'
@@ -28,21 +63,27 @@ async def get_profit_summary(request: Request):
 
     Args:
         request: FastAPI Request (app.state carries session_factory).
+        since: Optional time filter — '1h', '24h', '7d', '30d', 'all', or None.
 
     Returns:
         Dict with keys:
             totals: {total_spent, total_earned, realized_profit, unrealized_pnl,
                      total_profit, buy_count, sell_count, held_count}
-            per_player: list of {ea_id, name, total_spent, total_earned,
-                     realized_profit, unrealized_pnl, buy_count, sell_count, held_count}
+            per_player: list of per-player breakdown including profit_per_hour,
+                     active_hours, first_buy_at, last_sell_at timestamps.
     """
+    cutoff = _parse_since(since)
+
     session_factory = request.app.state.read_session_factory
     async with session_factory() as session:
-        # All trade records ordered chronologically
-        trades_result = await session.execute(
+        # All trade records ordered chronologically, optionally filtered by time
+        stmt = (
             select(TradeRecord.ea_id, TradeRecord.outcome, TradeRecord.price, TradeRecord.recorded_at)
             .order_by(TradeRecord.recorded_at, TradeRecord.id)
         )
+        if cutoff is not None:
+            stmt = stmt.where(TradeRecord.recorded_at >= cutoff)
+        trades_result = await session.execute(stmt)
         trades = trades_result.all()
 
         # Player names
@@ -75,22 +116,27 @@ async def get_profit_summary(request: Request):
     # FIFO matching per player
     per_player = []
     for ea_id, player_trades in trades_by_player.items():
-        buy_queue: list[int] = []  # unmatched buy prices
+        buy_queue: list[tuple[int, datetime]] = []  # (price, recorded_at)
         total_spent = 0
         total_earned = 0
         realized_profit = 0
         sell_count = 0
+        first_buy_at: datetime | None = None
+        last_sell_at: datetime | None = None
 
         for trade in player_trades:
             if trade.outcome == "bought":
-                buy_queue.append(trade.price)
+                buy_queue.append((trade.price, trade.recorded_at))
                 total_spent += trade.price
+                if first_buy_at is None:
+                    first_buy_at = trade.recorded_at
             elif trade.outcome == "sold" and buy_queue:
-                buy_price = buy_queue.pop(0)
+                buy_price, _buy_ts = buy_queue.pop(0)
                 earned = int(trade.price * (1 - EA_TAX_RATE))
                 total_earned += earned
                 realized_profit += earned - buy_price
                 sell_count += 1
+                last_sell_at = trade.recorded_at
             # else: ghost sell (no buy to match) — ignored
 
         buy_count = sell_count + len(buy_queue)
@@ -104,8 +150,17 @@ async def get_profit_summary(request: Request):
         unrealized_pnl = 0
         current_bin = bin_map.get(ea_id)
         if held_count > 0 and current_bin is not None:
-            for held_buy_price in buy_queue:
+            for held_buy_price, _held_ts in buy_queue:
                 unrealized_pnl += int(current_bin * (1 - EA_TAX_RATE)) - held_buy_price
+
+        # Profit rate calculation
+        active_hours: float | None = None
+        profit_per_hour: float | None = None
+        if sell_count > 0 and first_buy_at is not None and last_sell_at is not None:
+            delta = last_sell_at - first_buy_at
+            active_hours = delta.total_seconds() / 3600.0
+            if active_hours > 0:
+                profit_per_hour = realized_profit / active_hours
 
         per_player.append({
             "ea_id": ea_id,
@@ -117,6 +172,10 @@ async def get_profit_summary(request: Request):
             "buy_count": buy_count,
             "sell_count": sell_count,
             "held_count": held_count,
+            "profit_per_hour": profit_per_hour,
+            "active_hours": active_hours,
+            "first_buy_at": first_buy_at.isoformat() if first_buy_at else None,
+            "last_sell_at": last_sell_at.isoformat() if last_sell_at else None,
         })
 
     # Totals
