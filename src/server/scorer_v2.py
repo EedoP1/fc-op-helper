@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import (
     EA_TAX_RATE,
     LISTING_RETENTION_DAYS,
+    MARGINS,
     MIN_TOTAL_RESOLVED_OBSERVATIONS,
     MIN_OP_OBSERVATIONS,
 )
@@ -36,12 +37,12 @@ _SCORE_SQL = text("""
     ORDER BY margin_pct DESC
 """)
 
-# Total observation count: use margin_pct = 3 (lowest tier, always present)
+# Total observation count: use the lowest configured margin tier (always present)
 # to avoid multiplying by the number of margin tiers.
-_TOTAL_COUNT_SQL = text("""
+_TOTAL_COUNT_SQL = text(f"""
     SELECT COALESCE(SUM(total_listed_count), 0)
     FROM daily_listing_summaries
-    WHERE ea_id = :ea_id AND date >= :cutoff_date AND margin_pct = 3
+    WHERE ea_id = :ea_id AND date >= :cutoff_date AND margin_pct = {min(MARGINS)}
 """)
 
 
@@ -102,8 +103,14 @@ async def score_player_v2(
     best_epph = -1.0
     best: dict | None = None
 
+    _allowed_margins = set(MARGINS)
+
     for row in margin_rows:
         margin_pct, op_sold, op_expired = row[0], row[1], row[2]
+
+        if margin_pct not in _allowed_margins:
+            continue
+
         op_total = op_sold + op_expired
 
         if op_total < MIN_OP_OBSERVATIONS:

@@ -364,15 +364,17 @@ export async function executeBuyCycle(
         }
       }
 
-      // If all cards seen so far share the same price, paginate to find a cheaper
-      // card. EA sorts by time, not price — cheapest can be on any page.
-      // Cap at 10 pages: EA's "next" button wraps to page 1 instead of disabling,
-      // so without a limit this loop runs forever when all pages share one price.
-      const MAX_PAGINATION_PAGES = 10;
+      // Paginate to discover the cheapest price across all pages.
+      // We only track the PRICE here — not the DOM element, which would be
+      // detached after navigating away. If a cheaper price is found, we
+      // re-search with maxBin = that price so page 1 has live elements to click.
+      //
       let pagesScanned = 0;
-      while (seenPrices.size === 1 && binPrice < Infinity && pagesScanned < MAX_PAGINATION_PAGES) {
+      while (true) {
         const nextBtn = document.querySelector<HTMLButtonElement>(SELECTORS.PAGINATION_NEXT);
-        if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')) break;
+        // EA hides the Next button via display:none on the last page (not disabled)
+        if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')
+            || getComputedStyle(nextBtn).display === 'none') break;
 
         await clickElement(nextBtn);
         pagesScanned++;
@@ -390,21 +392,15 @@ export async function executeBuyCycle(
           if (isNaN(itemBin)) continue;
           if (!verifyCard(item, player.rating, player.position)) continue;
           seenPrices.add(itemBin);
-          // Use <= so cheapestItem tracks a card on the current page even when
-          // all pages share the same price. Without this, cheapestItem stays
-          // on page 1 while the DOM advances to a later page — clicking a
-          // detached page-1 element does nothing and the buy never proceeds.
-          if (itemBin <= binPrice) {
+          if (itemBin < binPrice) {
             binPrice = itemBin;
-            cheapestItem = item;
           }
         }
       }
 
-      // If we found multiple price points, narrow the search to the cheapest
-      // This ensures we're buying at the true market minimum.
-      if (seenPrices.size > 1 && binPrice < maxBin) {
-        // Go back and re-search with maxBin = cheapest price found
+      // If we paginated and found a cheaper price, go back and re-search at
+      // that price so we buy from a fresh page 1 with live DOM elements.
+      if (pagesScanned > 0 && binPrice < maxBin) {
         const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
         if (backBtn) {
           await clickElement(backBtn);
@@ -414,8 +410,42 @@ export async function executeBuyCycle(
         continue; // re-search with tighter maxBin
       }
 
+      // If we paginated but all prices were the same, go back to page 1
+      // so cheapestItem points to a live DOM element on the visible page.
+      if (pagesScanned > 0) {
+        const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
+        if (backBtn) {
+          await clickElement(backBtn);
+          await jitter(1000, 2000);
+        }
+        // Re-search to get fresh page 1 results
+        const refreshBtn = document.querySelector<HTMLElement>(SELECTORS.SEARCH_SUBMIT_BUTTON);
+        if (refreshBtn) {
+          await clickElement(refreshBtn);
+          const refreshResult = await waitForSearchResults();
+          if (refreshResult.outcome !== 'results') {
+            continue; // retry from outer step loop
+          }
+          // Re-scan page 1 for cheapestItem with live DOM references
+          const freshList = document.querySelector(SELECTORS.SEARCH_RESULTS_LIST)!;
+          const freshItems = Array.from(
+            freshList.querySelectorAll<Element>(SELECTORS.TRANSFER_LIST_ITEM),
+          );
+          cheapestItem = null;
+          for (const item of freshItems) {
+            const itemBin = readBinPrice(item);
+            if (isNaN(itemBin)) continue;
+            if (!verifyCard(item, player.rating, player.position)) continue;
+            if (itemBin <= binPrice) {
+              binPrice = itemBin;
+              cheapestItem = item;
+            }
+          }
+        }
+      }
+
       if (!cheapestItem || binPrice === Infinity) {
-        // No matching cards found across pages — go back and retry
+        // No matching cards found — go back and retry
         const backBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_BACK_BUTTON);
         if (backBtn) {
           await clickElement(backBtn);

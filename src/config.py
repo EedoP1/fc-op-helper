@@ -42,7 +42,7 @@ AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggre
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
 # OP sell margin tiers (highest first)
-MARGINS = [40, 35, 30, 25, 20, 15, 10, 8, 5, 3]
+MARGINS = [40, 35, 30, 25]
 MAX_OP_MARGIN_PCT = 44  # ignore listings priced above this margin (junk/troll listings)
 
 # Database
