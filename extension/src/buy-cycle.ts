@@ -40,7 +40,7 @@ export async function executeBuyCycle(
     const minBid = Math.floor(Math.random() * 1001);
     const criteria = buildCriteria(player.ea_id, player.buy_price, minBid);
 
-    await jitter(2000, 4000);
+    await jitter(1000, 2000);
 
     // Search
     const searchResult = await searchMarket(criteria);
@@ -70,7 +70,7 @@ export async function executeBuyCycle(
       return { outcome: 'skipped', reason: 'Price above guard' };
     }
 
-    await jitter(2000, 4000);
+    await jitter(1000, 2000);
 
     // Buy
     const buyResult = await buyItem(cheapest, cheapestBin);
@@ -83,7 +83,7 @@ export async function executeBuyCycle(
     const sellBin = roundToNearestStep(player.sell_price);
     const sellStart = roundToNearestStep(getBeforeStepValue(player.sell_price));
 
-    await jitter(2000, 4000);
+    await jitter(1000, 2000);
 
     const listResult = await listItem(cheapest, sellStart, sellBin);
     if (!listResult.success) {

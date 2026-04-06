@@ -56,7 +56,13 @@ interface PriceTier {
 }
 
 // Declare EA globals that exist on window at runtime
+declare const PINEventType: { PAGE_VIEW: string };
+declare const PIN_PAGEVIEW_EVT_TYPE: string;
+
 declare const services: {
+  PIN: {
+    sendData(eventType: string, data: { type: string; pgid: string }): void;
+  };
   Item: {
     searchTransferMarket(criteria: any, page?: number): EAObservable;
     clearTransferMarketCache(): void;
@@ -204,6 +210,24 @@ export function getBeforeStepValue(price: number): number {
   return rounded;
 }
 
+// ── PIN Telemetry ────────────────────────────────────────────────────────────
+
+/**
+ * Send a PIN page view event to EA's telemetry.
+ * EA's server expects these around API calls — missing them can cause 460 errors.
+ * FUT Auto-Buyer sends these before/after every search.
+ */
+function sendPinEvent(pageId: string): void {
+  try {
+    services.PIN.sendData(PINEventType.PAGE_VIEW, {
+      type: PIN_PAGEVIEW_EVT_TYPE,
+      pgid: pageId,
+    });
+  } catch {
+    // PIN events are best-effort — don't crash automation if they fail
+  }
+}
+
 // ── Market Operations ────────────────────────────────────────────────────────
 
 /**
@@ -228,19 +252,27 @@ export function buildCriteria(
  */
 export async function searchMarket(
   criteria: any,
-  page = 0,
+  page = 1,
 ): Promise<{ items: EAItem[]; totalResults: number; success: boolean; error?: number }> {
   services.Item.clearTransferMarketCache();
 
-  const { data, success, error } = await observableToPromise(
+  // PIN telemetry — EA expects page view events around searches (FUT Auto-Buyer pattern)
+  sendPinEvent('Transfer Market Search');
+
+  const result = await observableToPromise(
     services.Item.searchTransferMarket(criteria, page),
   );
+  console.log('[ea-services] searchMarket response:', JSON.stringify({ success: result.success, error: result.error, status: result.status, itemCount: result.data?.items?.length ?? 0, dataKeys: result.data ? Object.keys(result.data) : [] }));
+
+  if (result.success && page === 1) {
+    sendPinEvent('Transfer Market Results - List View');
+  }
 
   return {
-    items: data?.items ?? [],
-    totalResults: data?.count ?? data?.totalResults ?? 0,
-    success,
-    error,
+    items: result.data?.items ?? [],
+    totalResults: result.data?.count ?? result.data?.totalResults ?? 0,
+    success: result.success,
+    error: result.error,
   };
 }
 
@@ -252,10 +284,11 @@ export async function buyItem(
   item: EAItem,
   price: number,
 ): Promise<{ success: boolean; error?: number }> {
-  const { success, error } = await observableToPromise(
+  const result = await observableToPromise(
     services.Item.bid(item, price),
   );
-  return { success, error };
+  console.log('[ea-services] buyItem response:', JSON.stringify({ success: result.success, error: result.error, status: result.status, hasData: !!result.data }));
+  return { success: result.success, error: result.error };
 }
 
 /**

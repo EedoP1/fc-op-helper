@@ -58,7 +58,7 @@ export async function runAutomationLoop(
       }
 
       if (stopped()) return;
-      await jitter(2000, 4000);
+      await jitter(1000, 2000);
 
       // ── Phase A: Transfer list cycle ───────────────────────────────────
       await engine.setState('SCANNING', 'Scanning transfer list');
