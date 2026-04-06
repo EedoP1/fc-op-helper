@@ -11,3 +11,4 @@ __pycache__/
 .output/
 # Ignore root-level test scripts (legacy), but not tests/ directory
 /test_*.py
+.worktrees/
