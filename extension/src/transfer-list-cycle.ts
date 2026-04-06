@@ -18,6 +18,7 @@ import {
   type TransferListResult,
   type EAItem,
 } from './ea-services';
+import { jitter } from './automation';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,13 +50,16 @@ export async function executeTransferListCycle(
 
   // Refresh auction data if there are any items, then re-fetch for updated statuses
   if (groups.all.length > 0) {
+    await jitter(1000, 2000);
     await refreshAuctions(groups.all);
+    await jitter(1000, 2000);
     ({ groups } = await getTransferList());
   }
 
   // Step 2 — Relist expired cards (fire and ignore result, like FUT Enhancer)
   let relistedCount = 0;
   if (groups.expired.length > 0) {
+    await jitter(1000, 2000);
     await relistAll();
     relistedCount = groups.expired.length;
   }
@@ -95,6 +99,7 @@ export async function executeTransferListCycle(
   // Step 5 — Clear sold cards (fire and ignore result, like FUT Enhancer)
   let soldCleared = 0;
   if (groups.sold.length > 0) {
+    await jitter(1000, 2000);
     await clearSold();
     soldCleared = groups.sold.length;
   }
