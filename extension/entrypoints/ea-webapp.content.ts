@@ -17,7 +17,9 @@ import { ExtensionMessage, assertNever } from '../src/messages';
 import { createOverlayPanel } from '../src/overlay/panel';
 import { readTransferList, isTransferListPage } from '../src/trade-observer';
 import { portfolioItem, reportedOutcomesItem, automationStatusItem } from '../src/storage';
-import { TRANSFER_LIST_CONTAINER } from '../src/selectors';
+
+/** Inlined selector — only used for MutationObserver target in maybeStartTradeObserver. */
+const TRANSFER_LIST_CONTAINER = '.ut-transfer-list-view';
 import { AutomationEngine } from '../src/automation';
 import { runAutomationLoop } from '../src/automation-loop';
 
