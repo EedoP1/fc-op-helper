@@ -335,7 +335,8 @@ export async function getTransferList(): Promise<TransferListResult> {
     services.Item.requestTransferItems(),
   );
 
-  const all: EAItem[] = response.data?.items ?? [];
+  // EA's response shape varies: .data.items for some calls, .response.items for others
+  const all: EAItem[] = response.data?.items ?? response.response?.items ?? response.items ?? [];
 
   return {
     sold: all.filter(item => item.getAuctionData().isSold()),
