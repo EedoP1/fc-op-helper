@@ -44,28 +44,9 @@ export interface EAItem {
 }
 
 /** EA observable — the pattern EA uses for async callbacks. */
-interface EAObservable<T> {
-  observe(scope: unknown, callback: (sender: unknown, data: T) => void): void;
+interface EAObservable {
+  observe(scope: unknown, callback: (sender: any, response: any) => void): void;
   unobserve(scope: unknown): void;
-}
-
-/** EA pile response shape. */
-interface EAPileResponse {
-  items: EAItem[];
-  totalResults?: number;
-}
-
-/** EA search response shape. */
-interface EASearchResponse {
-  items: EAItem[];
-  totalResults: number;
-}
-
-/** EA bid response shape. */
-interface EABidResponse {
-  success: boolean;
-  errorCode?: number;
-  status?: number;
 }
 
 /** Price tier definition from UTCurrencyInputControl. */
@@ -74,31 +55,19 @@ interface PriceTier {
   inc: number;
 }
 
-/** EA search criteria instance. */
-interface EASearchCriteria {
-  defId: number[];
-  maxBuy: number;
-  minBid: number;
-  type: string;
-}
-
-/** EA pile info for capacity checking. */
-interface EAPileInfo {
-  isFull: boolean;
-}
-
 // Declare EA globals that exist on window at runtime
 declare const services: {
   Item: {
-    searchTransferMarket(criteria: EASearchCriteria, page?: number): EAObservable<EASearchResponse>;
-    list(item: EAItem, startBid: number, buyNow: number, duration: number): EAObservable<EABidResponse>;
-    bid(item: EAItem, price: number): EAObservable<EABidResponse>;
-    move(item: EAItem, pile: number): EAObservable<{ success: boolean }>;
-    relistExpired(): EAObservable<{ success: boolean }>;
-    clearSold(): EAObservable<{ success: boolean }>;
-    refreshAuctions(items: EAItem[]): EAObservable<{ items: EAItem[] }>;
-    requestTransferItems(): EAObservable<EAPileResponse>;
-    requestUnassignedItems(): EAObservable<EAPileResponse>;
+    searchTransferMarket(criteria: any, page?: number): EAObservable;
+    clearTransferMarketCache(): void;
+    list(item: EAItem, startBid: number, buyNow: number, duration: number): EAObservable;
+    bid(item: EAItem, price: number): EAObservable;
+    move(item: EAItem, pile: number): EAObservable;
+    relistExpiredAuctions(): EAObservable;
+    clearSoldItems(): EAObservable;
+    refreshAuctions(items: EAItem[]): EAObservable;
+    requestTransferItems(): EAObservable;
+    requestUnassignedItems(): EAObservable;
   };
   User: {
     getUser(): { coins: { amount: number } };
@@ -107,8 +76,6 @@ declare const services: {
 
 declare const repositories: {
   Item: {
-    reset(): void;
-    setDirty(): void;
     isPileFull(pile: number): boolean;
   };
 };
@@ -156,15 +123,34 @@ export const PRICE_TIERS: PriceTier[] = [
 // ── Observable-to-Promise Utility ────────────────────────────────────────────
 
 /**
- * Convert EA's `.observe(scope, callback)` pattern to a standard Promise.
- * Automatically unobserves after the callback fires once.
+ * Result from any EA service call. Mirrors FUT Enhancer's pattern exactly:
+ *   const {data, error, status, success} = await observableToPromise(...)
+ *
+ * Always resolves — never rejects. Callers check `success` and `error`.
  */
-export function observableToPromise<T>(observable: EAObservable<T>): Promise<T> {
-  return new Promise<T>((resolve) => {
+export interface EAResponse<T = any> {
+  data: T | null;
+  error: number | undefined;
+  status: number | undefined;
+  success: boolean;
+}
+
+/**
+ * Convert EA's `.observe(scope, callback)` pattern to a standard Promise.
+ * Returns {data, error, status, success} — same shape as FUT Enhancer.
+ * Always resolves, never rejects. Callers check success/error per-call.
+ */
+export function observableToPromise<T = any>(observable: EAObservable): Promise<EAResponse<T>> {
+  return new Promise((resolve) => {
     const scope = {};
-    observable.observe(scope, (_sender: unknown, data: T) => {
-      observable.unobserve(scope);
-      resolve(data);
+    observable.observe(scope, (sender: any, response: any) => {
+      sender.unobserve(scope);
+      resolve({
+        data: response.response ?? response.data ?? null,
+        error: response.error?.code,
+        status: response.status,
+        success: response.success ?? false,
+      });
     });
   });
 }
@@ -181,14 +167,12 @@ export function findTier(price: number): PriceTier {
       return tier;
     }
   }
-  // Fallback to lowest tier (should not happen with min: 0)
   return PRICE_TIERS[PRICE_TIERS.length - 1];
 }
 
 /**
  * Round a price to the nearest valid EA price step.
- * Clamps to MAX_PRICE. If floor is true, always rounds down; otherwise
- * rounds to nearest.
+ * Clamps to MAX_PRICE. If floor is true, always rounds down.
  */
 export function roundToNearestStep(price: number, floor = false): number {
   if (price <= 0) return 0;
@@ -205,23 +189,18 @@ export function roundToNearestStep(price: number, floor = false): number {
 
 /**
  * Get the previous valid price step below the given price.
- * Useful for undercutting: "one step below current BIN".
  */
 export function getBeforeStepValue(price: number): number {
   if (price <= 0) return 0;
 
-  // Round down to a valid step first
   const rounded = roundToNearestStep(price, true);
 
-  // If the price was already on a step, go one step back
   if (rounded === price) {
-    // Step back by 1, then floor to the valid step in that tier
     const prev_price = price - 1;
     if (prev_price <= 0) return 0;
     return roundToNearestStep(prev_price, true);
   }
 
-  // Price was between steps — rounding down already gave us the previous step
   return rounded;
 }
 
@@ -229,13 +208,12 @@ export function getBeforeStepValue(price: number): number {
 
 /**
  * Build a UTSearchCriteriaDTO for searching by EA ID.
- * Sets defId, maxBuy, and optionally minBid for cache-busting.
  */
 export function buildCriteria(
   ea_id: number,
   max_buy: number,
   min_bid?: number,
-): EASearchCriteria {
+): any {
   const criteria = new UTSearchCriteriaDTO();
   criteria.defId = [ea_id];
   criteria.maxBuy = max_buy;
@@ -245,44 +223,39 @@ export function buildCriteria(
 }
 
 /**
- * Search the transfer market. Clears repository cache first to avoid stale
- * results (mirrors FUT Enhancer's approach).
- *
- * Returns items found and total result count.
+ * Search the transfer market. Clears cache first for fresh results.
+ * Returns {items, totalResults, success, error}.
  */
 export async function searchMarket(
-  criteria: EASearchCriteria,
+  criteria: any,
   page = 0,
-): Promise<{ items: EAItem[]; totalResults: number }> {
-  repositories.Item.reset();
-  repositories.Item.setDirty();
+): Promise<{ items: EAItem[]; totalResults: number; success: boolean; error?: number }> {
+  services.Item.clearTransferMarketCache();
 
-  const response = await observableToPromise(
+  const { data, success, error } = await observableToPromise(
     services.Item.searchTransferMarket(criteria, page),
   );
 
   return {
-    items: response.items ?? [],
-    totalResults: response.totalResults ?? 0,
+    items: data?.items ?? [],
+    totalResults: data?.count ?? data?.totalResults ?? 0,
+    success,
+    error,
   };
 }
 
 /**
- * Attempt to buy an item at the given price via bid.
- * Returns success status and optional error code.
+ * Attempt to buy an item at the given price via BIN.
+ * Error code 461 = sniped. Check success first, then error for specifics.
  */
 export async function buyItem(
   item: EAItem,
   price: number,
-): Promise<{ success: boolean; errorCode?: number }> {
-  const response = await observableToPromise(
+): Promise<{ success: boolean; error?: number }> {
+  const { success, error } = await observableToPromise(
     services.Item.bid(item, price),
   );
-
-  return {
-    success: response.success ?? false,
-    errorCode: response.errorCode ?? response.status,
-  };
+  return { success, error };
 }
 
 /**
@@ -294,25 +267,27 @@ export async function listItem(
   start_bid: number,
   buy_now: number,
   duration = 3600,
-): Promise<{ success: boolean; errorCode?: number }> {
-  const response = await observableToPromise(
+): Promise<{ success: boolean; error?: number }> {
+  const { success, error } = await observableToPromise(
     services.Item.list(item, start_bid, buy_now, duration),
   );
-
-  return {
-    success: response.success ?? false,
-    errorCode: response.errorCode ?? response.status,
-  };
+  return { success, error };
 }
 
 /** Relist all expired items on the transfer list. */
-export async function relistAll(): Promise<{ success: boolean }> {
-  return observableToPromise(services.Item.relistExpired());
+export async function relistAll(): Promise<{ success: boolean; error?: number }> {
+  const { success, error } = await observableToPromise(
+    services.Item.relistExpiredAuctions(),
+  );
+  return { success, error };
 }
 
 /** Clear all sold items from the transfer list. */
-export async function clearSold(): Promise<{ success: boolean }> {
-  return observableToPromise(services.Item.clearSold());
+export async function clearSold(): Promise<{ success: boolean; error?: number }> {
+  const { success, error } = await observableToPromise(
+    services.Item.clearSoldItems(),
+  );
+  return { success, error };
 }
 
 // ── Pile Operations ──────────────────────────────────────────────────────────
@@ -330,52 +305,57 @@ export interface TransferListResult {
  * Fetch the transfer list and categorize items by auction state.
  * Uses EA's getAuctionData() methods for accurate categorization.
  */
-export async function getTransferList(): Promise<TransferListResult> {
-  const response = await observableToPromise<any>(
+export async function getTransferList(): Promise<{ groups: TransferListResult; success: boolean; error?: number }> {
+  const { data, success, error } = await observableToPromise(
     services.Item.requestTransferItems(),
   );
 
-  // EA's response shape varies: .data.items for some calls, .response.items for others
-  const all: EAItem[] = response.data?.items ?? response.response?.items ?? response.items ?? [];
+  const all: EAItem[] = data?.items ?? [];
 
   return {
-    sold: all.filter(item => item.getAuctionData().isSold()),
-    expired: all.filter(item => !item.getAuctionData().isSold() && item.getAuctionData().isExpired()),
-    active: all.filter(item => item.getAuctionData().isSelling()),
-    unlisted: all.filter(item => item.getAuctionData().isInactive()),
-    all,
+    groups: {
+      sold: all.filter(item => item.getAuctionData().isSold()),
+      expired: all.filter(item => !item.getAuctionData().isSold() && item.getAuctionData().isExpired()),
+      active: all.filter(item => item.getAuctionData().isSelling()),
+      unlisted: all.filter(item => item.getAuctionData().isInactive()),
+      all,
+    },
+    success,
+    error,
   };
 }
 
 /** Fetch unassigned pile items. */
-export async function getUnassigned(): Promise<EAItem[]> {
-  const response = await observableToPromise(
+export async function getUnassigned(): Promise<{ items: EAItem[]; success: boolean; error?: number }> {
+  const { data, success, error } = await observableToPromise(
     services.Item.requestUnassignedItems(),
   );
-  return response.items ?? [];
+  return { items: data?.items ?? [], success, error };
 }
 
 /**
  * Move an item to a pile (e.g. ItemPile.TRANSFER, ItemPile.CLUB).
  * Returns false if the target pile is full (for TRANSFER and STORAGE).
  */
-export async function moveItem(item: EAItem, pile: number): Promise<boolean> {
+export async function moveItem(item: EAItem, pile: number): Promise<{ success: boolean; error?: number }> {
   if ((pile === ItemPile.TRANSFER || pile === ItemPile.STORAGE) && isPileFull(pile)) {
-    return false;
+    return { success: false, error: undefined };
   }
-  await observableToPromise(services.Item.move(item, pile));
-  return true;
+  const { success, error } = await observableToPromise(
+    services.Item.move(item, pile),
+  );
+  return { success, error };
 }
 
 /**
  * Refresh auction data for a list of items.
- * Returns the items with updated auction info.
  */
-export async function refreshAuctions(items: EAItem[]): Promise<EAItem[]> {
-  const response = await observableToPromise(
+export async function refreshAuctions(items: EAItem[]): Promise<{ success: boolean; error?: number }> {
+  if (items.length === 0) return { success: true, error: undefined };
+  const { success, error } = await observableToPromise(
     services.Item.refreshAuctions(items),
   );
-  return response.items ?? [];
+  return { success, error };
 }
 
 // ── User Data ────────────────────────────────────────────────────────────────
