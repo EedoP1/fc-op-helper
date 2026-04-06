@@ -37,3 +37,45 @@ def test_discover_finds_nothing_initially():
     strategies = discover_strategies()
     assert isinstance(strategies, dict)
     # Will find strategies once we add them in later tasks
+
+
+from src.algo.models import Signal, Portfolio
+from datetime import datetime, timedelta
+
+
+def test_mean_reversion_buys_on_dip():
+    from src.algo.strategies.mean_reversion import MeanReversionStrategy
+
+    s = MeanReversionStrategy({"window": 4, "threshold": 0.10, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    # Feed 4 hours of stable prices to build the window
+    base = datetime(2026, 1, 1)
+    for h in range(4):
+        s.on_tick(1, 10_000, base + timedelta(hours=h), portfolio)
+
+    # Price drops 15% — should trigger buy
+    signals = s.on_tick(1, 8_500, base + timedelta(hours=4), portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "BUY"
+
+
+def test_mean_reversion_no_buy_when_stable():
+    from src.algo.strategies.mean_reversion import MeanReversionStrategy
+
+    s = MeanReversionStrategy({"window": 4, "threshold": 0.10, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    base = datetime(2026, 1, 1)
+    for h in range(4):
+        s.on_tick(1, 10_000, base + timedelta(hours=h), portfolio)
+
+    # Price is stable — no buy
+    signals = s.on_tick(1, 10_000, base + timedelta(hours=4), portfolio)
+    assert signals == []
+
+
+def test_discover_finds_mean_reversion():
+    from src.algo.strategies import discover_strategies
+    strategies = discover_strategies()
+    assert "mean_reversion" in strategies
