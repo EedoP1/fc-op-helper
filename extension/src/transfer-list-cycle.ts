@@ -3,6 +3,12 @@
  * clear sold, and report outcomes to the backend.
  *
  * No DOM interaction — all operations use EA's internal service layer.
+ *
+ * Error handling follows FUT Enhancer's pattern:
+ * - EA calls return {success, error, data} — just use the data, don't check errors
+ * - For transfer list reads: use empty array if it fails
+ * - For relist/clearSold: fire and don't check errors
+ * - Keep try/catch only around sendMessage calls (extension backend, not EA)
  */
 import {
   getTransferList,
@@ -38,16 +44,16 @@ export type TransferListCycleResult = {
 export async function executeTransferListCycle(
   sendMessage: (msg: any) => Promise<any>,
 ): Promise<TransferListCycleResult> {
-  // Step 1 — Fetch transfer list
-  let groups = await getTransferList();
+  // Step 1 — Fetch transfer list (just use groups, ignore success/error)
+  let { groups } = await getTransferList();
 
   // Refresh auction data if there are any items, then re-fetch for updated statuses
   if (groups.all.length > 0) {
     await refreshAuctions(groups.all);
-    groups = await getTransferList();
+    ({ groups } = await getTransferList());
   }
 
-  // Step 2 — Relist expired cards
+  // Step 2 — Relist expired cards (fire and ignore result, like FUT Enhancer)
   let relistedCount = 0;
   if (groups.expired.length > 0) {
     await relistAll();
@@ -86,7 +92,7 @@ export async function executeTransferListCycle(
     }
   }
 
-  // Step 5 — Clear sold cards
+  // Step 5 — Clear sold cards (fire and ignore result, like FUT Enhancer)
   let soldCleared = 0;
   if (groups.sold.length > 0) {
     await clearSold();
@@ -111,5 +117,6 @@ export async function executeTransferListCycle(
  * Read-only transfer list scan — fetch and categorize without any mutations.
  */
 export async function scanTransferList(): Promise<TransferListResult> {
-  return getTransferList();
+  const { groups } = await getTransferList();
+  return groups;
 }
