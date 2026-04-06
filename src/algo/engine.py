@@ -162,7 +162,7 @@ async def save_result(session_factory: async_sessionmaker[AsyncSession], result:
                 "VALUES (:strategy_name, :params, :started_budget, :final_budget, "
                 ":total_pnl, :total_trades, :win_rate, :max_drawdown, :sharpe_ratio, :run_at)"
             ),
-            {**result, "run_at": dt.utcnow().isoformat()},
+            {**result, "run_at": dt.now(tz=__import__('datetime').timezone.utc).isoformat()},
         )
         await session.commit()
 
