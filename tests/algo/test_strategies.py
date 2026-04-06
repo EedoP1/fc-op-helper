@@ -115,3 +115,44 @@ def test_momentum_sells_on_trailing_stop():
     signals = s.on_tick(1, 10_400, base + timedelta(hours=3), portfolio)
     assert len(signals) == 1
     assert signals[0].action == "SELL"
+
+
+def test_weekly_cycle_buys_on_buy_day():
+    from src.algo.strategies.weekly_cycle import WeeklyCycleStrategy
+
+    # Thursday = weekday 3, buy_hour = 18
+    s = WeeklyCycleStrategy({
+        "buy_day": 3, "buy_hour": 18,
+        "sell_day": 5, "sell_hour": 12,
+        "position_pct": 0.05,
+    })
+    portfolio = Portfolio(cash=100_000)
+
+    # Thursday 18:00
+    ts = datetime(2026, 1, 1, 18, 0)  # 2026-01-01 is a Thursday
+    signals = s.on_tick(1, 10_000, ts, portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "BUY"
+
+
+def test_weekly_cycle_sells_on_sell_day():
+    from src.algo.strategies.weekly_cycle import WeeklyCycleStrategy
+
+    s = WeeklyCycleStrategy({
+        "buy_day": 3, "buy_hour": 18,
+        "sell_day": 5, "sell_hour": 12,
+        "position_pct": 0.05,
+    })
+    portfolio = Portfolio(cash=100_000)
+
+    # Buy on Thursday
+    ts_buy = datetime(2026, 1, 1, 18, 0)
+    signals = s.on_tick(1, 10_000, ts_buy, portfolio)
+    # Execute the buy so portfolio has holdings
+    portfolio.buy(1, signals[0].quantity, 10_000, ts_buy)
+
+    # Saturday 12:00 — should sell
+    ts_sell = datetime(2026, 1, 3, 12, 0)
+    signals = s.on_tick(1, 11_000, ts_sell, portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "SELL"
