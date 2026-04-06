@@ -23,9 +23,9 @@ class BollingerStrategy(Strategy):
         self, ea_id: int, price: int, timestamp: datetime, portfolio: Portfolio,
     ) -> list[Signal]:
         history = self._history[ea_id]
+        history.append(price)
 
         if len(history) < self.window:
-            history.append(price)
             return []
 
         window_prices = history[-self.window:]
@@ -50,11 +50,6 @@ class BollingerStrategy(Strategy):
                 quantity = max(1, buy_budget // price) if price > 0 else 0
                 if quantity > 0:
                     signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))
-
-        # Only advance the window when no signal is emitted, so that the same
-        # band levels stay active until the signal condition resolves.
-        if not signals:
-            history.append(price)
 
         return signals
 
