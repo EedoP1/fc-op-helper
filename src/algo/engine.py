@@ -1,0 +1,110 @@
+"""Backtesting engine — walks historical price data and executes strategy signals."""
+import json
+import math
+import logging
+from datetime import datetime
+from collections import defaultdict
+from src.algo.models import Portfolio
+
+logger = logging.getLogger(__name__)
+
+EA_TAX_RATE = 0.05
+
+
+def run_backtest(
+    strategy,
+    price_data: dict[int, list[tuple[datetime, int]]],
+    budget: int = 1_000_000,
+) -> dict:
+    """Run a single strategy against historical price data.
+
+    Args:
+        strategy: A Strategy instance (already initialized with params).
+        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        budget: Starting coin balance.
+
+    Returns:
+        Dict with performance metrics.
+    """
+    portfolio = Portfolio(cash=budget)
+
+    # Build a timeline: {timestamp: [(ea_id, price), ...]}
+    timeline: dict[datetime, list[tuple[int, int]]] = defaultdict(list)
+    for ea_id, points in price_data.items():
+        for ts, price in points:
+            timeline[ts].append((ea_id, price))
+
+    sorted_timestamps = sorted(timeline.keys())
+
+    # Walk through time
+    for ts in sorted_timestamps:
+        for ea_id, price in timeline[ts]:
+            signals = strategy.on_tick(ea_id, price, ts, portfolio)
+            for signal in signals:
+                if signal.action == "BUY":
+                    portfolio.buy(signal.ea_id, signal.quantity, price, ts)
+                elif signal.action == "SELL":
+                    portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+
+    # Force-sell open positions at last known price
+    last_prices: dict[int, tuple[datetime, int]] = {}
+    for ea_id, points in price_data.items():
+        if points:
+            last_prices[ea_id] = points[-1]
+
+    for pos in list(portfolio.positions):
+        if pos.ea_id in last_prices:
+            ts, price = last_prices[pos.ea_id]
+            portfolio.sell(pos.ea_id, pos.quantity, price, ts)
+
+    # Calculate metrics
+    total_pnl = portfolio.cash - budget
+    trades = portfolio.trades
+    total_trades = len(trades)
+    winning = sum(1 for t in trades if t.net_profit > 0)
+    win_rate = winning / total_trades if total_trades > 0 else 0.0
+
+    max_drawdown = _calc_max_drawdown(portfolio.balance_history, budget)
+    sharpe = _calc_sharpe_ratio(trades)
+
+    return {
+        "strategy_name": strategy.name,
+        "params": json.dumps(strategy.params) if hasattr(strategy, "params") else "{}",
+        "started_budget": budget,
+        "final_budget": portfolio.cash,
+        "total_pnl": total_pnl,
+        "total_trades": total_trades,
+        "win_rate": win_rate,
+        "max_drawdown": max_drawdown,
+        "sharpe_ratio": sharpe,
+    }
+
+
+def _calc_max_drawdown(balance_history: list[tuple[datetime, int]], budget: int) -> float:
+    """Maximum peak-to-trough decline as a fraction (0.0 to 1.0)."""
+    if not balance_history:
+        return 0.0
+    peak = budget
+    max_dd = 0.0
+    for _, balance in balance_history:
+        if balance > peak:
+            peak = balance
+        dd = (peak - balance) / peak if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+    return max_dd
+
+
+def _calc_sharpe_ratio(trades: list) -> float:
+    """Simplified Sharpe ratio: mean(returns) / std(returns). Risk-free rate = 0."""
+    if len(trades) < 2:
+        return 0.0
+    returns = [t.net_profit / (t.buy_price * t.quantity) for t in trades if t.buy_price > 0]
+    if len(returns) < 2:
+        return 0.0
+    mean_r = sum(returns) / len(returns)
+    var_r = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
+    std_r = math.sqrt(var_r)
+    if std_r == 0:
+        return 0.0
+    return mean_r / std_r
