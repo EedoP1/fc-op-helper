@@ -56,13 +56,7 @@ interface PriceTier {
 }
 
 // Declare EA globals that exist on window at runtime
-declare const PINEventType: { PAGE_VIEW: string };
-declare const PIN_PAGEVIEW_EVT_TYPE: string;
-
 declare const services: {
-  PIN: {
-    sendData(eventType: string, data: { type: string; pgid: string }): void;
-  };
   Item: {
     searchTransferMarket(criteria: any, page?: number): EAObservable;
     clearTransferMarketCache(): void;
@@ -146,11 +140,17 @@ export interface EAResponse<T = any> {
  * Returns {data, error, status, success} — same shape as FUT Enhancer.
  * Always resolves, never rejects. Callers check success/error per-call.
  */
+/**
+ * FUT Enhancer uses `this` (module scope) as the observer context, not a fresh object.
+ * In their minified code: `e.observe(this, (r, {...}) => { r.unobserve(this); ... })`
+ * We use a module-level object to match this pattern.
+ */
+const OBSERVER_SCOPE = {};
+
 export function observableToPromise<T = any>(observable: EAObservable): Promise<EAResponse<T>> {
   return new Promise((resolve) => {
-    const scope = {};
-    observable.observe(scope, (sender: any, response: any) => {
-      sender.unobserve(scope);
+    observable.observe(OBSERVER_SCOPE, (sender: any, response: any) => {
+      sender.unobserve(OBSERVER_SCOPE);
       resolve({
         data: response.response ?? response.data ?? null,
         error: response.error?.code,
@@ -210,24 +210,6 @@ export function getBeforeStepValue(price: number): number {
   return rounded;
 }
 
-// ── PIN Telemetry ────────────────────────────────────────────────────────────
-
-/**
- * Send a PIN page view event to EA's telemetry.
- * EA's server expects these around API calls — missing them can cause 460 errors.
- * FUT Auto-Buyer sends these before/after every search.
- */
-function sendPinEvent(pageId: string): void {
-  try {
-    services.PIN.sendData(PINEventType.PAGE_VIEW, {
-      type: PIN_PAGEVIEW_EVT_TYPE,
-      pgid: pageId,
-    });
-  } catch {
-    // PIN events are best-effort — don't crash automation if they fail
-  }
-}
-
 // ── Market Operations ────────────────────────────────────────────────────────
 
 /**
@@ -256,17 +238,10 @@ export async function searchMarket(
 ): Promise<{ items: EAItem[]; totalResults: number; success: boolean; error?: number }> {
   services.Item.clearTransferMarketCache();
 
-  // PIN telemetry — EA expects page view events around searches (FUT Auto-Buyer pattern)
-  sendPinEvent('Transfer Market Search');
-
   const result = await observableToPromise(
     services.Item.searchTransferMarket(criteria, page),
   );
   console.log('[ea-services] searchMarket response:', JSON.stringify({ success: result.success, error: result.error, status: result.status, itemCount: result.data?.items?.length ?? 0, dataKeys: result.data ? Object.keys(result.data) : [] }));
-
-  if (result.success && page === 1) {
-    sendPinEvent('Transfer Market Results - List View');
-  }
 
   return {
     items: result.data?.items ?? [],
