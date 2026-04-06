@@ -28,6 +28,7 @@ export type BuyCycleResult =
 const PRICE_GUARD_MULTIPLIER = 1.05;
 const MAX_RETRIES = 3;
 const SNIPE_ERROR_CODE = 461;
+const RATE_LIMIT_ERROR_CODE = 460;
 
 // ── Main Entry Point ──────────────────────────────────────────────────────────
 
@@ -44,6 +45,11 @@ export async function executeBuyCycle(
     // Search
     const searchResult = await searchMarket(criteria);
     if (!searchResult.success) {
+      if (searchResult.error === RATE_LIMIT_ERROR_CODE) {
+        // Rate limited — wait and retry (FUT Enhancer uses 1200ms between retries)
+        await jitter(2000, 4000);
+        continue;
+      }
       return { outcome: 'error', reason: `Search failed (error ${searchResult.error})` };
     }
     if (searchResult.items.length === 0) continue;
