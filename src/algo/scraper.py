@@ -39,7 +39,7 @@ _PAGE_DELAY = 3.0
 _EA_ID_RE = re.compile(r"players/p?(\d{4,})")
 
 # Regex to extract futbin_id and slug from player links
-_PLAYER_LINK_RE = re.compile(r"/26/player/(\d+)/([^/]+)")
+_PLAYER_LINK_RE = re.compile(r'/26/player/(\d+)/([a-z0-9-]+)')
 
 
 def parse_futbin_price_data(data_attr: str) -> list[tuple[int, int]]:
@@ -75,10 +75,15 @@ async def _create_browser():
     return pw, browser, context, page
 
 
-async def scrape_player_list(page, max_pages: int = 999) -> list[dict]:
+async def scrape_player_list(page, max_pages: int = 999, max_players: int = 0) -> list[dict]:
     """Scrape FUTBIN player list to get all 75+ rated player URLs.
 
-    Returns list of {futbin_id, slug, url} dicts.
+    Args:
+        page: Playwright page instance.
+        max_pages: Max list pages to crawl.
+        max_players: Stop after collecting this many players (0 = no limit).
+
+    Returns list of {futbin_id, slug} dicts.
     """
     players = []
     seen_ids = set()
@@ -121,6 +126,11 @@ async def scrape_player_list(page, max_pages: int = 999) -> list[dict]:
         logger.info(f"Page {page_num}: {new_count} new players, {len(players)} total")
 
         if new_count == 0:
+            break
+
+        if max_players > 0 and len(players) >= max_players:
+            players = players[:max_players]
+            logger.info(f"Reached {max_players} player limit, stopping list scrape")
             break
 
     return players
@@ -197,7 +207,7 @@ async def save_prices(session_factory, player_data: dict):
         rows.append({
             "ea_id": player_data["ea_id"],
             "futbin_id": player_data["futbin_id"],
-            "timestamp": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.utcfromtimestamp(ts_ms / 1000),
             "price": price,
         })
 
@@ -241,12 +251,14 @@ async def scrape_all(
     try:
         # Phase 1: Get player list
         logger.info("Phase 1: Scraping player list from FUTBIN...")
-        players = await scrape_player_list(page, max_pages=999)
+        players = await scrape_player_list(page, max_pages=999, max_players=limit)
         logger.info(f"Found {len(players)} players")
 
-        if limit > 0:
+        if limit > 0 and len(players) > limit:
             players = players[:limit]
-            logger.info(f"Limiting to {limit} players (POC mode)")
+
+        if limit > 0:
+            logger.info(f"POC mode: scraping {len(players)} players")
 
         # Phase 2: Scrape each player's market page
         logger.info(f"Phase 2: Scraping price history for {len(players)} players...")
