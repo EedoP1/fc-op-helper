@@ -1,10 +1,19 @@
 """Backtesting engine — walks historical price data and executes strategy signals."""
+import asyncio
 import json
 import math
 import logging
-from datetime import datetime
 from collections import defaultdict
+from datetime import datetime as dt
+from datetime import datetime
+
+import click
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from src.algo.models import Portfolio
+from src.config import DATABASE_URL
+from src.server.db import Base
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +148,138 @@ def _calc_sharpe_ratio(trades: list) -> float:
     if std_r == 0:
         return 0.0
     return mean_r / std_r
+
+
+async def save_result(session_factory: async_sessionmaker[AsyncSession], result: dict):
+    """Save a single backtest result to the database."""
+    from src.algo.models_db import BacktestResult  # noqa: F401
+    async with session_factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO backtest_results "
+                "(strategy_name, params, started_budget, final_budget, total_pnl, "
+                "total_trades, win_rate, max_drawdown, sharpe_ratio, run_at) "
+                "VALUES (:strategy_name, :params, :started_budget, :final_budget, "
+                ":total_pnl, :total_trades, :win_rate, :max_drawdown, :sharpe_ratio, :run_at)"
+            ),
+            {**result, "run_at": dt.utcnow().isoformat()},
+        )
+        await session.commit()
+
+
+async def load_price_data(
+    session_factory: async_sessionmaker[AsyncSession],
+    min_price: int = 0,
+    max_price: int = 0,
+    min_data_points: int = 24,
+) -> dict[int, list[tuple[dt, int]]]:
+    """Load price history from DB into memory.
+
+    Returns {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+    """
+    async with session_factory() as session:
+        result = await session.execute(
+            text("SELECT ea_id, timestamp, price FROM price_history ORDER BY ea_id, timestamp")
+        )
+        rows = result.fetchall()
+
+    data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
+    for row in rows:
+        ea_id, ts, price = row
+        if isinstance(ts, str):
+            ts = dt.fromisoformat(ts)
+        if min_price and price < min_price:
+            continue
+        if max_price and price > max_price:
+            continue
+        data[ea_id].append((ts, price))
+
+    return {
+        ea_id: points for ea_id, points in data.items()
+        if len(points) >= min_data_points
+    }
+
+
+async def run_cli(
+    strategy_name: str | None,
+    all_strategies: bool,
+    params_json: str | None,
+    budget: int,
+    db_url: str,
+):
+    """CLI entrypoint: load data, run strategies, save results."""
+    from src.algo.strategies import discover_strategies
+
+    engine = create_async_engine(db_url)
+    from src.algo.models_db import BacktestResult  # noqa: F401
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    logger.info("Loading price data from database...")
+    price_data = await load_price_data(session_factory)
+    logger.info(f"Loaded {len(price_data)} players with price history")
+
+    if not price_data:
+        logger.error("No price data found. Run the scraper first: python -m src.algo.scraper")
+        await engine.dispose()
+        return
+
+    available = discover_strategies()
+    if not available:
+        logger.error("No strategies found")
+        await engine.dispose()
+        return
+
+    to_run: list[tuple[str, type]] = []
+    if all_strategies:
+        to_run = list(available.items())
+    elif strategy_name:
+        if strategy_name not in available:
+            logger.error(f"Unknown strategy: {strategy_name}. Available: {list(available.keys())}")
+            await engine.dispose()
+            return
+        to_run = [(strategy_name, available[strategy_name])]
+    else:
+        logger.error("Specify --strategy or --all")
+        await engine.dispose()
+        return
+
+    total_results = []
+    for name, cls in to_run:
+        if params_json:
+            strategy = cls(json.loads(params_json))
+            result = run_backtest(strategy, price_data, budget)
+            await save_result(session_factory, result)
+            total_results.append(result)
+        else:
+            results = run_sweep(cls, price_data, budget)
+            for r in results:
+                await save_result(session_factory, r)
+            total_results.extend(results)
+
+    total_results.sort(key=lambda r: r["total_pnl"], reverse=True)
+    logger.info(f"\nCompleted {len(total_results)} backtest runs")
+    for r in total_results[:10]:
+        logger.info(
+            f"  {r['strategy_name']:20s} PnL: {r['total_pnl']:>10,} "
+            f"Win: {r['win_rate']:.1%} Trades: {r['total_trades']}"
+        )
+
+    await engine.dispose()
+
+
+@click.command()
+@click.option("--strategy", "strategy_name", default=None, help="Strategy name to run")
+@click.option("--all", "all_strategies", is_flag=True, help="Run all strategies")
+@click.option("--params", "params_json", default=None, help="JSON params for single run")
+@click.option("--budget", default=1_000_000, help="Starting budget in coins")
+@click.option("--db-url", default=DATABASE_URL, help="Database URL")
+def main(strategy_name, all_strategies, params_json, budget, db_url):
+    """Run algo trading backtests."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url))
+
+
+if __name__ == "__main__":
+    main()

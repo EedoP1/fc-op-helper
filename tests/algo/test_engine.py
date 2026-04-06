@@ -116,3 +116,40 @@ def test_sweep_runs_all_param_combos():
     # Each result should have different params
     params_set = {r["params"] for r in results}
     assert len(params_set) == 3
+
+
+@pytest.mark.asyncio
+async def test_run_and_save_results():
+    """Test that run results can be saved to and loaded from DB."""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import text
+    from src.server.db import Base
+    from src.algo.models_db import BacktestResult  # noqa: F401
+    from src.algo.engine import save_result
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    result = {
+        "strategy_name": "test",
+        "params": "{}",
+        "started_budget": 100_000,
+        "final_budget": 110_000,
+        "total_pnl": 10_000,
+        "total_trades": 5,
+        "win_rate": 0.6,
+        "max_drawdown": 0.05,
+        "sharpe_ratio": 1.2,
+    }
+
+    await save_result(session_factory, result)
+
+    async with session_factory() as session:
+        rows = await session.execute(text("SELECT * FROM backtest_results"))
+        all_rows = rows.fetchall()
+        assert len(all_rows) == 1
+        assert all_rows[0].strategy_name == "test"
+
+    await engine.dispose()
