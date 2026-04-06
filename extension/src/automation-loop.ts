@@ -22,10 +22,21 @@ import type { ActionNeeded, ExtensionMessage } from './messages';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Check if an error indicates an expired EA session (401/auth failure). */
+/**
+ * Check if an error indicates an expired EA session (401/auth failure).
+ * Must be very specific — EA errors about expired auctions, sessions in
+ * unrelated contexts, etc. must NOT trigger this.
+ */
 function isSessionError(error: unknown): boolean {
+  // EA returns numeric error code 401 for unauthorized
+  if (error === 401) return true;
+
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return msg.includes('401') || msg.includes('expired') || msg.includes('session') || msg.includes('unauthorized');
+  // Only match very specific auth-failure patterns
+  if (msg === 'unauthorized' || msg === '401') return true;
+  if (msg.includes('session expired') || msg.includes('session has expired')) return true;
+  if (msg.includes('not authenticated') || msg.includes('not authorized')) return true;
+  return false;
 }
 
 /** Check if a BuyCycleResult reason indicates insufficient coins. */
@@ -66,11 +77,12 @@ export async function runAutomationLoop(
           }
         }
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         if (isSessionError(err)) {
-          await engine.setError('EA session expired — please log in and restart automation');
+          await engine.setError(`EA session expired — please log in and restart automation (${errMsg})`);
           return;
         }
-        await engine.log(`Unassigned sweep error: ${err instanceof Error ? err.message : String(err)} — continuing`);
+        await engine.log(`Unassigned sweep error: ${errMsg} — continuing`);
       }
 
       if (stopped()) return;
@@ -103,11 +115,12 @@ export async function runAutomationLoop(
 
         await engine.setState('SCANNING', 'Transfer list cycle complete');
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         if (isSessionError(err)) {
-          await engine.setError('EA session expired — please log in and restart automation');
+          await engine.setError(`EA session expired — please log in and restart automation (${errMsg})`);
           return;
         }
-        await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)} — continuing`);
+        await engine.log(`Transfer list cycle error: ${errMsg} — continuing`);
       }
 
       if (stopped()) return;
