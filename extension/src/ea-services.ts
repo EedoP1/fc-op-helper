@@ -20,8 +20,11 @@ export interface EAAuctionData {
   readonly currentBid: number;
   readonly startingBid: number;
   readonly tradeId: number;
-  readonly tradeState: string;
   readonly expires: number;
+  isSold(): boolean;
+  isExpired(): boolean;
+  isSelling(): boolean;
+  isInactive(): boolean;
 }
 
 /** EA item representation. */
@@ -29,7 +32,6 @@ export interface EAItem {
   readonly definitionId: number;
   readonly id: number;
   readonly resourceId: number;
-  readonly _auction: EAAuctionData | null;
   readonly type: string;
   readonly rating: number;
   readonly lastSalePrice: number;
@@ -38,6 +40,7 @@ export interface EAItem {
     readonly firstName: string;
     readonly lastName: string;
   };
+  getAuctionData(): EAAuctionData;
 }
 
 /** EA observable — the pattern EA uses for async callbacks. */
@@ -90,7 +93,7 @@ declare const services: {
     searchTransferMarket(criteria: EASearchCriteria, page?: number): EAObservable<EASearchResponse>;
     list(item: EAItem, startBid: number, buyNow: number, duration: number): EAObservable<EABidResponse>;
     bid(item: EAItem, price: number): EAObservable<EABidResponse>;
-    move(item: EAItem, pile: string): EAObservable<{ success: boolean }>;
+    move(item: EAItem, pile: number): EAObservable<{ success: boolean }>;
     relistExpired(): EAObservable<{ success: boolean }>;
     clearSold(): EAObservable<{ success: boolean }>;
     refreshAuctions(items: EAItem[]): EAObservable<{ items: EAItem[] }>;
@@ -106,12 +109,19 @@ declare const repositories: {
   Item: {
     reset(): void;
     setDirty(): void;
+    isPileFull(pile: number): boolean;
   };
 };
 
 declare const ItemPile: {
-  TRADE: string;
-  CLUB: string;
+  ANY: number;
+  TRANSFER: number;
+  PURCHASED: number;
+  CLUB: number;
+  INBOX: number;
+  GIFT: number;
+  STORAGE: number;
+  EVOLUTION: number;
 };
 
 declare class UTSearchCriteriaDTO {
@@ -318,39 +328,22 @@ export interface TransferListResult {
 
 /**
  * Fetch the transfer list and categorize items by auction state.
- * - sold: tradeState === 'closed'
- * - expired: tradeState === 'expired'
- * - active: tradeState === 'active'
- * - unlisted: no auction data
+ * Uses EA's getAuctionData() methods for accurate categorization.
  */
 export async function getTransferList(): Promise<TransferListResult> {
-  const response = await observableToPromise(
+  const response = await observableToPromise<any>(
     services.Item.requestTransferItems(),
   );
 
-  const items = response.items ?? [];
+  const all: EAItem[] = response.data?.items ?? [];
 
-  const sold: EAItem[] = [];
-  const expired: EAItem[] = [];
-  const active: EAItem[] = [];
-  const unlisted: EAItem[] = [];
-
-  for (const item of items) {
-    const state = item._auction?.tradeState;
-    if (!state) {
-      unlisted.push(item);
-    } else if (state === 'closed') {
-      sold.push(item);
-    } else if (state === 'expired') {
-      expired.push(item);
-    } else if (state === 'active') {
-      active.push(item);
-    } else {
-      unlisted.push(item);
-    }
-  }
-
-  return { sold, expired, active, unlisted, all: items };
+  return {
+    sold: all.filter(item => item.getAuctionData().isSold()),
+    expired: all.filter(item => !item.getAuctionData().isSold() && item.getAuctionData().isExpired()),
+    active: all.filter(item => item.getAuctionData().isSelling()),
+    unlisted: all.filter(item => item.getAuctionData().isInactive()),
+    all,
+  };
 }
 
 /** Fetch unassigned pile items. */
@@ -362,14 +355,15 @@ export async function getUnassigned(): Promise<EAItem[]> {
 }
 
 /**
- * Move an item to a pile (e.g. ItemPile.TRADE, ItemPile.CLUB).
- * Returns true on success.
+ * Move an item to a pile (e.g. ItemPile.TRANSFER, ItemPile.CLUB).
+ * Returns false if the target pile is full (for TRANSFER and STORAGE).
  */
-export async function moveItem(item: EAItem, pile: string): Promise<boolean> {
-  const response = await observableToPromise(
-    services.Item.move(item, pile),
-  );
-  return response.success ?? false;
+export async function moveItem(item: EAItem, pile: number): Promise<boolean> {
+  if ((pile === ItemPile.TRANSFER || pile === ItemPile.STORAGE) && isPileFull(pile)) {
+    return false;
+  }
+  await observableToPromise(services.Item.move(item, pile));
+  return true;
 }
 
 /**
@@ -392,22 +386,8 @@ export function getCoins(): number {
 
 /**
  * Check if a pile is at capacity.
- * Note: This accesses the pile info from the services layer. The exact
- * implementation depends on EA's current API surface — this is a common
- * pattern from FUT Enhancer.
+ * Delegates to EA's repositories.Item.isPileFull().
  */
-export function isPileFull(pile: string): boolean {
-  // EA exposes pile capacity through the repository
-  // This will be validated against the live app
-  try {
-    const user = services.User.getUser();
-    const pile_sizes = (user as Record<string, unknown>)['pileSizeClientData'] as
-      Record<string, { total: number; current: number }> | undefined;
-    if (pile_sizes && pile_sizes[pile]) {
-      return pile_sizes[pile].current >= pile_sizes[pile].total;
-    }
-  } catch {
-    // Fall through — can't determine capacity
-  }
-  return false;
+export function isPileFull(pile: number): boolean {
+  return repositories.Item.isPileFull(pile);
 }
