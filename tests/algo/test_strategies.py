@@ -79,3 +79,39 @@ def test_discover_finds_mean_reversion():
     from src.algo.strategies import discover_strategies
     strategies = discover_strategies()
     assert "mean_reversion" in strategies
+
+
+def test_momentum_buys_on_uptrend():
+    from src.algo.strategies.momentum import MomentumStrategy
+
+    s = MomentumStrategy({"trend_length": 3, "trailing_stop": 0.05, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    base = datetime(2026, 1, 1)
+    # 3 consecutive rising prices
+    s.on_tick(1, 10_000, base + timedelta(hours=0), portfolio)
+    s.on_tick(1, 10_100, base + timedelta(hours=1), portfolio)
+    signals = s.on_tick(1, 10_200, base + timedelta(hours=2), portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "BUY"
+
+
+def test_momentum_sells_on_trailing_stop():
+    from src.algo.strategies.momentum import MomentumStrategy
+
+    s = MomentumStrategy({"trend_length": 2, "trailing_stop": 0.05, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    base = datetime(2026, 1, 1)
+    # Build uptrend and buy
+    s.on_tick(1, 10_000, base + timedelta(hours=0), portfolio)
+    buy_signals = s.on_tick(1, 10_100, base + timedelta(hours=1), portfolio)
+    # Simulate backtester executing the BUY
+    assert len(buy_signals) == 1 and buy_signals[0].action == "BUY"
+    portfolio.buy(1, buy_signals[0].quantity, 10_100, base + timedelta(hours=1))
+    # Now holding — price rises then drops 6% from peak
+    s.on_tick(1, 11_000, base + timedelta(hours=2), portfolio)
+    # Peak was 11000, trailing stop at 5% = sell below 10450
+    signals = s.on_tick(1, 10_400, base + timedelta(hours=3), portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "SELL"
