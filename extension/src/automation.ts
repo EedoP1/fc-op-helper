@@ -7,7 +7,21 @@
  */
 import type { AutomationStatusData } from './messages';
 import type { AutomationStatus, ActivityLogEntry } from './storage';
-import { automationStatusItem, activityLogItem } from './storage';
+
+// ── Storage Adapter ──────────────────────────────────────────────────────────
+
+/**
+ * Abstract storage interface for persisting automation state.
+ *
+ * In the isolated world (content script), the default implementation uses
+ * WXT storage items (chrome.storage.local). In the main world, an adapter
+ * bridges calls to the isolated world via window.postMessage.
+ */
+export interface AutomationStorageAdapter {
+  setStatus(status: AutomationStatus): Promise<void>;
+  getActivityLog(): Promise<ActivityLogEntry[]>;
+  setActivityLog(entries: ActivityLogEntry[]): Promise<void>;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,9 +70,13 @@ export class AutomationEngine {
    * @param sendMessage — callback to send messages to the service worker.
    *   Injected by the content script so the engine is testable without a real
    *   chrome.runtime reference.
+   * @param storageAdapter — persistence adapter for automation status and activity log.
+   *   Injected so the engine works in both isolated world (direct chrome.storage)
+   *   and main world (bridged via postMessage).
    */
   constructor(
     private sendMessage: (msg: any) => Promise<any>,
+    private storageAdapter: AutomationStorageAdapter,
   ) {}
 
   /** Return current status as an AutomationStatusData snapshot. */
@@ -161,7 +179,7 @@ export class AutomationEngine {
     this.sessionProfit += amount;
   }
 
-  /** Write current state to chrome.storage.local so the overlay can read it. */
+  /** Write current state to storage so the overlay can read it. */
   private async persistStatus(): Promise<void> {
     const status: AutomationStatus = {
       isRunning: this.isRunning,
@@ -171,15 +189,15 @@ export class AutomationEngine {
       sessionProfit: this.sessionProfit,
       errorMessage: this.errorMessage,
     };
-    await automationStatusItem.setValue(status);
+    await this.storageAdapter.setStatus(status);
   }
 
   /** Append a timestamped message to the activity log, capped at 200 entries. */
   async log(message: string): Promise<void> {
-    const entries: ActivityLogEntry[] = await activityLogItem.getValue();
+    const entries: ActivityLogEntry[] = await this.storageAdapter.getActivityLog();
     entries.push({ timestamp: new Date().toISOString(), message });
     // Keep last 200 entries to avoid storage bloat
     if (entries.length > 200) entries.splice(0, entries.length - 200);
-    await activityLogItem.setValue(entries);
+    await this.storageAdapter.setActivityLog(entries);
   }
 }
