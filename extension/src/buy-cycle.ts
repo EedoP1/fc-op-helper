@@ -40,14 +40,14 @@ export async function executeBuyCycle(
     const minBid = Math.floor(Math.random() * 1001);
     const criteria = buildCriteria(player.ea_id, player.buy_price, minBid);
 
-    await jitter(1000, 2000);
+    await jitter(2000, 4000);
 
     // Search
     const searchResult = await searchMarket(criteria);
     if (!searchResult.success) {
       if (searchResult.error === RATE_LIMIT_ERROR_CODE) {
         // Rate limited — wait and retry (FUT Enhancer uses 1200ms between retries)
-        await jitter(2000, 4000);
+        await jitter(4000, 8000);
         continue;
       }
       return { outcome: 'error', reason: `Search failed (error ${searchResult.error})` };
@@ -70,7 +70,7 @@ export async function executeBuyCycle(
       return { outcome: 'skipped', reason: 'Price above guard' };
     }
 
-    await jitter(1000, 2000);
+    await jitter(2000, 4000);
 
     // Buy
     const buyResult = await buyItem(cheapest, cheapestBin);
@@ -83,7 +83,7 @@ export async function executeBuyCycle(
     const sellBin = roundToNearestStep(player.sell_price);
     const sellStart = roundToNearestStep(getBeforeStepValue(player.sell_price));
 
-    await jitter(1000, 2000);
+    await jitter(2000, 4000);
 
     const listResult = await listItem(cheapest, sellStart, sellBin);
     if (!listResult.success) {
