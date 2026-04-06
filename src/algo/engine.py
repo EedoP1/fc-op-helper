@@ -80,6 +80,37 @@ def run_backtest(
     }
 
 
+def run_sweep(
+    strategy_class: type,
+    price_data: dict[int, list[tuple[datetime, int]]],
+    budget: int = 1_000_000,
+) -> list[dict]:
+    """Run a strategy across all its parameter combos.
+
+    Args:
+        strategy_class: The Strategy class (not an instance).
+        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        budget: Starting coin balance for each run.
+
+    Returns:
+        List of result dicts, one per param combo.
+    """
+    # Get param grid from a throwaway instance
+    sample = strategy_class({})
+    grid = sample.param_grid()
+
+    results = []
+    for i, params in enumerate(grid):
+        logger.info(
+            f"[{strategy_class.name}] Running combo {i + 1}/{len(grid)}: {params}"
+        )
+        strategy = strategy_class(params)
+        result = run_backtest(strategy, price_data, budget)
+        results.append(result)
+
+    return results
+
+
 def _calc_max_drawdown(balance_history: list[tuple[datetime, int]], budget: int) -> float:
     """Maximum peak-to-trough decline as a fraction (0.0 to 1.0)."""
     if not balance_history:

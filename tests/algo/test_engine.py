@@ -1,7 +1,7 @@
 """Tests for the backtesting engine."""
 import pytest
 from datetime import datetime, timedelta
-from src.algo.engine import run_backtest
+from src.algo.engine import run_backtest, run_sweep
 from src.algo.strategies.base import Strategy
 from src.algo.models import Signal, Portfolio
 
@@ -88,3 +88,31 @@ def test_engine_insufficient_funds_skips_buy():
     result = run_backtest(strategy, price_data, budget=100_000)
     # Can only buy one player (90k), not enough for second
     assert result["total_trades"] <= 1
+
+
+class ThresholdStrategy(Strategy):
+    name = "threshold"
+
+    def __init__(self, params: dict):
+        self.params = params
+        self.threshold = params.get("threshold", 0.05)
+
+    def on_tick(self, ea_id, price, timestamp, portfolio):
+        return []
+
+    def param_grid(self):
+        return [
+            {"threshold": 0.05},
+            {"threshold": 0.10},
+            {"threshold": 0.15},
+        ]
+
+
+def test_sweep_runs_all_param_combos():
+    price_data = make_price_data()
+    results = run_sweep(ThresholdStrategy, price_data, budget=100_000)
+    assert len(results) == 3
+    assert all(r["strategy_name"] == "threshold" for r in results)
+    # Each result should have different params
+    params_set = {r["params"] for r in results}
+    assert len(params_set) == 3
