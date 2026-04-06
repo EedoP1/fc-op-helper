@@ -156,3 +156,44 @@ def test_weekly_cycle_sells_on_sell_day():
     signals = s.on_tick(1, 11_000, ts_sell, portfolio)
     assert len(signals) == 1
     assert signals[0].action == "SELL"
+
+
+def test_bollinger_buys_at_lower_band():
+    from src.algo.strategies.bollinger import BollingerStrategy
+
+    s = BollingerStrategy({"window": 4, "num_std": 2.0, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    base = datetime(2026, 1, 1)
+    # Feed varied prices: [10000, 10200, 9800, 10000]
+    prices = [10_000, 10_200, 9_800, 10_000]
+    for h, p in enumerate(prices):
+        s.on_tick(1, p, base + timedelta(hours=h), portfolio)
+
+    # Mean=10000, std~82. Lower band = 10000 - 2*82 = 9836
+    # Price at 9700 is below lower band — should buy
+    signals = s.on_tick(1, 9_700, base + timedelta(hours=4), portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "BUY"
+
+
+def test_bollinger_sells_at_upper_band():
+    from src.algo.strategies.bollinger import BollingerStrategy
+
+    s = BollingerStrategy({"window": 4, "num_std": 2.0, "position_pct": 0.05})
+    portfolio = Portfolio(cash=100_000)
+
+    base = datetime(2026, 1, 1)
+    prices = [10_000, 10_200, 9_800, 10_000]
+    for h, p in enumerate(prices):
+        s.on_tick(1, p, base + timedelta(hours=h), portfolio)
+
+    # Buy below lower band
+    signals = s.on_tick(1, 9_700, base + timedelta(hours=4), portfolio)
+    # Execute the buy
+    portfolio.buy(1, signals[0].quantity, 9_700, base + timedelta(hours=4))
+
+    # Price rises above upper band (10000 + 2*82 = 10164)
+    signals = s.on_tick(1, 10_300, base + timedelta(hours=5), portfolio)
+    assert len(signals) == 1
+    assert signals[0].action == "SELL"
