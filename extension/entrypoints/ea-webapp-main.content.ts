@@ -20,7 +20,7 @@ import {
   type AutomationResult,
 } from '../src/ea-bridge';
 import { AutomationEngine } from '../src/automation';
-import { MainWorldStorageAdapter } from '../src/automation-storage';
+import { MainWorldStorageAdapter } from '../src/automation-storage-main';
 import { runAutomationLoop } from '../src/automation-loop';
 
 const MSG_SOURCE = 'op-seller';
