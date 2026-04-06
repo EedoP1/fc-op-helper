@@ -304,10 +304,9 @@ export async function runAutomationLoop(
         // Try to find earliest expiry from active items
         let earliestExpireMs = Infinity;
         if (cycleResult && cycleResult.groups.active.length > 0) {
-          const nowSec = Math.floor(Date.now() / 1000);
           for (const item of cycleResult.groups.active) {
-            const expires = item.getAuctionData().expires; // Unix timestamp seconds
-            const remainMs = (expires - nowSec) * 1000;
+            const remainSec = item.getAuctionData().expires; // seconds remaining, NOT a Unix timestamp
+            const remainMs = remainSec * 1000;
             if (remainMs > 0 && remainMs < earliestExpireMs) {
               earliestExpireMs = remainMs;
             }
