@@ -1,29 +1,31 @@
-from src.algo.scraper import parse_price_history
+from src.algo.scraper import parse_futbin_price_data, extract_ea_id
 
 
-def test_parse_price_history():
-    """Test parsing fut.gg API response into (timestamp, price) tuples."""
-    raw = {
-        "history": [
-            {"date": "2025-09-30T12:00:00Z", "price": 15000},
-            {"date": "2025-09-30T13:00:00Z", "price": 15200},
-            {"date": "2025-09-30T14:00:00Z", "price": 14800},
-        ]
-    }
-    result = parse_price_history(12345, raw)
+def test_parse_futbin_price_data():
+    """Test parsing FUTBIN's data-ps-data attribute."""
+    raw = '[[1727654400000,15000],[1727740800000,15200],[1727827200000,14800]]'
+    result = parse_futbin_price_data(raw)
     assert len(result) == 3
-    assert result[0] == (12345, "2025-09-30T12:00:00+00:00", 15000)
-    assert result[1] == (12345, "2025-09-30T13:00:00+00:00", 15200)
-    assert result[2] == (12345, "2025-09-30T14:00:00+00:00", 14800)
+    assert result[0] == (1727654400000, 15000)
+    assert result[1] == (1727740800000, 15200)
+    assert result[2] == (1727827200000, 14800)
 
 
-def test_parse_price_history_skips_bad_records():
-    raw = {
-        "history": [
-            {"date": "2025-09-30T12:00:00Z", "price": 15000},
-            {"bad_key": "missing fields"},
-            {"date": "2025-09-30T14:00:00Z", "price": 14800},
-        ]
-    }
-    result = parse_price_history(12345, raw)
-    assert len(result) == 2
+def test_parse_futbin_price_data_bad_input():
+    assert parse_futbin_price_data("not json") == []
+    assert parse_futbin_price_data("") == []
+
+
+def test_extract_ea_id():
+    html = '<img src="https://cdn3.futbin.com/content/fifa26/img/players/239085.png?w=44" alt="Haaland">'
+    assert extract_ea_id(html) == 239085
+
+
+def test_extract_ea_id_with_p_prefix():
+    html = '<img src="https://cdn3.futbin.com/content/fifa26/img/players/p50570733.png">'
+    assert extract_ea_id(html) == 50570733
+
+
+def test_extract_ea_id_not_found():
+    html = '<img src="https://cdn3.futbin.com/content/fifa26/img/cards/gold.png">'
+    assert extract_ea_id(html) is None

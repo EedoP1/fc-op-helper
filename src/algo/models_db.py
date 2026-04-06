@@ -6,12 +6,13 @@ from src.server.db import Base
 
 
 class PriceHistory(Base):
-    """Hourly price data per player from fut.gg historical scrape."""
+    """Daily price data per player from FUTBIN historical scrape."""
 
     __tablename__ = "price_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    futbin_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime)
     price: Mapped[int] = mapped_column(Integer)
 

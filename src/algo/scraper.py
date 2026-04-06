@@ -1,10 +1,25 @@
-"""One-time scraper to fetch full price history from fut.gg into the database."""
+"""FUTBIN price history scraper using Playwright with stealth.
+
+Scrapes daily price history for all 75+ rated players from FUTBIN.
+Uses the same Playwright + stealth pattern as the existing scanner.
+
+Data is extracted from the `data-ps-data` attribute on `.highcharts-graph-wrapper`
+elements — FUTBIN embeds the full price history (game launch to now) as
+[[timestamp_ms, price], ...] in the server-rendered HTML.
+
+EA resource IDs are extracted from player image URLs which follow the pattern
+`players/{ea_id}.png`.
+"""
+
+from __future__ import annotations
+
 import asyncio
+import json
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 
 import click
-import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -13,118 +28,270 @@ from src.server.db import Base
 
 logger = logging.getLogger(__name__)
 
-_MIN_REQUEST_INTERVAL = 0.25  # match existing rate limit
-BASE_URL = "https://www.fut.gg"
+_FUTBIN_BASE = "https://www.futbin.com"
+_PLAYERS_LIST_URL = _FUTBIN_BASE + "/players?player_rating=75-99&page={page}"
+_PLAYER_MARKET_URL = _FUTBIN_BASE + "/26/player/{futbin_id}/{slug}/market"
+
+# Delay between page loads to avoid detection (seconds)
+_PAGE_DELAY = 3.0
+
+# Regex to extract EA base ID from player image URL
+_EA_ID_RE = re.compile(r"players/p?(\d{4,})")
+
+# Regex to extract futbin_id and slug from player links
+_PLAYER_LINK_RE = re.compile(r"/26/player/(\d+)/([^/]+)")
 
 
-def parse_price_history(ea_id: int, prices_data: dict) -> list[tuple[int, str, int]]:
-    """Parse price history from fut.gg API response.
-
-    Returns list of (ea_id, iso_timestamp_str, price) tuples.
-    """
-    results = []
-    for point in prices_data.get("history", []):
-        try:
-            ts_str = point["date"].replace("Z", "+00:00")
-            price = point["price"]
-            results.append((ea_id, ts_str, price))
-        except (KeyError, TypeError):
-            continue
-    return results
-
-
-async def fetch_player_price_history(
-    client: httpx.AsyncClient, ea_id: int,
-) -> list[tuple[int, str, int]]:
-    """Fetch full price history for a single player from fut.gg."""
+def parse_futbin_price_data(data_attr: str) -> list[tuple[int, int]]:
+    """Parse FUTBIN's data-ps-data attribute into (timestamp_ms, price) tuples."""
     try:
-        resp = await client.get(f"{BASE_URL}/api/fut/player-prices/26/{ea_id}/")
-        resp.raise_for_status()
-        data = resp.json()
-        prices = data.get("data", {})
-        return parse_price_history(ea_id, prices)
-    except Exception as e:
-        logger.error(f"Failed to fetch price history for {ea_id}: {e}")
+        points = json.loads(data_attr)
+        return [(int(ts), int(price)) for ts, price in points]
+    except (json.JSONDecodeError, TypeError, ValueError):
         return []
 
 
-async def scrape_all(db_url: str = DATABASE_URL, concurrency: int = 5):
-    """Fetch price history for all known players and insert into price_history table."""
+def extract_ea_id(page_html: str) -> int | None:
+    """Extract EA resource ID from player image URL in page HTML."""
+    match = _EA_ID_RE.search(page_html)
+    return int(match.group(1)) if match else None
+
+
+async def _create_browser():
+    """Launch Chrome with stealth flags, matching existing scanner pattern."""
+    from playwright.async_api import async_playwright
+
+    pw = await async_playwright().start()
+    browser = await pw.chromium.launch(
+        channel="chrome",
+        headless=False,
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    context = await browser.new_context()
+    await context.add_init_script(
+        'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
+    )
+    page = await context.new_page()
+    return pw, browser, context, page
+
+
+async def scrape_player_list(page, max_pages: int = 999) -> list[dict]:
+    """Scrape FUTBIN player list to get all 75+ rated player URLs.
+
+    Returns list of {futbin_id, slug, url} dicts.
+    """
+    players = []
+    seen_ids = set()
+
+    for page_num in range(1, max_pages + 1):
+        url = _PLAYERS_LIST_URL.format(page=page_num)
+        logger.info(f"Fetching player list page {page_num}...")
+
+        await page.goto(url, timeout=30000)
+        await asyncio.sleep(_PAGE_DELAY)
+
+        content = await page.content()
+
+        # Check for Cloudflare challenge
+        if "Just a moment" in content:
+            logger.warning("Cloudflare challenge — waiting...")
+            await asyncio.sleep(10)
+            content = await page.content()
+            if "Just a moment" in content:
+                logger.error("Cloudflare challenge not resolved, stopping")
+                break
+
+        # Extract player links
+        links = _PLAYER_LINK_RE.findall(content)
+        if not links:
+            logger.info(f"No player links found on page {page_num}, done")
+            break
+
+        new_count = 0
+        for futbin_id, slug in links:
+            futbin_id = int(futbin_id)
+            if futbin_id not in seen_ids:
+                seen_ids.add(futbin_id)
+                players.append({
+                    "futbin_id": futbin_id,
+                    "slug": slug,
+                })
+                new_count += 1
+
+        logger.info(f"Page {page_num}: {new_count} new players, {len(players)} total")
+
+        if new_count == 0:
+            break
+
+    return players
+
+
+async def scrape_player_prices(page, futbin_id: int, slug: str) -> dict | None:
+    """Scrape a single player's market page for price history.
+
+    Returns dict with ea_id, futbin_id, name, prices or None on failure.
+    """
+    url = f"{_FUTBIN_BASE}/26/player/{futbin_id}/{slug}/market"
+
+    try:
+        await page.goto(url, timeout=30000)
+        await asyncio.sleep(_PAGE_DELAY)
+
+        content = await page.content()
+
+        if "Just a moment" in content:
+            logger.warning(f"Cloudflare challenge for {slug} — waiting...")
+            await asyncio.sleep(10)
+            content = await page.content()
+            if "Just a moment" in content:
+                logger.error(f"Challenge not resolved for {slug}")
+                return None
+
+        # Extract EA resource ID from player image
+        ea_id = extract_ea_id(content)
+        if not ea_id:
+            logger.warning(f"Could not extract ea_id for {slug} (futbin_id={futbin_id})")
+            return None
+
+        # Extract player name from page title
+        name_match = re.search(r"<h1[^>]*>([^<]+)", content)
+        name = name_match.group(1).strip() if name_match else slug
+
+        # Extract price history from the first data-ps-data attribute
+        # (the main daily graph for PS/Cross platform)
+        ps_match = re.search(r'data-ps-data="(\[\[.*?\]\])"', content)
+        if not ps_match:
+            logger.warning(f"No price data found for {slug} (ea_id={ea_id})")
+            return None
+
+        # HTML-decode the attribute value
+        raw = ps_match.group(1).replace("&quot;", '"')
+        prices = parse_futbin_price_data(raw)
+
+        if not prices:
+            logger.warning(f"Empty price data for {slug} (ea_id={ea_id})")
+            return None
+
+        logger.info(
+            f"  {name}: ea_id={ea_id}, {len(prices)} price points "
+            f"({datetime.fromtimestamp(prices[0][0]/1000, tz=timezone.utc).date()} → "
+            f"{datetime.fromtimestamp(prices[-1][0]/1000, tz=timezone.utc).date()})"
+        )
+
+        return {
+            "ea_id": ea_id,
+            "futbin_id": futbin_id,
+            "name": name,
+            "prices": prices,
+        }
+
+    except Exception as exc:
+        logger.error(f"Error scraping {slug} (futbin_id={futbin_id}): {exc}")
+        return None
+
+
+async def save_prices(session_factory, player_data: dict):
+    """Insert price history rows into the database."""
+    rows = []
+    for ts_ms, price in player_data["prices"]:
+        rows.append({
+            "ea_id": player_data["ea_id"],
+            "futbin_id": player_data["futbin_id"],
+            "timestamp": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
+            "price": price,
+        })
+
+    if rows:
+        async with session_factory() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO price_history (ea_id, futbin_id, timestamp, price) "
+                    "VALUES (:ea_id, :futbin_id, :timestamp, :price)"
+                ),
+                rows,
+            )
+            await session.commit()
+
+    return len(rows)
+
+
+async def scrape_all(
+    db_url: str = DATABASE_URL,
+    limit: int = 0,
+    skip_list: bool = False,
+):
+    """Full scrape pipeline: list players → visit each market page → store prices.
+
+    Args:
+        db_url: Database connection URL.
+        limit: Max players to scrape (0 = all). Use 10 for POC.
+        skip_list: If True, skip player list scrape and use players already in DB.
+    """
     engine = create_async_engine(db_url)
 
+    # Ensure tables exist
     from src.algo.models_db import PriceHistory  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with session_factory() as session:
-        result = await session.execute(
-            text("SELECT ea_id FROM players WHERE is_active = true")
-        )
-        ea_ids = [row[0] for row in result.fetchall()]
+    pw, browser, context, page = await _create_browser()
 
-    logger.info(f"Scraping price history for {len(ea_ids)} players")
+    try:
+        # Phase 1: Get player list
+        logger.info("Phase 1: Scraping player list from FUTBIN...")
+        players = await scrape_player_list(page, max_pages=999)
+        logger.info(f"Found {len(players)} players")
 
-    sem = asyncio.Semaphore(concurrency)
-    last_request_time = 0.0
+        if limit > 0:
+            players = players[:limit]
+            logger.info(f"Limiting to {limit} players (POC mode)")
 
-    async def fetch_with_rate_limit(client: httpx.AsyncClient, ea_id: int):
-        nonlocal last_request_time
-        async with sem:
-            now = asyncio.get_event_loop().time()
-            wait = _MIN_REQUEST_INTERVAL - (now - last_request_time)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            last_request_time = asyncio.get_event_loop().time()
-            return await fetch_player_price_history(client, ea_id)
+        # Phase 2: Scrape each player's market page
+        logger.info(f"Phase 2: Scraping price history for {len(players)} players...")
+        total_inserted = 0
+        success = 0
+        failed = 0
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        total = len(ea_ids)
-        inserted = 0
-
-        for i in range(0, total, concurrency):
-            batch_ids = ea_ids[i : i + concurrency]
-            tasks = [fetch_with_rate_limit(client, eid) for eid in batch_ids]
-            results = await asyncio.gather(*tasks)
-
-            rows = []
-            for points in results:
-                for ea_id, ts_str, price in points:
-                    rows.append({
-                        "ea_id": ea_id,
-                        "timestamp": ts_str,
-                        "price": price,
-                    })
-
-            if rows:
-                async with session_factory() as session:
-                    await session.execute(
-                        text(
-                            "INSERT INTO price_history (ea_id, timestamp, price) "
-                            "VALUES (:ea_id, :timestamp, :price)"
-                        ),
-                        rows,
-                    )
-                    await session.commit()
-                inserted += len(rows)
-
+        for i, player in enumerate(players):
             logger.info(
-                f"Progress: {min(i + concurrency, total)}/{total} players, "
-                f"{inserted} price points inserted"
+                f"[{i + 1}/{len(players)}] Scraping {player['slug']}..."
+            )
+            data = await scrape_player_prices(
+                page, player["futbin_id"], player["slug"],
             )
 
-    await engine.dispose()
-    logger.info(f"Scrape complete: {inserted} total price points")
+            if data:
+                inserted = await save_prices(session_factory, data)
+                total_inserted += inserted
+                success += 1
+            else:
+                failed += 1
+
+        logger.info(
+            f"Scrape complete: {success} players, {failed} failed, "
+            f"{total_inserted} price points inserted"
+        )
+
+    finally:
+        await page.close()
+        await context.close()
+        await browser.close()
+        await pw.stop()
+        await engine.dispose()
 
 
 @click.command()
-@click.option("--concurrency", default=5, help="Max concurrent API requests")
+@click.option("--limit", default=0, help="Max players to scrape (0 = all, 10 = POC)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(concurrency: int, db_url: str):
-    """Scrape full price history from fut.gg for all known players."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    asyncio.run(scrape_all(db_url=db_url, concurrency=concurrency))
+def main(limit: int, db_url: str):
+    """Scrape full price history from FUTBIN for all 75+ rated players."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    asyncio.run(scrape_all(db_url=db_url, limit=limit))
 
 
 if __name__ == "__main__":
