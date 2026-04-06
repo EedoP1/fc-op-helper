@@ -300,14 +300,17 @@ export async function runAutomationLoop(
       // ── Inter-cycle pause ──────────────────────────────────────────────
       // Sleep until the earliest card expires instead of rescanning constantly.
       const nothingToBuy = buyPlayers.length === 0 || isCapped || transferListFull;
-      if (nothingToBuy && cycleResult && cycleResult.groups.active.length > 0) {
+      if (nothingToBuy) {
+        // Try to find earliest expiry from active items
         let earliestExpireMs = Infinity;
-        const nowSec = Math.floor(Date.now() / 1000);
-        for (const item of cycleResult.groups.active) {
-          const expires = item.getAuctionData().expires; // Unix timestamp seconds
-          const remainMs = (expires - nowSec) * 1000;
-          if (remainMs > 0 && remainMs < earliestExpireMs) {
-            earliestExpireMs = remainMs;
+        if (cycleResult && cycleResult.groups.active.length > 0) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          for (const item of cycleResult.groups.active) {
+            const expires = item.getAuctionData().expires; // Unix timestamp seconds
+            const remainMs = (expires - nowSec) * 1000;
+            if (remainMs > 0 && remainMs < earliestExpireMs) {
+              earliestExpireMs = remainMs;
+            }
           }
         }
 
@@ -316,8 +319,18 @@ export async function runAutomationLoop(
           const waitMin = Math.max(1, Math.round(waitMs / 60_000));
           await engine.setState('IDLE', `Waiting ~${waitMin}m for next card to expire`);
           await engine.log(`Nothing to buy — sleeping ${waitMin}m until next card expires`);
-          // Sleep in 30s chunks so we can respond to stop requests
           let remaining = waitMs;
+          while (remaining > 0 && !stopped()) {
+            const chunk = Math.min(remaining, 30_000);
+            await new Promise(r => setTimeout(r, chunk));
+            remaining -= chunk;
+          }
+        } else if (transferListFull) {
+          // TL full but no expiry data available — sleep 5 minutes
+          const FALLBACK_SLEEP_MS = 5 * 60_000;
+          await engine.setState('IDLE', 'Transfer list full — waiting 5m before rechecking');
+          await engine.log('No expiry data — sleeping 5m before rechecking transfer list');
+          let remaining = FALLBACK_SLEEP_MS;
           while (remaining > 0 && !stopped()) {
             const chunk = Math.min(remaining, 30_000);
             await new Promise(r => setTimeout(r, chunk));
