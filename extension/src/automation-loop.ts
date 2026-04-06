@@ -9,6 +9,10 @@
  *   Inter-cycle: sleep until earliest card expires
  *
  * No DOM interaction — all operations use EA service layer and message passing.
+ *
+ * Error handling follows FUT Enhancer's approach: no special session-expiry
+ * detection. If the session expires, every EA call fails, consecutive failures
+ * hit the threshold, and automation stops with a clear message.
  */
 import { AutomationEngine, jitter } from './automation';
 import { executeBuyCycle, type BuyCycleResult } from './buy-cycle';
@@ -21,23 +25,6 @@ import { getUnassigned, moveItem, isPileFull, getCoins } from './ea-services';
 import type { ActionNeeded, ExtensionMessage } from './messages';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Check if an error indicates an expired EA session (401/auth failure).
- * Must be very specific — EA errors about expired auctions, sessions in
- * unrelated contexts, etc. must NOT trigger this.
- */
-function isSessionError(error: unknown): boolean {
-  // EA returns numeric error code 401 for unauthorized
-  if (error === 401) return true;
-
-  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  // Only match very specific auth-failure patterns
-  if (msg === 'unauthorized' || msg === '401') return true;
-  if (msg.includes('session expired') || msg.includes('session has expired')) return true;
-  if (msg.includes('not authenticated') || msg.includes('not authorized')) return true;
-  return false;
-}
 
 /** Check if a BuyCycleResult reason indicates insufficient coins. */
 function isInsufficientCoinsError(reason: string): boolean {
@@ -77,12 +64,7 @@ export async function runAutomationLoop(
           }
         }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (isSessionError(err)) {
-          await engine.setError(`EA session expired — please log in and restart automation (${errMsg})`);
-          return;
-        }
-        await engine.log(`Unassigned sweep error: ${errMsg} — continuing`);
+        await engine.log(`Unassigned sweep error: ${err instanceof Error ? err.message : String(err)} — continuing`);
       }
 
       if (stopped()) return;
@@ -115,12 +97,7 @@ export async function runAutomationLoop(
 
         await engine.setState('SCANNING', 'Transfer list cycle complete');
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (isSessionError(err)) {
-          await engine.setError(`EA session expired — please log in and restart automation (${errMsg})`);
-          return;
-        }
-        await engine.log(`Transfer list cycle error: ${errMsg} — continuing`);
+        await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)} — continuing`);
       }
 
       if (stopped()) return;
@@ -178,14 +155,14 @@ export async function runAutomationLoop(
         await engine.setState('BUYING', 'Starting buy cycle');
 
         let consecutiveFailures = 0;
-        const CAPTCHA_THRESHOLD = 3;
+        const FAILURE_THRESHOLD = 3;
 
         for (const player of buyPlayers) {
           if (stopped()) return;
 
-          // Too many consecutive failures — possible CAPTCHA
-          if (consecutiveFailures >= CAPTCHA_THRESHOLD) {
-            await engine.setError(`${consecutiveFailures} consecutive buy failures — possible CAPTCHA or UI block. Please check the EA Web App.`);
+          // Too many consecutive failures — something is wrong
+          if (consecutiveFailures >= FAILURE_THRESHOLD) {
+            await engine.setError(`${consecutiveFailures} consecutive buy failures — please check the EA Web App.`);
             return;
           }
 
@@ -227,10 +204,6 @@ export async function runAutomationLoop(
           try {
             result = await executeBuyCycle(freshPlayer, sendMessage);
           } catch (err) {
-            if (isSessionError(err)) {
-              await engine.setError('EA session expired — please log in and restart automation');
-              return;
-            }
             consecutiveFailures++;
             await engine.setLastEvent(`Error buying ${player.name}: ${err instanceof Error ? err.message : String(err)}`);
             if (!stopped()) await jitter();
@@ -358,10 +331,6 @@ export async function runAutomationLoop(
       }
     }
   } catch (err) {
-    if (isSessionError(err)) {
-      await engine.setError('EA session expired — please log in and restart automation');
-      return;
-    }
     const msg = err instanceof Error ? err.message : String(err);
     await engine.setError(`Unexpected error: ${msg}`);
   }
