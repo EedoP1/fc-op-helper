@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed quick-260405-fm1
-last_updated: "2026-04-05T08:20:26.713Z"
+stopped_at: Completed quick-260407-bh0
+last_updated: "2026-04-07T05:20:56.148Z"
 last_activity: "2026-04-04 - Completed quick task 260404-qwj: Fix portfolio removal race condition (idempotent regenerate with banned_ea_ids)"
 progress:
   total_phases: 9
@@ -147,6 +147,7 @@ Plan: 3 of 5
 - [Phase 08-dom-automation-layer]: ea_id deferred to main loop (Plan 05) — TRADE_REPORT_BATCH sends ea_id=0 for relisted items, resolved by name+rating in caller
 - [Phase quick-260331-vn2]: Listing success verified by QUICK_LIST_PANEL disappearance; sniped skips reset consecutiveFailures; unassigned sweep uses inline button lookup
 - [Phase quick]: PlaywrightPricesClient bridges sync ThreadPoolExecutor threads to async Playwright via run_coroutine_threadsafe for Cloudflare JS challenge bypass on player-prices endpoint
+- [Phase quick]: Single-pass timeline walk across all strategy combos; run_cli routes sweep mode through run_sweep_single_pass
 
 ### Roadmap Evolution
 
@@ -188,5 +189,5 @@ None yet.
 ## Session Continuity
 
 Last activity: 2026-04-04 - Completed quick task 260404-qwj: Fix portfolio removal race condition (idempotent regenerate with banned_ea_ids)
-Stopped at: Completed quick-260405-fm1
+Stopped at: Completed quick-260407-bh0
 Resume file: None
