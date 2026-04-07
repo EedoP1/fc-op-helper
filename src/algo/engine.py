@@ -26,6 +26,7 @@ def run_backtest(
     strategy,
     price_data: dict[int, list[tuple[datetime, int]]],
     budget: int = 1_000_000,
+    futbin_to_ea: dict[int, int] | None = None,
 ) -> dict:
     """Run a single strategy against historical price data.
 
@@ -47,15 +48,23 @@ def run_backtest(
 
     sorted_timestamps = sorted(timeline.keys())
 
+    # Tell strategy which IDs exist at the start of the data window
+    if sorted_timestamps:
+        first_ts = sorted_timestamps[0]
+        existing_ids = {ea_id for ea_id, _ in timeline[first_ts]}
+        strategy.set_existing_ids(existing_ids)
+
     # Walk through time
     for ts in sorted_timestamps:
-        for ea_id, price in timeline[ts]:
-            signals = strategy.on_tick(ea_id, price, ts, portfolio)
-            for signal in signals:
-                if signal.action == "BUY":
-                    portfolio.buy(signal.ea_id, signal.quantity, price, ts)
-                elif signal.action == "SELL":
-                    portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+        ticks = timeline[ts]
+        signals = strategy.on_tick_batch(ticks, ts, portfolio)
+        for signal in signals:
+            # Find price for this signal's ea_id
+            sig_price = next((p for eid, p in ticks if eid == signal.ea_id), 0)
+            if signal.action == "BUY":
+                portfolio.buy(signal.ea_id, signal.quantity, sig_price, ts)
+            elif signal.action == "SELL":
+                portfolio.sell(signal.ea_id, signal.quantity, sig_price, ts)
 
     # Force-sell open positions at last known price
     last_prices: dict[int, tuple[datetime, int]] = {}
@@ -78,6 +87,18 @@ def run_backtest(
     max_drawdown = _calc_max_drawdown(portfolio.balance_history, budget)
     sharpe = _calc_sharpe_ratio(trades)
 
+    fmap = futbin_to_ea or {}
+    trade_log = [{
+        "futbin_id": t.ea_id,
+        "ea_id": fmap.get(t.ea_id, 0),
+        "qty": t.quantity,
+        "buy_price": t.buy_price,
+        "sell_price": t.sell_price,
+        "net_profit": t.net_profit,
+        "buy_time": t.buy_time.isoformat(),
+        "sell_time": t.sell_time.isoformat(),
+    } for t in trades]
+
     return {
         "strategy_name": strategy.name,
         "params": json.dumps(strategy.params) if hasattr(strategy, "params") else "{}",
@@ -88,6 +109,7 @@ def run_backtest(
         "win_rate": win_rate,
         "max_drawdown": max_drawdown,
         "sharpe_ratio": sharpe,
+        "trades": trade_log,
     }
 
 
@@ -160,16 +182,23 @@ def run_sweep_single_pass(
 
     logger.info(f"Running {len(combos)} strategy combos in single pass...")
 
+    # Tell strategies which IDs exist at the start
+    if sorted_timestamps:
+        existing_ids = {ea_id for ea_id, _ in timeline[sorted_timestamps[0]]}
+        for strategy, _ in combos:
+            strategy.set_existing_ids(existing_ids)
+
     # Single walk through timeline
     for ts in sorted_timestamps:
-        for ea_id, price in timeline[ts]:
-            for strategy, portfolio in combos:
-                signals = strategy.on_tick(ea_id, price, ts, portfolio)
-                for signal in signals:
-                    if signal.action == "BUY":
-                        portfolio.buy(signal.ea_id, signal.quantity, price, ts)
-                    elif signal.action == "SELL":
-                        portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+        ticks = timeline[ts]
+        for strategy, portfolio in combos:
+            signals = strategy.on_tick_batch(ticks, ts, portfolio)
+            for signal in signals:
+                sig_price = next((p for eid, p in ticks if eid == signal.ea_id), 0)
+                if signal.action == "BUY":
+                    portfolio.buy(signal.ea_id, signal.quantity, sig_price, ts)
+                elif signal.action == "SELL":
+                    portfolio.sell(signal.ea_id, signal.quantity, sig_price, ts)
 
     # Force-sell open positions at last known price
     last_prices: dict[int, tuple[datetime, int]] = {}
@@ -241,20 +270,25 @@ def _worker_run_combos(
         sells_today: dict[str, int] = defaultdict(int)
         combos.append((strategy, portfolio, sells_today))
 
+    # Tell strategies which IDs exist at the start
+    if sorted_timeline:
+        existing_ids = {ea_id for ea_id, _ in sorted_timeline[0][1]}
+        for strategy, _, _ in combos:
+            strategy.set_existing_ids(existing_ids)
+
     # Walk timeline
     for ts, ticks in sorted_timeline:
         day_key = ts.strftime("%Y-%m-%d")
-        for ea_id, price in ticks:
-            for strategy, portfolio, sells_today in combos:
-                signals = strategy.on_tick(ea_id, price, ts, portfolio)
-                for signal in signals:
-                    if signal.action == "BUY":
-                        portfolio.buy(signal.ea_id, signal.quantity, price, ts)
-                    elif signal.action == "SELL":
-                        if sells_today[day_key] < MAX_SELLS_PER_DAY:
-                            portfolio.sell(signal.ea_id, signal.quantity, price, ts)
-                            sells_today[day_key] += signal.quantity
-                        # else: skip sell, hit daily limit
+        for strategy, portfolio, sells_today in combos:
+            signals = strategy.on_tick_batch(ticks, ts, portfolio)
+            for signal in signals:
+                sig_price = next((p for eid, p in ticks if eid == signal.ea_id), 0)
+                if signal.action == "BUY":
+                    portfolio.buy(signal.ea_id, signal.quantity, sig_price, ts)
+                elif signal.action == "SELL":
+                    if sells_today[day_key] < MAX_SELLS_PER_DAY:
+                        portfolio.sell(signal.ea_id, signal.quantity, sig_price, ts)
+                        sells_today[day_key] += signal.quantity
 
     # Force-sell and compute metrics
     results = []
@@ -442,6 +476,10 @@ async def load_price_data(
     """
     if days > 0:
         cutoff = dt.utcnow() - __import__('datetime').timedelta(days=days)
+        # Align cutoff to previous Sunday so existing_ids catches full weeks
+        days_since_sunday = (cutoff.weekday() + 1) % 7  # Mon=0 -> 1, Sun=6 -> 0
+        cutoff = cutoff - __import__('datetime').timedelta(days=days_since_sunday)
+        cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
         query = text(
             "SELECT futbin_id, timestamp, price FROM price_history "
             "WHERE timestamp >= :cutoff AND futbin_id IS NOT NULL "
@@ -501,6 +539,8 @@ async def run_cli(
     budget: int,
     db_url: str,
     days: int = 0,
+    min_price: int = 0,
+    max_price: int = 0,
 ):
     """CLI entrypoint: load data, run strategies, save results."""
     from src.algo.strategies import discover_strategies
@@ -511,8 +551,15 @@ async def run_cli(
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    logger.info(f"Loading price data from database{f' (last {days} days)' if days else ''}...")
-    price_data, futbin_to_ea = await load_price_data(session_factory, days=days)
+    price_label = ""
+    if days:
+        price_label += f" (last {days} days)"
+    if min_price:
+        price_label += f" (min {min_price:,})"
+    if max_price:
+        price_label += f" (max {max_price:,})"
+    logger.info(f"Loading price data from database{price_label}...")
+    price_data, futbin_to_ea = await load_price_data(session_factory, min_price=min_price, max_price=max_price, days=days)
     logger.info(f"Loaded {len(price_data)} players with price history")
 
     if not price_data:
@@ -545,7 +592,7 @@ async def run_cli(
         # Single strategy with explicit params: use direct run_backtest
         name, cls = to_run[0]
         strategy = cls(json.loads(params_json))
-        result = run_backtest(strategy, price_data, budget)
+        result = run_backtest(strategy, price_data, budget, futbin_to_ea=futbin_to_ea)
         total_results.append(result)
     else:
         # Sweep mode (--all or --strategy without --params): parallel
@@ -654,11 +701,13 @@ async def run_cli(
 @click.option("--params", "params_json", default=None, help="JSON params for single run")
 @click.option("--budget", default=1_000_000, help="Starting budget in coins")
 @click.option("--days", default=0, help="Only use last N days of price data (0 = all)")
+@click.option("--min-price", default=0, help="Only include cards with prices >= this value")
+@click.option("--max-price", default=0, help="Only include cards with prices <= this value")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(strategy_name, all_strategies, params_json, budget, days, db_url):
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, db_url):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days))
+    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price))
 
 
 if __name__ == "__main__":
