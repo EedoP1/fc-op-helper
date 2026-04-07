@@ -485,15 +485,24 @@ async def run_cli(
         name, cls = to_run[0]
         strategy = cls(json.loads(params_json))
         result = run_backtest(strategy, price_data, budget)
-        await save_result(session_factory, result)
         total_results.append(result)
     else:
         # Sweep mode (--all or --strategy without --params): parallel
         classes = [cls for _, cls in to_run]
-        results = run_sweep_parallel(classes, price_data, budget)
-        for r in results:
+        total_results = run_sweep_parallel(classes, price_data, budget)
+
+    # Save to JSON immediately so we never lose compute results
+    results_file = "backtest_results.json"
+    with open(results_file, "w") as f:
+        json.dump(total_results, f, indent=2, default=str)
+    logger.info(f"Results saved to {results_file}")
+
+    # Then try DB save (non-fatal)
+    for r in total_results:
+        try:
             await save_result(session_factory, r)
-        total_results.extend(results)
+        except Exception as e:
+            logger.warning(f"DB save failed for {r['strategy_name']}: {e}")
 
     total_results.sort(key=lambda r: r["total_pnl"], reverse=True)
     logger.info(f"\nCompleted {len(total_results)} backtest runs")

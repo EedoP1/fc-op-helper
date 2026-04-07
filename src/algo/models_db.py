@@ -1,7 +1,7 @@
 """SQLAlchemy ORM tables for the algo trading backtester."""
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import Integer, Float, DateTime, String, Text, Index
+from sqlalchemy import Integer, BigInteger, Float, DateTime, String, Text, Index
 from src.server.db import Base
 
 
@@ -30,8 +30,8 @@ class BacktestResult(Base):
     strategy_name: Mapped[str] = mapped_column(String(100))
     params: Mapped[str] = mapped_column(Text)  # JSON-encoded param dict
     started_budget: Mapped[int] = mapped_column(Integer)
-    final_budget: Mapped[int] = mapped_column(Integer)
-    total_pnl: Mapped[int] = mapped_column(Integer)
+    final_budget: Mapped[int] = mapped_column(BigInteger)
+    total_pnl: Mapped[int] = mapped_column(BigInteger)
     total_trades: Mapped[int] = mapped_column(Integer)
     win_rate: Mapped[float] = mapped_column(Float)
     max_drawdown: Mapped[float] = mapped_column(Float)
