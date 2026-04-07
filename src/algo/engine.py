@@ -491,11 +491,18 @@ async def run_cli(
         classes = [cls for _, cls in to_run]
         total_results = run_sweep_parallel(classes, price_data, budget)
 
-    # Save to JSON immediately so we never lose compute results
-    results_file = "backtest_results.json"
-    with open(results_file, "w") as f:
-        json.dump(total_results, f, indent=2, default=str)
-    logger.info(f"Results saved to {results_file}")
+    # Print results immediately so they're never lost
+    total_results.sort(key=lambda r: r["total_pnl"], reverse=True)
+    print(json.dumps(total_results, indent=2, default=str))
+
+    # Also save to JSON file
+    try:
+        results_file = "backtest_results.json"
+        with open(results_file, "w") as f:
+            json.dump(total_results, f, indent=2, default=str)
+        logger.info(f"Results saved to {results_file}")
+    except Exception as e:
+        logger.warning(f"JSON save failed: {e}")
 
     # Then try DB save (non-fatal)
     for r in total_results:
