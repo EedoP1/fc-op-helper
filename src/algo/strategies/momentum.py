@@ -46,7 +46,7 @@ class MomentumStrategy(Strategy):
                 recent = history[-self.trend_length:]
                 is_rising = all(recent[i] > recent[i - 1] for i in range(1, len(recent)))
                 if is_rising:
-                    buy_budget = int(portfolio.cash * self.position_pct)
+                    buy_budget = portfolio.cash * int(self.position_pct * 1000) // 1000
                     quantity = max(1, buy_budget // price) if price > 0 else 0
                     if quantity > 0:
                         signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))

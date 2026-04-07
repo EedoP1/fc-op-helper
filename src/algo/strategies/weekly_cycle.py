@@ -36,7 +36,7 @@ class WeeklyCycleStrategy(Strategy):
         else:
             # Buy window
             if weekday == self.buy_day and hour == self.buy_hour:
-                buy_budget = int(portfolio.cash * self.position_pct)
+                buy_budget = portfolio.cash * int(self.position_pct * 1000) // 1000
                 quantity = max(1, buy_budget // price) if price > 0 else 0
                 if quantity > 0:
                     signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))
