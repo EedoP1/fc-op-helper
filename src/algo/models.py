@@ -91,7 +91,7 @@ class Portfolio:
             if pos.ea_id != ea_id or remaining <= 0:
                 continue
             sold_qty = min(pos.quantity, remaining)
-            revenue = int(price * sold_qty * 0.95)  # 5% EA tax
+            revenue = (price * sold_qty * 95) // 100  # 5% EA tax
             net_profit = revenue - (pos.buy_price * sold_qty)
             self._cash += revenue
             self._trades.append(Trade(
