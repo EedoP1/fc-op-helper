@@ -369,9 +369,24 @@ def _calc_sharpe_ratio(trades: list) -> float:
     return mean_r / std_r
 
 
+_BIGINT_MAX = 2**63 - 1
+_BIGINT_MIN = -(2**63)
+
+
+def _clamp_bigint(value: int) -> int:
+    """Clamp a Python int to PostgreSQL bigint range."""
+    return max(_BIGINT_MIN, min(_BIGINT_MAX, value))
+
+
 async def save_result(session_factory: async_sessionmaker[AsyncSession], result: dict):
     """Save a single backtest result to the database."""
     from src.algo.models_db import BacktestResult  # noqa: F401
+    row = {
+        **result,
+        "final_budget": _clamp_bigint(result["final_budget"]),
+        "total_pnl": _clamp_bigint(result["total_pnl"]),
+        "run_at": dt.now(tz=__import__('datetime').timezone.utc).isoformat(),
+    }
     async with session_factory() as session:
         await session.execute(
             text(
@@ -381,7 +396,7 @@ async def save_result(session_factory: async_sessionmaker[AsyncSession], result:
                 "VALUES (:strategy_name, :params, :started_budget, :final_budget, "
                 ":total_pnl, :total_trades, :win_rate, :max_drawdown, :sharpe_ratio, :run_at)"
             ),
-            {**result, "run_at": dt.now(tz=__import__('datetime').timezone.utc).isoformat()},
+            row,
         )
         await session.commit()
 
