@@ -406,15 +406,25 @@ async def load_price_data(
     min_price: int = 0,
     max_price: int = 0,
     min_data_points: int = 24,
+    days: int = 0,
 ) -> dict[int, list[tuple[dt, int]]]:
     """Load price history from DB into memory.
 
     Returns {ea_id: [(timestamp, price), ...]} sorted by timestamp.
     """
-    async with session_factory() as session:
-        result = await session.execute(
-            text("SELECT ea_id, timestamp, price FROM price_history ORDER BY ea_id, timestamp")
+    if days > 0:
+        cutoff = dt.now(tz=__import__('datetime').timezone.utc) - __import__('datetime').timedelta(days=days)
+        query = text(
+            "SELECT ea_id, timestamp, price FROM price_history "
+            "WHERE timestamp >= :cutoff ORDER BY ea_id, timestamp"
         )
+        params = {"cutoff": cutoff}
+    else:
+        query = text("SELECT ea_id, timestamp, price FROM price_history ORDER BY ea_id, timestamp")
+        params = {}
+
+    async with session_factory() as session:
+        result = await session.execute(query, params)
         rows = result.fetchall()
 
     data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
@@ -440,6 +450,7 @@ async def run_cli(
     params_json: str | None,
     budget: int,
     db_url: str,
+    days: int = 0,
 ):
     """CLI entrypoint: load data, run strategies, save results."""
     from src.algo.strategies import discover_strategies
@@ -450,8 +461,8 @@ async def run_cli(
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    logger.info("Loading price data from database...")
-    price_data = await load_price_data(session_factory)
+    logger.info(f"Loading price data from database{f' (last {days} days)' if days else ''}...")
+    price_data = await load_price_data(session_factory, days=days)
     logger.info(f"Loaded {len(price_data)} players with price history")
 
     if not price_data:
@@ -527,11 +538,12 @@ async def run_cli(
 @click.option("--all", "all_strategies", is_flag=True, help="Run all strategies")
 @click.option("--params", "params_json", default=None, help="JSON params for single run")
 @click.option("--budget", default=1_000_000, help="Starting budget in coins")
+@click.option("--days", default=0, help="Only use last N days of price data (0 = all)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(strategy_name, all_strategies, params_json, budget, db_url):
+def main(strategy_name, all_strategies, params_json, budget, days, db_url):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url))
+    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days))
 
 
 if __name__ == "__main__":
