@@ -333,17 +333,20 @@ async def run_cli(
         return
 
     total_results = []
-    for name, cls in to_run:
-        if params_json:
-            strategy = cls(json.loads(params_json))
-            result = run_backtest(strategy, price_data, budget)
-            await save_result(session_factory, result)
-            total_results.append(result)
-        else:
-            results = run_sweep(cls, price_data, budget)
-            for r in results:
-                await save_result(session_factory, r)
-            total_results.extend(results)
+    if params_json and len(to_run) == 1:
+        # Single strategy with explicit params: use direct run_backtest
+        name, cls = to_run[0]
+        strategy = cls(json.loads(params_json))
+        result = run_backtest(strategy, price_data, budget)
+        await save_result(session_factory, result)
+        total_results.append(result)
+    else:
+        # Sweep mode (--all or --strategy without --params): single-pass
+        classes = [cls for _, cls in to_run]
+        results = run_sweep_single_pass(classes, price_data, budget)
+        for r in results:
+            await save_result(session_factory, r)
+        total_results.extend(results)
 
     total_results.sort(key=lambda r: r["total_pnl"], reverse=True)
     logger.info(f"\nCompleted {len(total_results)} backtest runs")
