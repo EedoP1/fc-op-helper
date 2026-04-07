@@ -217,6 +217,7 @@ def _worker_run_combos(
     last_prices: dict[int, tuple[datetime, int]],
     combo_specs: list[tuple[str, dict]],
     budget: int,
+    futbin_to_ea: dict[int, int] | None = None,
 ) -> list[dict]:
     """Worker function for parallel sweep. Runs in a subprocess.
 
@@ -225,6 +226,7 @@ def _worker_run_combos(
         last_prices: {ea_id: (timestamp, price)} for force-selling.
         combo_specs: [(strategy_module_path, params), ...] to instantiate.
         budget: Starting coin balance for each combo.
+        futbin_to_ea: {futbin_id: ea_id} mapping for trade log.
     """
     from src.algo.strategies import discover_strategies
     available = discover_strategies()
@@ -269,10 +271,12 @@ def _worker_run_combos(
         win_rate = winning / total_trades if total_trades > 0 else 0.0
 
         # Build trade log
+        fmap = futbin_to_ea or {}
         trade_log = []
         for t in trades:
             trade_log.append({
-                "ea_id": t.ea_id,
+                "futbin_id": t.ea_id,
+                "ea_id": fmap.get(t.ea_id, 0),
                 "qty": t.quantity,
                 "buy_price": t.buy_price,
                 "sell_price": t.sell_price,
@@ -302,6 +306,7 @@ def run_sweep_parallel(
     price_data: dict[int, list[tuple[datetime, int]]],
     budget: int = 1_000_000,
     max_workers: int | None = None,
+    futbin_to_ea: dict[int, int] | None = None,
 ) -> list[dict]:
     """Run all strategy+param combos in parallel across CPU cores.
 
@@ -353,7 +358,7 @@ def run_sweep_parallel(
     all_results = []
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = [
-            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget)
+            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget, futbin_to_ea)
             for chunk in chunks
         ]
         for future in futures:
@@ -454,6 +459,23 @@ async def load_price_data(
         result = await session.execute(query, params)
         rows = result.fetchall()
 
+    if days > 0:
+        ea_query = text(
+            "SELECT DISTINCT futbin_id, ea_id FROM price_history "
+            "WHERE timestamp >= :cutoff AND futbin_id IS NOT NULL"
+        )
+        ea_params = {"cutoff": params["cutoff"]}
+    else:
+        ea_query = text(
+            "SELECT DISTINCT futbin_id, ea_id FROM price_history "
+            "WHERE futbin_id IS NOT NULL"
+        )
+        ea_params = {}
+
+    async with session_factory() as session:
+        ea_rows = await session.execute(ea_query, ea_params)
+        futbin_to_ea = {r[0]: r[1] for r in ea_rows.fetchall()}
+
     data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
     for row in rows:
         futbin_id, ts, price = row
@@ -465,10 +487,11 @@ async def load_price_data(
             continue
         data[futbin_id].append((ts, price))
 
-    return {
+    filtered = {
         fid: points for fid, points in data.items()
         if len(points) >= min_data_points
     }
+    return filtered, futbin_to_ea
 
 
 async def run_cli(
@@ -489,7 +512,7 @@ async def run_cli(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     logger.info(f"Loading price data from database{f' (last {days} days)' if days else ''}...")
-    price_data = await load_price_data(session_factory, days=days)
+    price_data, futbin_to_ea = await load_price_data(session_factory, days=days)
     logger.info(f"Loaded {len(price_data)} players with price history")
 
     if not price_data:
@@ -527,7 +550,7 @@ async def run_cli(
     else:
         # Sweep mode (--all or --strategy without --params): parallel
         classes = [cls for _, cls in to_run]
-        total_results = run_sweep_parallel(classes, price_data, budget)
+        total_results = run_sweep_parallel(classes, price_data, budget, futbin_to_ea=futbin_to_ea)
 
     # Load futbin_id → player name mapping for trade log
     player_names: dict[int, str] = {}
@@ -575,23 +598,27 @@ async def run_cli(
         print(f"\n{'='*80}")
         print(f"#{rank} {r['strategy_name']} ({params_str})")
         print(f"{'='*80}")
-        print(f"{'Player':<30} {'Qty':>5} {'Buy':>8} {'Sell':>8} {'Profit':>10} {'Buy Date':<12} {'Sell Date':<12}")
-        print("-" * 95)
+        print(f"{'Player':<30} {'EA ID':>8} {'Qty':>5} {'Buy':>8} {'Sell':>8} {'Profit':>10} {'Buy Date':<12} {'Sell Date':<12}")
+        print("-" * 112)
         # Show top 20 trades by profit
         sorted_trades = sorted(trades, key=lambda t: t["net_profit"], reverse=True)
         for t in sorted_trades[:20]:
-            name = player_names.get(t["ea_id"], f"ID:{t['ea_id']}")
+            fid = t.get("futbin_id", t["ea_id"])
+            ea_id = t.get("ea_id", 0)
+            name = player_names.get(fid, f"FUTBIN#{fid}")
             buy_date = t["buy_time"][:10]
             sell_date = t["sell_time"][:10]
-            print(f"{name[:29]:<30} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
+            print(f"{name[:29]:<30} {ea_id:>8} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
         losing = sorted(trades, key=lambda t: t["net_profit"])
         if losing[0]["net_profit"] < 0:
             print(f"\n  Worst trades:")
             for t in losing[:5]:
-                name = player_names.get(t["ea_id"], f"ID:{t['ea_id']}")
+                fid = t.get("futbin_id", t["ea_id"])
+                ea_id = t.get("ea_id", 0)
+                name = player_names.get(fid, f"FUTBIN#{fid}")
                 buy_date = t["buy_time"][:10]
                 sell_date = t["sell_time"][:10]
-                print(f"  {name[:29]:<30} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
+                print(f"  {name[:29]:<30} {ea_id:>8} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
 
     # Also save to JSON file (without trades for smaller file)
     try:
