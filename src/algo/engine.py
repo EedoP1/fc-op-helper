@@ -413,7 +413,7 @@ async def load_price_data(
     Returns {ea_id: [(timestamp, price), ...]} sorted by timestamp.
     """
     if days > 0:
-        cutoff = dt.now(tz=__import__('datetime').timezone.utc) - __import__('datetime').timedelta(days=days)
+        cutoff = dt.utcnow() - __import__('datetime').timedelta(days=days)
         query = text(
             "SELECT ea_id, timestamp, price FROM price_history "
             "WHERE timestamp >= :cutoff ORDER BY ea_id, timestamp"
