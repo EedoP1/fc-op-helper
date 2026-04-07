@@ -3,7 +3,9 @@ import asyncio
 import json
 import math
 import logging
+import os
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime as dt
 from datetime import datetime
 
@@ -207,6 +209,136 @@ def run_sweep_single_pass(
     return results
 
 
+def _worker_run_combos(
+    sorted_timeline: list[tuple[datetime, list[tuple[int, int]]]],
+    last_prices: dict[int, tuple[datetime, int]],
+    combo_specs: list[tuple[str, dict]],
+    budget: int,
+) -> list[dict]:
+    """Worker function for parallel sweep. Runs in a subprocess.
+
+    Args:
+        sorted_timeline: [(timestamp, [(ea_id, price), ...]), ...] pre-sorted.
+        last_prices: {ea_id: (timestamp, price)} for force-selling.
+        combo_specs: [(strategy_module_path, params), ...] to instantiate.
+        budget: Starting coin balance for each combo.
+    """
+    from src.algo.strategies import discover_strategies
+    available = discover_strategies()
+
+    # Instantiate combos in this process
+    combos = []
+    for strategy_name, params in combo_specs:
+        cls = available[strategy_name]
+        strategy = cls(params)
+        portfolio = Portfolio(cash=budget)
+        combos.append((strategy, portfolio))
+
+    # Walk timeline
+    for ts, ticks in sorted_timeline:
+        for ea_id, price in ticks:
+            for strategy, portfolio in combos:
+                signals = strategy.on_tick(ea_id, price, ts, portfolio)
+                for signal in signals:
+                    if signal.action == "BUY":
+                        portfolio.buy(signal.ea_id, signal.quantity, price, ts)
+                    elif signal.action == "SELL":
+                        portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+
+    # Force-sell and compute metrics
+    results = []
+    for strategy, portfolio in combos:
+        for pos in list(portfolio.positions):
+            if pos.ea_id in last_prices:
+                ts, price = last_prices[pos.ea_id]
+                portfolio.sell(pos.ea_id, pos.quantity, price, ts)
+
+        total_pnl = portfolio.cash - budget
+        trades = portfolio.trades
+        total_trades = len(trades)
+        winning = sum(1 for t in trades if t.net_profit > 0)
+        win_rate = winning / total_trades if total_trades > 0 else 0.0
+
+        results.append({
+            "strategy_name": strategy.name,
+            "params": json.dumps(strategy.params) if hasattr(strategy, "params") else "{}",
+            "started_budget": budget,
+            "final_budget": portfolio.cash,
+            "total_pnl": total_pnl,
+            "total_trades": total_trades,
+            "win_rate": win_rate,
+            "max_drawdown": _calc_max_drawdown(portfolio.balance_history, budget),
+            "sharpe_ratio": _calc_sharpe_ratio(trades),
+        })
+
+    return results
+
+
+def run_sweep_parallel(
+    strategy_classes: list[type],
+    price_data: dict[int, list[tuple[datetime, int]]],
+    budget: int = 1_000_000,
+    max_workers: int | None = None,
+) -> list[dict]:
+    """Run all strategy+param combos in parallel across CPU cores.
+
+    Builds the timeline once, then splits combos across worker processes.
+    Each worker walks the full timeline for its subset of combos.
+
+    Args:
+        strategy_classes: List of Strategy classes to sweep.
+        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        budget: Starting coin balance for each combo.
+        max_workers: Number of processes (default: cpu_count).
+    """
+    if max_workers is None:
+        max_workers = os.cpu_count() or 4
+
+    # Build timeline ONCE
+    timeline: dict[datetime, list[tuple[int, int]]] = defaultdict(list)
+    for ea_id, points in price_data.items():
+        for ts, price in points:
+            timeline[ts].append((ea_id, price))
+
+    sorted_timeline = [(ts, timeline[ts]) for ts in sorted(timeline.keys())]
+
+    # Pre-compute last prices for force-selling
+    last_prices: dict[int, tuple[datetime, int]] = {}
+    for ea_id, points in price_data.items():
+        if points:
+            last_prices[ea_id] = points[-1]
+
+    # Build combo specs: (strategy_name, params) — picklable
+    combo_specs: list[tuple[str, dict]] = []
+    for cls in strategy_classes:
+        sample = cls({})
+        grid = sample.param_grid()
+        for params in grid:
+            combo_specs.append((cls.name, params))
+
+    # Split combos across workers
+    n_workers = min(max_workers, len(combo_specs))
+    chunks = [[] for _ in range(n_workers)]
+    for i, spec in enumerate(combo_specs):
+        chunks[i % n_workers].append(spec)
+
+    logger.info(
+        f"Running {len(combo_specs)} combos across {n_workers} workers..."
+    )
+
+    # Dispatch to process pool
+    all_results = []
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = [
+            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget)
+            for chunk in chunks
+        ]
+        for future in futures:
+            all_results.extend(future.result())
+
+    return all_results
+
+
 def _calc_max_drawdown(balance_history: list[tuple[datetime, int]], budget: int) -> float:
     """Maximum peak-to-trough decline as a fraction (0.0 to 1.0)."""
     if not balance_history:
@@ -341,9 +473,9 @@ async def run_cli(
         await save_result(session_factory, result)
         total_results.append(result)
     else:
-        # Sweep mode (--all or --strategy without --params): single-pass
+        # Sweep mode (--all or --strategy without --params): parallel
         classes = [cls for _, cls in to_run]
-        results = run_sweep_single_pass(classes, price_data, budget)
+        results = run_sweep_parallel(classes, price_data, budget)
         for r in results:
             await save_result(session_factory, r)
         total_results.extend(results)
