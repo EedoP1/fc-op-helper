@@ -120,6 +120,93 @@ def run_sweep(
     return results
 
 
+def run_sweep_single_pass(
+    strategy_classes: list[type],
+    price_data: dict[int, list[tuple[datetime, int]]],
+    budget: int = 1_000_000,
+) -> list[dict]:
+    """Run all strategy+param combos in a single timeline walk.
+
+    Builds the timeline once and walks it once for all combos. Each combo
+    gets its own independent Portfolio and strategy instance.
+
+    Args:
+        strategy_classes: List of Strategy classes to sweep.
+        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        budget: Starting coin balance for each combo.
+
+    Returns:
+        List of result dicts, one per strategy+param combo.
+    """
+    # Build timeline ONCE
+    timeline: dict[datetime, list[tuple[int, int]]] = defaultdict(list)
+    for ea_id, points in price_data.items():
+        for ts, price in points:
+            timeline[ts].append((ea_id, price))
+
+    sorted_timestamps = sorted(timeline.keys())
+
+    # Instantiate all combos: (strategy_instance, portfolio)
+    combos: list[tuple] = []
+    for cls in strategy_classes:
+        sample = cls({})
+        grid = sample.param_grid()
+        for params in grid:
+            strategy = cls(params)
+            portfolio = Portfolio(cash=budget)
+            combos.append((strategy, portfolio))
+
+    logger.info(f"Running {len(combos)} strategy combos in single pass...")
+
+    # Single walk through timeline
+    for ts in sorted_timestamps:
+        for ea_id, price in timeline[ts]:
+            for strategy, portfolio in combos:
+                signals = strategy.on_tick(ea_id, price, ts, portfolio)
+                for signal in signals:
+                    if signal.action == "BUY":
+                        portfolio.buy(signal.ea_id, signal.quantity, price, ts)
+                    elif signal.action == "SELL":
+                        portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+
+    # Force-sell open positions at last known price
+    last_prices: dict[int, tuple[datetime, int]] = {}
+    for ea_id, points in price_data.items():
+        if points:
+            last_prices[ea_id] = points[-1]
+
+    results = []
+    for strategy, portfolio in combos:
+        for pos in list(portfolio.positions):
+            if pos.ea_id in last_prices:
+                ts, price = last_prices[pos.ea_id]
+                portfolio.sell(pos.ea_id, pos.quantity, price, ts)
+
+        # Calculate metrics
+        total_pnl = portfolio.cash - budget
+        trades = portfolio.trades
+        total_trades = len(trades)
+        winning = sum(1 for t in trades if t.net_profit > 0)
+        win_rate = winning / total_trades if total_trades > 0 else 0.0
+
+        max_drawdown = _calc_max_drawdown(portfolio.balance_history, budget)
+        sharpe = _calc_sharpe_ratio(trades)
+
+        results.append({
+            "strategy_name": strategy.name,
+            "params": json.dumps(strategy.params) if hasattr(strategy, "params") else "{}",
+            "started_budget": budget,
+            "final_budget": portfolio.cash,
+            "total_pnl": total_pnl,
+            "total_trades": total_trades,
+            "win_rate": win_rate,
+            "max_drawdown": max_drawdown,
+            "sharpe_ratio": sharpe,
+        })
+
+    return results
+
+
 def _calc_max_drawdown(balance_history: list[tuple[datetime, int]], budget: int) -> float:
     """Maximum peak-to-trough decline as a fraction (0.0 to 1.0)."""
     if not balance_history:
