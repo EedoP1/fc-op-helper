@@ -27,6 +27,7 @@ class PlayerRecord(Base):
     sales_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
     futgg_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class PlayerScore(Base):

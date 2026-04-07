@@ -135,6 +135,13 @@ class FutGGClient:
 
         raw_auctions = prices.get("liveAuctions", [])
         max_price_range = prices.get("priceRange", {}).get("maxPrice")
+        created_at_raw = defn.get("createdAt")
+        created_at = None
+        if created_at_raw:
+            try:
+                created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
@@ -145,6 +152,7 @@ class FutGGClient:
             live_auctions_raw=raw_auctions,
             futgg_url=defn.get("url"),
             max_price_range=max_price_range,
+            created_at=created_at,
         )
 
     def get_player_market_data_sync(
@@ -219,6 +227,13 @@ class FutGGClient:
 
         raw_auctions = prices.get("liveAuctions", [])
         max_price_range = prices.get("priceRange", {}).get("maxPrice")
+        created_at_raw = defn.get("createdAt")
+        created_at = None
+        if created_at_raw:
+            try:
+                created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
@@ -229,6 +244,7 @@ class FutGGClient:
             live_auctions_raw=raw_auctions,
             futgg_url=defn.get("url"),
             max_price_range=max_price_range,
+            created_at=created_at,
         )
 
     async def get_batch_market_data(

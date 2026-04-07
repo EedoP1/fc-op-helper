@@ -394,6 +394,8 @@ class ScannerService:
                         record.name = market_data.player.name
                     if market_data.futgg_url:
                         record.futgg_url = market_data.futgg_url
+                    if market_data.created_at is not None and record.created_at is None:
+                        record.created_at = market_data.created_at
 
             # Schedule next scan at fixed 5-minute interval
             if record is not None:

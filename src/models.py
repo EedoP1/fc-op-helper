@@ -51,3 +51,4 @@ class PlayerMarketData(BaseModel):
     live_auctions_raw: list[dict] = []  # Full liveAuctions entries with all fields preserved
     futgg_url: Optional[str] = None
     max_price_range: Optional[int] = None  # EA max BIN price for this card (priceRange.maxPrice)
+    created_at: Optional[datetime] = None  # fut.gg createdAt — when EA released the card
