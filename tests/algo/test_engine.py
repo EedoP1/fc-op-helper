@@ -1,7 +1,7 @@
 """Tests for the backtesting engine."""
 import pytest
 from datetime import datetime, timedelta
-from src.algo.engine import run_backtest, run_sweep
+from src.algo.engine import run_backtest, run_sweep, run_sweep_single_pass
 from src.algo.strategies.base import Strategy
 from src.algo.models import Signal, Portfolio
 
@@ -116,6 +116,57 @@ def test_sweep_runs_all_param_combos():
     # Each result should have different params
     params_set = {r["params"] for r in results}
     assert len(params_set) == 3
+
+
+def test_single_pass_matches_sequential():
+    """Single-pass sweep produces identical results to sequential run_sweep."""
+    price_data = make_price_data()
+    budget = 100_000
+
+    # Sequential: run_sweep does one-at-a-time
+    sequential_results = run_sweep(ThresholdStrategy, price_data, budget)
+
+    # Single-pass: run_sweep_single_pass does all combos in one timeline walk
+    single_pass_results = run_sweep_single_pass(
+        [ThresholdStrategy], price_data, budget,
+    )
+
+    assert len(single_pass_results) == len(sequential_results) == 3
+    for seq, sp in zip(
+        sorted(sequential_results, key=lambda r: r["params"]),
+        sorted(single_pass_results, key=lambda r: r["params"]),
+    ):
+        assert seq["total_pnl"] == sp["total_pnl"]
+        assert seq["total_trades"] == sp["total_trades"]
+        assert seq["win_rate"] == sp["win_rate"]
+        assert seq["strategy_name"] == sp["strategy_name"]
+
+
+def test_single_pass_with_multiple_strategies():
+    """Single-pass with multiple strategy classes produces one result per combo."""
+    price_data = make_price_data()
+    results = run_sweep_single_pass(
+        [AlwaysBuyStrategy, BuyAndHoldStrategy], price_data, budget=100_000,
+    )
+    # AlwaysBuyStrategy has 1 combo, BuyAndHoldStrategy has 1 combo = 2 total
+    assert len(results) == 2
+    names = {r["strategy_name"] for r in results}
+    assert names == {"always_buy", "buy_and_hold"}
+
+
+def test_single_pass_independent_portfolios():
+    """Two combos with same strategy+params produce identical results (independent portfolios)."""
+    price_data = make_price_data()
+
+    # Run single-pass with AlwaysBuyStrategy listed twice
+    # Each should get its own portfolio, so results should be identical
+    results = run_sweep_single_pass(
+        [AlwaysBuyStrategy, AlwaysBuyStrategy], price_data, budget=100_000,
+    )
+    assert len(results) == 2
+    assert results[0]["total_pnl"] == results[1]["total_pnl"]
+    assert results[0]["total_trades"] == results[1]["total_trades"]
+    assert results[0]["win_rate"] == results[1]["win_rate"]
 
 
 @pytest.mark.asyncio
