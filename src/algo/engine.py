@@ -209,6 +209,9 @@ def run_sweep_single_pass(
     return results
 
 
+MAX_SELLS_PER_DAY = 500
+
+
 def _worker_run_combos(
     sorted_timeline: list[tuple[datetime, list[tuple[int, int]]]],
     last_prices: dict[int, tuple[datetime, int]],
@@ -232,22 +235,28 @@ def _worker_run_combos(
         cls = available[strategy_name]
         strategy = cls(params)
         portfolio = Portfolio(cash=budget)
-        combos.append((strategy, portfolio))
+        # Track sells per day: {date_str: count}
+        sells_today: dict[str, int] = defaultdict(int)
+        combos.append((strategy, portfolio, sells_today))
 
     # Walk timeline
     for ts, ticks in sorted_timeline:
+        day_key = ts.strftime("%Y-%m-%d")
         for ea_id, price in ticks:
-            for strategy, portfolio in combos:
+            for strategy, portfolio, sells_today in combos:
                 signals = strategy.on_tick(ea_id, price, ts, portfolio)
                 for signal in signals:
                     if signal.action == "BUY":
                         portfolio.buy(signal.ea_id, signal.quantity, price, ts)
                     elif signal.action == "SELL":
-                        portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+                        if sells_today[day_key] < MAX_SELLS_PER_DAY:
+                            portfolio.sell(signal.ea_id, signal.quantity, price, ts)
+                            sells_today[day_key] += signal.quantity
+                        # else: skip sell, hit daily limit
 
     # Force-sell and compute metrics
     results = []
-    for strategy, portfolio in combos:
+    for strategy, portfolio, sells_today in combos:
         for pos in list(portfolio.positions):
             if pos.ea_id in last_prices:
                 ts, price = last_prices[pos.ea_id]
@@ -259,6 +268,19 @@ def _worker_run_combos(
         winning = sum(1 for t in trades if t.net_profit > 0)
         win_rate = winning / total_trades if total_trades > 0 else 0.0
 
+        # Build trade log
+        trade_log = []
+        for t in trades:
+            trade_log.append({
+                "ea_id": t.ea_id,
+                "qty": t.quantity,
+                "buy_price": t.buy_price,
+                "sell_price": t.sell_price,
+                "net_profit": t.net_profit,
+                "buy_time": t.buy_time.isoformat(),
+                "sell_time": t.sell_time.isoformat(),
+            })
+
         results.append({
             "strategy_name": strategy.name,
             "params": json.dumps(strategy.params) if hasattr(strategy, "params") else "{}",
@@ -269,6 +291,7 @@ def _worker_run_combos(
             "win_rate": win_rate,
             "max_drawdown": _calc_max_drawdown(portfolio.balance_history, budget),
             "sharpe_ratio": _calc_sharpe_ratio(trades),
+            "trades": trade_log,
         })
 
     return results
@@ -502,15 +525,71 @@ async def run_cli(
         classes = [cls for _, cls in to_run]
         total_results = run_sweep_parallel(classes, price_data, budget)
 
-    # Print results immediately so they're never lost
-    total_results.sort(key=lambda r: r["total_pnl"], reverse=True)
-    print(json.dumps(total_results, indent=2, default=str))
+    # Load player names for trade log
+    player_names: dict[int, str] = {}
+    try:
+        async with session_factory() as session:
+            rows = await session.execute(text("SELECT ea_id, name FROM players"))
+            for row in rows.fetchall():
+                player_names[row[0]] = row[1]
+        logger.info(f"Loaded {len(player_names)} player names")
+    except Exception as e:
+        logger.warning(f"Could not load player names: {e}")
 
-    # Also save to JSON file
+    # Sort by sharpe ratio
+    total_results.sort(key=lambda r: r["sharpe_ratio"], reverse=True)
+
+    # Save full results with trades to JSON file
     try:
         results_file = "backtest_results.json"
         with open(results_file, "w") as f:
             json.dump(total_results, f, indent=2, default=str)
+        logger.info(f"Full results saved to {results_file}")
+    except Exception as e:
+        logger.warning(f"JSON save failed: {e}")
+
+    # Print summary table
+    print(f"\n{'#':<4} {'Strategy':<18} {'Params':<50} {'Win%':>7} {'Trades':>7} {'Sharpe':>8} {'MaxDD':>8}")
+    print("-" * 105)
+    for i, r in enumerate(total_results[:20], 1):
+        params = json.loads(r["params"]) if isinstance(r["params"], str) else r["params"]
+        params_str = ", ".join(f"{k}={v}" for k, v in params.items())
+        print(f"{i:<4} {r['strategy_name']:<18} {params_str:<50} {r['win_rate']:>6.1%} {r['total_trades']:>7,} {r['sharpe_ratio']:>8.3f} {r['max_drawdown']:>7.1%}")
+
+    # Print trade log for top 3 combos
+    for rank, r in enumerate(total_results[:3], 1):
+        trades = r.get("trades", [])
+        if not trades:
+            continue
+        params = json.loads(r["params"]) if isinstance(r["params"], str) else r["params"]
+        params_str = ", ".join(f"{k}={v}" for k, v in params.items())
+        print(f"\n{'='*80}")
+        print(f"#{rank} {r['strategy_name']} ({params_str})")
+        print(f"{'='*80}")
+        print(f"{'Player':<30} {'Qty':>5} {'Buy':>8} {'Sell':>8} {'Profit':>10} {'Buy Date':<12} {'Sell Date':<12}")
+        print("-" * 95)
+        # Show top 20 trades by profit
+        sorted_trades = sorted(trades, key=lambda t: t["net_profit"], reverse=True)
+        for t in sorted_trades[:20]:
+            name = player_names.get(t["ea_id"], f"ID:{t['ea_id']}")
+            buy_date = t["buy_time"][:10]
+            sell_date = t["sell_time"][:10]
+            print(f"{name[:29]:<30} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
+        losing = sorted(trades, key=lambda t: t["net_profit"])
+        if losing[0]["net_profit"] < 0:
+            print(f"\n  Worst trades:")
+            for t in losing[:5]:
+                name = player_names.get(t["ea_id"], f"ID:{t['ea_id']}")
+                buy_date = t["buy_time"][:10]
+                sell_date = t["sell_time"][:10]
+                print(f"  {name[:29]:<30} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
+
+    # Also save to JSON file (without trades for smaller file)
+    try:
+        summary_file = "backtest_summary.json"
+        summary = [{k: v for k, v in r.items() if k != "trades"} for r in total_results]
+        with open(summary_file, "w") as f:
+            json.dump(summary, f, indent=2, default=str)
         logger.info(f"Results saved to {results_file}")
     except Exception as e:
         logger.warning(f"JSON save failed: {e}")
