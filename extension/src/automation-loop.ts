@@ -20,7 +20,7 @@
 import { AutomationEngine, jitter } from './automation';
 import { executeBuyCycle } from './buy-cycle';
 import { executeTransferListCycle } from './transfer-list-cycle';
-import { getUnassigned, moveItem, isPileFull, getCoins } from './ea-services';
+import { getUnassigned, moveItem, getCoins, listItem, roundToNearestStep, getBeforeStepValue } from './ea-services';
 import type { ActionNeeded, ExtensionMessage } from './messages';
 
 // ── Main loop export ─────────────────────────────────────────────────────────
@@ -41,6 +41,9 @@ export async function runAutomationLoop(
   // Price guard cooldown: prevents retrying overpriced players every cycle.
   const PRICE_GUARD_COOLDOWN_MS = 5 * 60_000;
   const priceGuardCooldown = new Map<number, number>();
+
+  // Track ea_ids already on the TL or bought this session to avoid duplicates.
+  const ownedEaIds = new Set<number>();
 
   try {
     while (!stopped()) {
@@ -86,6 +89,44 @@ export async function runAutomationLoop(
 
       await engine.setState('SCANNING', 'Transfer list cycle complete');
 
+      // Refresh owned set from current TL (active + unlisted still on pile)
+      ownedEaIds.clear();
+      for (const item of cycleResult.groups.active) {
+        ownedEaIds.add(item.definitionId);
+      }
+      for (const item of cycleResult.groups.unlisted) {
+        ownedEaIds.add(item.definitionId);
+      }
+
+      if (stopped()) return;
+
+      // ── Phase A.5: List any unlisted cards on the transfer pile ────────
+      if (cycleResult.groups.unlisted.length > 0) {
+        await engine.log(`Found ${cycleResult.groups.unlisted.length} unlisted cards — fetching prices to list`);
+        for (const item of cycleResult.groups.unlisted) {
+          if (stopped()) return;
+          try {
+            const priceRes = await sendMessage({
+              type: 'FRESH_PRICE_REQUEST',
+              ea_id: item.definitionId,
+            } satisfies ExtensionMessage);
+            if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
+              const sellBin = roundToNearestStep(priceRes.sell_price);
+              const sellStart = roundToNearestStep(getBeforeStepValue(priceRes.sell_price));
+              await jitter(500, 1000);
+              const { success, error } = await listItem(item, sellStart, sellBin);
+              if (success) {
+                await engine.log(`Listed unlisted card defId=${item.definitionId} at ${sellBin.toLocaleString()}`);
+              } else {
+                await engine.log(`Failed to list defId=${item.definitionId} (error ${error}, sellBin=${sellBin}, sellStart=${sellStart}, sell_price=${priceRes.sell_price})`);
+              }
+            }
+          } catch {
+            await engine.log(`Price lookup failed for unlisted card defId=${item.definitionId}`);
+          }
+        }
+      }
+
       if (stopped()) return;
 
       // ── Phase B: Get actions-needed ────────────────────────────────────
@@ -127,12 +168,14 @@ export async function runAutomationLoop(
       }
 
       const buyPlayers = actionsNeeded.filter(
-        a => a.action === 'BUY' && !priceGuardCooldown.has(a.ea_id),
+        a => a.action === 'BUY' && !priceGuardCooldown.has(a.ea_id) && !ownedEaIds.has(a.ea_id),
       );
 
-      // Transfer list full check via EA service
-      const transferListFull = isPileFull(5); // 5 = ItemPile.TRANSFER
+      // Transfer list full check — use our own count, not EA's cached isPileFull
+      // which goes stale after clearSold()
+      const TL_CAPACITY = 100;
       let transferListCount = cycleResult.groups.all.length - cycleResult.soldCleared;
+      const transferListFull = transferListCount >= TL_CAPACITY;
 
       if (!isCapped && !transferListFull && buyPlayers.length > 0) {
         // Check coins BEFORE the buy loop (like FUT Enhancer)
@@ -155,7 +198,7 @@ export async function runAutomationLoop(
             }
 
             // Transfer list full check
-            if (isPileFull(5)) {
+            if (transferListCount >= TL_CAPACITY) {
               await engine.log('Transfer list full — stopping buy phase');
               break;
             }
@@ -194,6 +237,7 @@ export async function runAutomationLoop(
             if (result.outcome === 'bought') {
               consecutiveFailures = 0;
               transferListCount++;
+              ownedEaIds.add(player.ea_id);
               await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
 
               // Report buy + list to backend
@@ -238,10 +282,7 @@ export async function runAutomationLoop(
             } else if (result.outcome === 'error') {
               consecutiveFailures++;
 
-              if (result.reason.includes('unassigned pile')) {
-                await engine.log('Listing failed (TL full) — stopping buy phase');
-                break;
-              }
+              await engine.log(`Buy error for ${player.name}: ${result.reason}`);
 
               await engine.setLastEvent(`Error buying ${player.name}: ${result.reason}`);
             }

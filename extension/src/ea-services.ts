@@ -276,9 +276,20 @@ export async function listItem(
   buy_now: number,
   duration = 3600,
 ): Promise<{ success: boolean; error?: number }> {
+  console.log('[ea-services] listItem params:', JSON.stringify({
+    defId: item.definitionId,
+    startBid: start_bid,
+    buyNow: buy_now,
+    duration,
+    isSelling: item.getAuctionData().isSelling(),
+    isInactive: item.getAuctionData().isInactive(),
+    isExpired: item.getAuctionData().isExpired(),
+    tradeId: item.getAuctionData().tradeId,
+  }));
   const { success, error } = await observableToPromise(
     services.Item.list(item, start_bid, buy_now, duration),
   );
+  console.log('[ea-services] listItem result:', JSON.stringify({ success, error }));
   return { success, error };
 }
 
