@@ -23,6 +23,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
+import sys, io
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 console = Console()
 
 POSITIONS_FILE = Path("positions.json")
@@ -157,7 +160,7 @@ async def _scan(budget: int, db_url: str):
     # ── Step 3: Buy signals ──
     async with sf() as s:
         # Get new cards (created_at within last 10 days)
-        cutoff = now - timedelta(days=MAX_DAY)
+        cutoff = (now - timedelta(days=MAX_DAY)).replace(tzinfo=None)
         r = await s.execute(text(
             "SELECT ea_id, name, created_at FROM players "
             "WHERE created_at IS NOT NULL AND created_at >= :cutoff"

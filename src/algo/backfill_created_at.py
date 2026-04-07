@@ -31,7 +31,7 @@ async def backfill(db_url: str):
         if defn and defn.get("createdAt"):
             from datetime import datetime
             try:
-                created_at = datetime.fromisoformat(defn["createdAt"].replace("Z", "+00:00"))
+                created_at = datetime.fromisoformat(defn["createdAt"].replace("Z", "+00:00")).replace(tzinfo=None)
                 async with sf() as s:
                     await s.execute(
                         text("UPDATE players SET created_at = :ca WHERE ea_id = :eid"),
