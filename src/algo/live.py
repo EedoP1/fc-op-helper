@@ -163,7 +163,9 @@ async def _scan(budget: int, db_url: str):
         cutoff = (now - timedelta(days=MAX_DAY)).replace(tzinfo=None)
         r = await s.execute(text(
             "SELECT ea_id, name, created_at FROM players "
-            "WHERE created_at IS NOT NULL AND created_at >= :cutoff"
+            "WHERE created_at IS NOT NULL AND created_at >= :cutoff "
+            "AND listing_count > 0 "
+            "AND EXTRACT(DOW FROM created_at) = 5"
         ), {"cutoff": cutoff})
         new_cards = r.fetchall()
 
