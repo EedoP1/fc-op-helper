@@ -185,9 +185,10 @@ None yet.
 | 260402-enx | Replace curl_cffi with Playwright for player-prices endpoint Cloudflare bypass | 2026-04-02 | 5f599d9 | [260402-enx-replace-curl-cffi-with-playwright-for-pl](./quick/260402-enx-replace-curl-cffi-with-playwright-for-pl/) |
 | 260403-o5l | Fix freed_budget in DELETE /portfolio/{ea_id}: return budget - remaining_total_cost | 2026-04-03 | 8f78286 | [260403-o5l-fix-freed-budget-in-delete-portfolio-ea-](./quick/260403-o5l-fix-freed-budget-in-delete-portfolio-ea-/) |
 | 260404-qwj | Fix portfolio removal race condition: replace swap-preview with idempotent regenerate-with-banned-ids | 2026-04-04 | e063cd0 | [260404-qwj-fix-portfolio-removal-race-condition-ext](./quick/260404-qwj-fix-portfolio-removal-race-condition-ext/) |
+| 260407-bh0 | Refactor backtesting engine to single-pass timeline walk across all strategy combos | 2026-04-07 | 5a88db2 | [260407-bh0-refactor-backtesting-engine-to-single-pa](./quick/260407-bh0-refactor-backtesting-engine-to-single-pa/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-04 - Completed quick task 260404-qwj: Fix portfolio removal race condition (idempotent regenerate with banned_ea_ids)
+Last activity: 2026-04-07 - Completed quick task 260407-bh0: Refactor backtesting engine to single-pass timeline walk
 Stopped at: Completed quick-260407-bh0
 Resume file: None
