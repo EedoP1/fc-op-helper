@@ -438,12 +438,16 @@ async def load_price_data(
     if days > 0:
         cutoff = dt.utcnow() - __import__('datetime').timedelta(days=days)
         query = text(
-            "SELECT ea_id, timestamp, price FROM price_history "
-            "WHERE timestamp >= :cutoff ORDER BY ea_id, timestamp"
+            "SELECT futbin_id, timestamp, price FROM price_history "
+            "WHERE timestamp >= :cutoff AND futbin_id IS NOT NULL "
+            "ORDER BY futbin_id, timestamp"
         )
         params = {"cutoff": cutoff}
     else:
-        query = text("SELECT ea_id, timestamp, price FROM price_history ORDER BY ea_id, timestamp")
+        query = text(
+            "SELECT futbin_id, timestamp, price FROM price_history "
+            "WHERE futbin_id IS NOT NULL ORDER BY futbin_id, timestamp"
+        )
         params = {}
 
     async with session_factory() as session:
@@ -452,17 +456,17 @@ async def load_price_data(
 
     data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
     for row in rows:
-        ea_id, ts, price = row
+        futbin_id, ts, price = row
         if isinstance(ts, str):
             ts = dt.fromisoformat(ts)
         if min_price and price < min_price:
             continue
         if max_price and price > max_price:
             continue
-        data[ea_id].append((ts, price))
+        data[futbin_id].append((ts, price))
 
     return {
-        ea_id: points for ea_id, points in data.items()
+        fid: points for fid, points in data.items()
         if len(points) >= min_data_points
     }
 
@@ -525,11 +529,16 @@ async def run_cli(
         classes = [cls for _, cls in to_run]
         total_results = run_sweep_parallel(classes, price_data, budget)
 
-    # Load player names for trade log
+    # Load futbin_id → player name mapping for trade log
     player_names: dict[int, str] = {}
     try:
         async with session_factory() as session:
-            rows = await session.execute(text("SELECT ea_id, name FROM players"))
+            rows = await session.execute(text(
+                "SELECT DISTINCT ph.futbin_id, p.name "
+                "FROM price_history ph "
+                "JOIN players p ON ph.ea_id = p.ea_id "
+                "WHERE ph.futbin_id IS NOT NULL AND p.name IS NOT NULL"
+            ))
             for row in rows.fetchall():
                 player_names[row[0]] = row[1]
         logger.info(f"Loaded {len(player_names)} player names")
