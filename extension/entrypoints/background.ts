@@ -76,6 +76,27 @@ export default defineBackground({
         case 'FRESH_PRICE_REQUEST':
           handleFreshPrice(msg.ea_id).then(sendResponse);
           return true;
+        case 'ALGO_START':
+          handleAlgoStart(msg.budget).then(sendResponse);
+          return true;
+        case 'ALGO_STOP':
+          handleAlgoStop().then(sendResponse);
+          return true;
+        case 'ALGO_STATUS_REQUEST':
+          handleAlgoStatus().then(sendResponse);
+          return true;
+        case 'ALGO_SIGNAL_REQUEST':
+          handleAlgoSignalRequest().then(sendResponse);
+          return true;
+        case 'ALGO_SIGNAL_COMPLETE':
+          handleAlgoSignalComplete(msg.signal_id, msg.outcome, msg.price, msg.quantity).then(sendResponse);
+          return true;
+        case 'ALGO_START_RESULT':
+        case 'ALGO_STOP_RESULT':
+        case 'ALGO_STATUS_RESULT':
+        case 'ALGO_SIGNAL_RESULT':
+        case 'ALGO_SIGNAL_COMPLETE_RESULT':
+          return false;
         case 'AUTOMATION_STATUS_REQUEST':
         case 'AUTOMATION_START':
         case 'AUTOMATION_STOP':
@@ -396,6 +417,81 @@ async function handleFreshPrice(ea_id: number): Promise<ExtensionMessage> {
     return { type: 'FRESH_PRICE_RESULT', ea_id, buy_price: data.buy_price, sell_price: data.sell_price };
   } catch (e) {
     return { type: 'FRESH_PRICE_RESULT', ea_id, buy_price: 0, sell_price: 0, error: String(e) };
+  }
+}
+
+// ── Algo trading handlers ────────────────────────────────────────────────────
+
+async function handleAlgoStart(budget: number): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ budget }),
+    });
+    if (!res.ok) {
+      return { type: 'ALGO_START_RESULT', success: false, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'ALGO_START_RESULT', success: true, budget: data.budget, cash: data.cash };
+  } catch (e) {
+    return { type: 'ALGO_START_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAlgoStop(): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/stop`, { method: 'POST' });
+    if (!res.ok) {
+      return { type: 'ALGO_STOP_RESULT', success: false, error: `Backend ${res.status}` };
+    }
+    return { type: 'ALGO_STOP_RESULT', success: true };
+  } catch (e) {
+    return { type: 'ALGO_STOP_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAlgoStatus(): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/status`);
+    if (!res.ok) {
+      return { type: 'ALGO_STATUS_RESULT', data: null, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'ALGO_STATUS_RESULT', data };
+  } catch (e) {
+    return { type: 'ALGO_STATUS_RESULT', data: null, error: String(e) };
+  }
+}
+
+async function handleAlgoSignalRequest(): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/signals/pending`);
+    if (!res.ok) {
+      return { type: 'ALGO_SIGNAL_RESULT', signal: null, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'ALGO_SIGNAL_RESULT', signal: data.signal };
+  } catch (e) {
+    return { type: 'ALGO_SIGNAL_RESULT', signal: null, error: String(e) };
+  }
+}
+
+async function handleAlgoSignalComplete(
+  signal_id: number, outcome: string, price: number, quantity: number,
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/signals/${signal_id}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome, price, quantity }),
+    });
+    if (!res.ok) {
+      return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: false, error: `Backend ${res.status}` };
+    }
+    return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: true };
+  } catch (e) {
+    return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: false, error: String(e) };
   }
 }
 

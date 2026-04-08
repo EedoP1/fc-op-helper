@@ -114,6 +114,18 @@ export default defineContentScript({
         case 'FRESH_PRICE_REQUEST':
         case 'FRESH_PRICE_RESULT':
           return false;
+        case 'ALGO_START':
+        case 'ALGO_STOP':
+        case 'ALGO_STATUS_REQUEST':
+        case 'ALGO_SIGNAL_REQUEST':
+        case 'ALGO_SIGNAL_COMPLETE':
+          return false;
+        case 'ALGO_START_RESULT':
+        case 'ALGO_STOP_RESULT':
+        case 'ALGO_STATUS_RESULT':
+        case 'ALGO_SIGNAL_RESULT':
+        case 'ALGO_SIGNAL_COMPLETE_RESULT':
+          return false;
         default:
           assertNever(msg);
       }
