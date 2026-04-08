@@ -66,6 +66,41 @@ export type ActionsNeededData = {
   summary: { to_buy: number; to_list: number; to_relist: number; waiting: number };
 };
 
+/** Algo signal from GET /algo/signals/pending. */
+export type AlgoSignal = {
+  id: number;
+  ea_id: number;
+  action: 'BUY' | 'SELL';
+  quantity: number;
+  reference_price: number;
+  player_name: string;
+  rating: number;
+  position: string;
+  card_type: string;
+};
+
+/** Algo position from GET /algo/status. */
+export type AlgoPosition = {
+  ea_id: number;
+  name: string;
+  quantity: number;
+  buy_price: number;
+  buy_time: string;
+  current_price: number;
+  peak_price: number;
+  unrealized_pnl: number;
+};
+
+/** Full response shape from GET /algo/status. */
+export type AlgoStatusData = {
+  is_active: boolean;
+  budget: number;
+  cash: number;
+  positions: AlgoPosition[];
+  pending_signals: number;
+  total_pnl: number;
+};
+
 export type ExtensionMessage =
   | { type: 'PING' }
   | { type: 'PONG' }
@@ -103,7 +138,18 @@ export type ExtensionMessage =
   | { type: 'DAILY_CAP_INCREMENT_RESULT'; count: number; cap: number; capped: boolean; error?: string }
   // Fresh price lookup (content script -> service worker -> backend)
   | { type: 'FRESH_PRICE_REQUEST'; ea_id: number }
-  | { type: 'FRESH_PRICE_RESULT'; ea_id: number; buy_price: number; sell_price: number; error?: string };
+  | { type: 'FRESH_PRICE_RESULT'; ea_id: number; buy_price: number; sell_price: number; error?: string }
+  // Algo trading mode
+  | { type: 'ALGO_START'; budget: number }
+  | { type: 'ALGO_START_RESULT'; success: boolean; budget?: number; cash?: number; error?: string }
+  | { type: 'ALGO_STOP' }
+  | { type: 'ALGO_STOP_RESULT'; success: boolean; error?: string }
+  | { type: 'ALGO_STATUS_REQUEST' }
+  | { type: 'ALGO_STATUS_RESULT'; data: AlgoStatusData | null; error?: string }
+  | { type: 'ALGO_SIGNAL_REQUEST' }
+  | { type: 'ALGO_SIGNAL_RESULT'; signal: AlgoSignal | null; error?: string }
+  | { type: 'ALGO_SIGNAL_COMPLETE'; signal_id: number; outcome: string; price: number; quantity: number }
+  | { type: 'ALGO_SIGNAL_COMPLETE_RESULT'; success: boolean; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.
