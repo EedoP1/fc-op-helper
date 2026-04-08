@@ -49,6 +49,7 @@ class PromoDipBuyStrategy(Strategy):
         # Internal state
         self._old_cards: set[int] = set()
         self._created_at_map: dict[int, datetime] = {}
+        self._promo_ids: set[int] = set()  # ea_ids that are part of a Friday promo batch
         self._first_seen_ts: dict[int, datetime] = {}
         self._first_seen_price: dict[int, int] = {}
         self._tracked_low: dict[int, int] = {}
@@ -62,6 +63,17 @@ class PromoDipBuyStrategy(Strategy):
 
     def set_created_at_map(self, created_at_map: dict):
         self._created_at_map = created_at_map
+        # Identify promo batches: 10+ cards created in the same hour on a Friday
+        hour_buckets: dict[tuple, list[int]] = defaultdict(list)
+        for ea_id, created in created_at_map.items():
+            cr = created.replace(tzinfo=None) if created.tzinfo else created
+            if cr.weekday() == 4:  # Friday
+                bucket = (cr.year, cr.month, cr.day, cr.hour)
+                hour_buckets[bucket].append(ea_id)
+        self._promo_ids = set()
+        for bucket, ids in hour_buckets.items():
+            if len(ids) >= 10:
+                self._promo_ids.update(ids)
 
     def _hours_since_release(self, ea_id: int, timestamp: datetime) -> float:
         """Hours since card was first seen or created_at."""
@@ -142,12 +154,12 @@ class PromoDipBuyStrategy(Strategy):
                     self._buy_ts.pop(ea_id, None)
 
             elif ea_id not in self._bought:
-                # Only buy cards from the most recent Friday promo
+                # Only buy cards from a Friday promo batch
+                if ea_id not in self._promo_ids:
+                    continue
+                # Must be recent (within 13 days of release)
                 created = self._created_at_map[ea_id]
                 cr_clean = created.replace(tzinfo=None) if created.tzinfo else created
-                if cr_clean.weekday() != 4:
-                    continue
-                # Must be the most recent Friday (within 7 days)
                 ts_clean = timestamp.replace(tzinfo=None) if timestamp.tzinfo else timestamp
                 days_since = (ts_clean - cr_clean).days
                 if days_since < 0 or days_since > 13:

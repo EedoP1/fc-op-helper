@@ -27,6 +27,7 @@ def run_backtest(
     price_data: dict[int, list[tuple[datetime, int]]],
     budget: int = 1_000_000,
     futbin_to_ea: dict[int, int] | None = None,
+    created_at_map: dict[int, datetime] | None = None,
 ) -> dict:
     """Run a single strategy against historical price data.
 
@@ -53,6 +54,9 @@ def run_backtest(
         first_ts = sorted_timestamps[0]
         existing_ids = {ea_id for ea_id, _ in timeline[first_ts]}
         strategy.set_existing_ids(existing_ids)
+
+    if created_at_map:
+        strategy.set_created_at_map(created_at_map)
 
     # Walk through time
     for ts in sorted_timestamps:
@@ -90,7 +94,7 @@ def run_backtest(
     fmap = futbin_to_ea or {}
     trade_log = [{
         "futbin_id": t.ea_id,
-        "ea_id": fmap.get(t.ea_id, 0),
+        "ea_id": fmap.get(t.ea_id, t.ea_id),
         "qty": t.quantity,
         "buy_price": t.buy_price,
         "sell_price": t.sell_price,
@@ -247,6 +251,7 @@ def _worker_run_combos(
     combo_specs: list[tuple[str, dict]],
     budget: int,
     futbin_to_ea: dict[int, int] | None = None,
+    created_at_map: dict[int, datetime] | None = None,
 ) -> list[dict]:
     """Worker function for parallel sweep. Runs in a subprocess.
 
@@ -275,6 +280,8 @@ def _worker_run_combos(
         existing_ids = {ea_id for ea_id, _ in sorted_timeline[0][1]}
         for strategy, _, _ in combos:
             strategy.set_existing_ids(existing_ids)
+            if created_at_map:
+                strategy.set_created_at_map(created_at_map)
 
     # Walk timeline
     for ts, ticks in sorted_timeline:
@@ -310,7 +317,7 @@ def _worker_run_combos(
         for t in trades:
             trade_log.append({
                 "futbin_id": t.ea_id,
-                "ea_id": fmap.get(t.ea_id, 0),
+                "ea_id": fmap.get(t.ea_id, t.ea_id),
                 "qty": t.quantity,
                 "buy_price": t.buy_price,
                 "sell_price": t.sell_price,
@@ -341,6 +348,8 @@ def run_sweep_parallel(
     budget: int = 1_000_000,
     max_workers: int | None = None,
     futbin_to_ea: dict[int, int] | None = None,
+    created_at_map: dict[int, datetime] | None = None,
+    use_hourly_grid: bool = False,
 ) -> list[dict]:
     """Run all strategy+param combos in parallel across CPU cores.
 
@@ -374,7 +383,7 @@ def run_sweep_parallel(
     combo_specs: list[tuple[str, dict]] = []
     for cls in strategy_classes:
         sample = cls({})
-        grid = sample.param_grid()
+        grid = sample.param_grid_hourly() if use_hourly_grid and hasattr(sample, "param_grid_hourly") else sample.param_grid()
         for params in grid:
             combo_specs.append((cls.name, params))
 
@@ -392,7 +401,7 @@ def run_sweep_parallel(
     all_results = []
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = [
-            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget, futbin_to_ea)
+            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget, futbin_to_ea, created_at_map)
             for chunk in chunks
         ]
         for future in futures:
@@ -532,6 +541,75 @@ async def load_price_data(
     return filtered, futbin_to_ea
 
 
+async def load_market_snapshot_data(
+    session_factory: async_sessionmaker[AsyncSession],
+    min_price: int = 0,
+    max_price: int = 0,
+    min_data_points: int = 6,
+) -> tuple[dict[int, list[tuple[dt, int]]], dict[int, dt]]:
+    """Load hourly price data from market_snapshots.
+
+    Aggregates to one price per player per hour (last snapshot in each hour).
+
+    Returns:
+        (price_data, created_at_map)
+        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        created_at_map: {ea_id: created_at} from players table.
+    """
+    price_clause = ""
+    if min_price:
+        price_clause += f" AND current_lowest_bin >= {min_price}"
+    if max_price:
+        price_clause += f" AND current_lowest_bin <= {max_price}"
+
+    query = text(
+        "SELECT DISTINCT ON (ea_id, date_trunc('hour', captured_at)) "
+        "ea_id, date_trunc('hour', captured_at) AS hour_ts, current_lowest_bin "
+        "FROM market_snapshots "
+        f"WHERE current_lowest_bin > 0{price_clause} "
+        "ORDER BY ea_id, date_trunc('hour', captured_at), captured_at DESC"
+    )
+
+    async with session_factory() as session:
+        result = await session.execute(query)
+        rows = result.fetchall()
+
+    logger.info(f"Loaded {len(rows)} hourly price points from market_snapshots")
+
+    data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
+    for ea_id, hour_ts, price in rows:
+        if isinstance(hour_ts, str):
+            hour_ts = dt.fromisoformat(hour_ts)
+        data[ea_id].append((hour_ts, price))
+
+    # Sort each player's points by timestamp
+    for ea_id in data:
+        data[ea_id].sort(key=lambda x: x[0])
+
+    filtered = {
+        eid: points for eid, points in data.items()
+        if len(points) >= min_data_points
+    }
+
+    # Load created_at from players table
+    created_at_map: dict[int, dt] = {}
+    async with session_factory() as session:
+        ca_result = await session.execute(
+            text("SELECT ea_id, created_at FROM players WHERE created_at IS NOT NULL")
+        )
+        for ea_id, created_at in ca_result.fetchall():
+            if isinstance(created_at, str):
+                created_at = dt.fromisoformat(created_at)
+            created_at_map[ea_id] = created_at
+
+    logger.info(
+        f"Filtered to {len(filtered)} players with >= {min_data_points} hourly points, "
+        f"{len(created_at_map)} have created_at"
+    )
+
+    return filtered, created_at_map
+
+
 async def run_cli(
     strategy_name: str | None,
     all_strategies: bool,
@@ -541,6 +619,7 @@ async def run_cli(
     days: int = 0,
     min_price: int = 0,
     max_price: int = 0,
+    source: str = "price_history",
 ):
     """CLI entrypoint: load data, run strategies, save results."""
     from src.algo.strategies import discover_strategies
@@ -551,7 +630,11 @@ async def run_cli(
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    price_label = ""
+    use_market_snapshots = source == "market_snapshots"
+    futbin_to_ea: dict[int, int] | None = None
+    created_at_map: dict[int, dt] | None = None
+
+    price_label = f" [source: {source}]"
     if days:
         price_label += f" (last {days} days)"
     if min_price:
@@ -559,11 +642,22 @@ async def run_cli(
     if max_price:
         price_label += f" (max {max_price:,})"
     logger.info(f"Loading price data from database{price_label}...")
-    price_data, futbin_to_ea = await load_price_data(session_factory, min_price=min_price, max_price=max_price, days=days)
-    logger.info(f"Loaded {len(price_data)} players with price history")
+
+    if use_market_snapshots:
+        price_data, created_at_map = await load_market_snapshot_data(
+            session_factory, min_price=min_price, max_price=max_price,
+        )
+    else:
+        price_data, futbin_to_ea = await load_price_data(
+            session_factory, min_price=min_price, max_price=max_price, days=days,
+        )
+    logger.info(f"Loaded {len(price_data)} players with price data")
 
     if not price_data:
-        logger.error("No price data found. Run the scraper first: python -m src.algo.scraper")
+        if use_market_snapshots:
+            logger.error("No market snapshot data found. Is the scanner running?")
+        else:
+            logger.error("No price data found. Run the scraper first: python -m src.algo.scraper")
         await engine.dispose()
         return
 
@@ -592,25 +686,38 @@ async def run_cli(
         # Single strategy with explicit params: use direct run_backtest
         name, cls = to_run[0]
         strategy = cls(json.loads(params_json))
-        result = run_backtest(strategy, price_data, budget, futbin_to_ea=futbin_to_ea)
+        result = run_backtest(strategy, price_data, budget, futbin_to_ea=futbin_to_ea, created_at_map=created_at_map)
         total_results.append(result)
     else:
         # Sweep mode (--all or --strategy without --params): parallel
         classes = [cls for _, cls in to_run]
-        total_results = run_sweep_parallel(classes, price_data, budget, futbin_to_ea=futbin_to_ea)
+        total_results = run_sweep_parallel(
+            classes, price_data, budget,
+            futbin_to_ea=futbin_to_ea,
+            created_at_map=created_at_map,
+            use_hourly_grid=use_market_snapshots,
+        )
 
-    # Load futbin_id → player name mapping for trade log
+    # Load player name mapping for trade log
     player_names: dict[int, str] = {}
     try:
-        async with session_factory() as session:
-            rows = await session.execute(text(
-                "SELECT DISTINCT ph.futbin_id, p.name "
-                "FROM price_history ph "
-                "JOIN players p ON ph.ea_id = p.ea_id "
-                "WHERE ph.futbin_id IS NOT NULL AND p.name IS NOT NULL"
-            ))
-            for row in rows.fetchall():
-                player_names[row[0]] = row[1]
+        if use_market_snapshots:
+            async with session_factory() as session:
+                rows = await session.execute(text(
+                    "SELECT ea_id, name FROM players WHERE name IS NOT NULL"
+                ))
+                for row in rows.fetchall():
+                    player_names[row[0]] = row[1]
+        else:
+            async with session_factory() as session:
+                rows = await session.execute(text(
+                    "SELECT DISTINCT ph.futbin_id, p.name "
+                    "FROM price_history ph "
+                    "JOIN players p ON ph.ea_id = p.ea_id "
+                    "WHERE ph.futbin_id IS NOT NULL AND p.name IS NOT NULL"
+                ))
+                for row in rows.fetchall():
+                    player_names[row[0]] = row[1]
         logger.info(f"Loaded {len(player_names)} player names")
     except Exception as e:
         logger.warning(f"Could not load player names: {e}")
@@ -628,12 +735,12 @@ async def run_cli(
         logger.warning(f"JSON save failed: {e}")
 
     # Print summary table
-    print(f"\n{'#':<4} {'Strategy':<18} {'Params':<50} {'Win%':>7} {'Trades':>7} {'Sharpe':>8} {'MaxDD':>8}")
-    print("-" * 105)
+    print(f"\n{'#':<4} {'Strategy':<18} {'PnL':>12} {'Params':<50} {'Win%':>7} {'Trades':>7} {'Sharpe':>8} {'MaxDD':>8}")
+    print("-" * 120)
     for i, r in enumerate(total_results[:20], 1):
         params = json.loads(r["params"]) if isinstance(r["params"], str) else r["params"]
         params_str = ", ".join(f"{k}={v}" for k, v in params.items())
-        print(f"{i:<4} {r['strategy_name']:<18} {params_str:<50} {r['win_rate']:>6.1%} {r['total_trades']:>7,} {r['sharpe_ratio']:>8.3f} {r['max_drawdown']:>7.1%}")
+        print(f"{i:<4} {r['strategy_name']:<18} {r['total_pnl']:>+12,} {params_str:<50} {r['win_rate']:>6.1%} {r['total_trades']:>7,} {r['sharpe_ratio']:>8.3f} {r['max_drawdown']:>7.1%}")
 
     # Print trade log for top 3 combos
     for rank, r in enumerate(total_results[:3], 1):
@@ -652,7 +759,7 @@ async def run_cli(
         for t in sorted_trades[:20]:
             fid = t.get("futbin_id", t["ea_id"])
             ea_id = t.get("ea_id", 0)
-            name = player_names.get(fid, f"FUTBIN#{fid}")
+            name = player_names.get(fid) or player_names.get(ea_id) or f"#{fid}"
             buy_date = t["buy_time"][:10]
             sell_date = t["sell_time"][:10]
             print(f"{name[:29]:<30} {ea_id:>8} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
@@ -662,7 +769,7 @@ async def run_cli(
             for t in losing[:5]:
                 fid = t.get("futbin_id", t["ea_id"])
                 ea_id = t.get("ea_id", 0)
-                name = player_names.get(fid, f"FUTBIN#{fid}")
+                name = player_names.get(fid) or player_names.get(ea_id) or f"#{fid}"
                 buy_date = t["buy_time"][:10]
                 sell_date = t["sell_time"][:10]
                 print(f"  {name[:29]:<30} {ea_id:>8} {t['qty']:>5} {t['buy_price']:>8,} {t['sell_price']:>8,} {t['net_profit']:>10,} {buy_date:<12} {sell_date:<12}")
@@ -703,11 +810,13 @@ async def run_cli(
 @click.option("--days", default=0, help="Only use last N days of price data (0 = all)")
 @click.option("--min-price", default=0, help="Only include cards with prices >= this value")
 @click.option("--max-price", default=0, help="Only include cards with prices <= this value")
+@click.option("--source", default="price_history", type=click.Choice(["price_history", "market_snapshots"]),
+              help="Data source: price_history (FUTBIN daily) or market_snapshots (real hourly)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, db_url):
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, source, db_url):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price))
+    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price, source=source))
 
 
 if __name__ == "__main__":
