@@ -307,6 +307,31 @@ Extension polls GET /algo/signals/pending
     Server removes algo_portfolio row, adds revenue, records P&L
 ```
 
+## Testing: Signal Parity with Backtester
+
+The critical test is **signal parity** — the live signal engine must produce the exact same BUY/SELL signals as the backtester's `PromoDipBuyStrategy` when fed the same `market_snapshots` data.
+
+### Parity test approach
+
+1. Take a real slice of `market_snapshots` data (e.g., 2-3 weeks covering at least one promo batch).
+2. Run the backtester engine against that data and record every signal emitted (ea_id, action, quantity, timestamp).
+3. Run the live signal engine against the same data (feed it the same snapshots in order) and record every signal emitted.
+4. Assert the two signal lists are identical — same ea_ids, same actions, same quantities, same ticks.
+
+This catches any divergence from the strategy logic: wrong trend calculation, off-by-one in lookback windows, snapshot layer firing at wrong hour, sell stall counter drift, position sizing differences, etc.
+
+### What to test specifically
+
+- **BUY Layer 1 parity**: Strong signal fires for the same ea_ids at the same ticks with the same quantities.
+- **BUY Layer 2 parity**: Snapshot layer fires exactly once per batch at the correct hour, selects the same top-N cards.
+- **SELL parity**: Sell signals fire at the same tick for the same ea_ids with the same quantities (stall counter, hold delay, force sell all match).
+- **Position sizing parity**: Given the same portfolio state and cash, quantities match exactly (integer division, max_position_pct cap).
+- **State rebuild parity**: Signal engine that replays 14 days of history produces the same signals as one that processed ticks incrementally from the start.
+
+### Implementation
+
+Use the backtester's `Engine` class as the reference. Feed both the backtester engine and the live signal engine the same snapshot rows, compare output signal-for-signal. This is a deterministic test — no mocks, no approximations, exact match.
+
 ## Not In Scope (Future)
 
 - OP selling held positions while waiting for sell signal
