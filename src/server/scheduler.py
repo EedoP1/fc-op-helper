@@ -7,11 +7,13 @@ from src.config import SCAN_DISPATCH_INTERVAL
 logger = logging.getLogger(__name__)
 
 
-def create_scheduler(scanner) -> AsyncIOScheduler:
+def create_scheduler(scanner, algo_runner=None) -> AsyncIOScheduler:
     """Create and configure the APScheduler with scan dispatch and discovery jobs.
 
     Args:
         scanner: ScannerService instance whose methods will be scheduled.
+        algo_runner: Optional async callable for the algo signal engine.
+            If provided, it will be scheduled every 10 minutes.
 
     Returns:
         Configured AsyncIOScheduler (not yet started).
@@ -50,5 +52,16 @@ def create_scheduler(scanner) -> AsyncIOScheduler:
         replace_existing=True,
         name="Data cleanup",
     )
+
+    if algo_runner is not None:
+        scheduler.add_job(
+            algo_runner,
+            trigger=IntervalTrigger(minutes=10),
+            id="algo_signal_engine",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            name="Algo signal engine",
+        )
 
     return scheduler

@@ -69,11 +69,15 @@ async def main():
             ))
             logger.info("Migrated players: added listings_per_hour column")
 
+    from src.server.algo_runner import run_signal_engine
+    async def _run_algo():
+        await run_signal_engine(session_factory)
+
     cb = CircuitBreaker()
     scanner = ScannerService(session_factory=session_factory, circuit_breaker=cb)
     await scanner.start()
 
-    scheduler = create_scheduler(scanner)
+    scheduler = create_scheduler(scanner, algo_runner=_run_algo)
     scheduler.start()
 
     # Queue bootstrap + initial scoring as one-shot job (same as old main.py)
