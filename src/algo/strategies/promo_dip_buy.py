@@ -225,7 +225,7 @@ class PromoDipBuyStrategy(Strategy):
         """Hourly market_snapshots grid."""
         combos = []
         combos.append({
-            "trend_pct": 0.21,
+            "trend_pct": 0.20,
             "trend_lookback": 12,
             "sell_trend_pct": 0.02,
             "min_day": 0,
