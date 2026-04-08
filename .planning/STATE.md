@@ -186,9 +186,10 @@ None yet.
 | 260403-o5l | Fix freed_budget in DELETE /portfolio/{ea_id}: return budget - remaining_total_cost | 2026-04-03 | 8f78286 | [260403-o5l-fix-freed-budget-in-delete-portfolio-ea-](./quick/260403-o5l-fix-freed-budget-in-delete-portfolio-ea-/) |
 | 260404-qwj | Fix portfolio removal race condition: replace swap-preview with idempotent regenerate-with-banned-ids | 2026-04-04 | e063cd0 | [260404-qwj-fix-portfolio-removal-race-condition-ext](./quick/260404-qwj-fix-portfolio-removal-race-condition-ext/) |
 | 260407-bh0 | Refactor backtesting engine to single-pass timeline walk across all strategy combos | 2026-04-07 | 5a88db2 | [260407-bh0-refactor-backtesting-engine-to-single-pa](./quick/260407-bh0-refactor-backtesting-engine-to-single-pa/) |
+| 260408-sn5 | Implement hybrid promo_dip_buy: 21% strong signal + 176h snapshot top3 + 48h delay with 24h/5%/3h sell | 2026-04-08 | 92ff8c9 | [260408-sn5-implement-hybrid-promo-dip-buy-strategy-](./quick/260408-sn5-implement-hybrid-promo-dip-buy-strategy-/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-07 - Completed quick task 260407-bh0: Refactor backtesting engine to single-pass timeline walk
-Stopped at: Completed quick-260407-bh0
+Last activity: 2026-04-08 - Completed quick task 260408-sn5: Implement hybrid promo_dip_buy strategy
+Stopped at: Completed quick-260408-sn5
 Resume file: None
