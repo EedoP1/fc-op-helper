@@ -19,6 +19,7 @@ from src.server.api.portfolio_status import router as status_router
 from src.server.api import automation
 from src.server.api.stale import router as stale_router
 from src.server.api.recent_sales import router as recent_sales_router
+from src.server.api.algo import router as algo_router
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ app.include_router(status_router)
 app.include_router(automation.router)
 app.include_router(stale_router)
 app.include_router(recent_sales_router)
+app.include_router(algo_router)
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────
