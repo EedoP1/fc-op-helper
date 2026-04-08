@@ -71,7 +71,7 @@ async def create_engine_and_tables(db_url: str = DATABASE_URL) -> tuple[AsyncEng
     for attempt in range(1, max_retries + 1):
         try:
             async with engine.begin() as conn:
-                from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus, DailyTransactionCount  # noqa: F401
+                from src.server.models_db import PlayerRecord, PlayerScore, MarketSnapshot, ListingObservation, DailyListingSummary, TradeAction, TradeRecord, PortfolioSlot, ScannerStatus, DailyTransactionCount, AlgoConfig, AlgoSignal, AlgoPosition  # noqa: F401
                 await conn.run_sync(Base.metadata.create_all)
             break
         except Exception as e:

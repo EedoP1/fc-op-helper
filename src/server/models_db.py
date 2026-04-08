@@ -195,3 +195,49 @@ class DailyTransactionCount(Base):
     date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # "YYYY-MM-DD" UTC
     count: Mapped[int] = mapped_column(Integer, default=0)
     cap: Mapped[int] = mapped_column(Integer, default=500)
+
+
+class AlgoConfig(Base):
+    """Algo trading configuration — single row."""
+
+    __tablename__ = "algo_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    budget: Mapped[int] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    strategy_params: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class AlgoSignal(Base):
+    """A BUY or SELL signal emitted by the algo signal engine."""
+
+    __tablename__ = "algo_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(10))  # "BUY" | "SELL"
+    quantity: Mapped[int] = mapped_column(Integer)
+    reference_price: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING | CLAIMED | DONE | CANCELLED
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_algo_signals_status_created", "status", "created_at"),
+    )
+
+
+class AlgoPosition(Base):
+    """A held position in the algo trading portfolio."""
+
+    __tablename__ = "algo_positions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    buy_price: Mapped[int] = mapped_column(Integer)
+    buy_time: Mapped[datetime] = mapped_column(DateTime)
+    peak_price: Mapped[int] = mapped_column(Integer)
