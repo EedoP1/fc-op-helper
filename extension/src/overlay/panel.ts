@@ -13,7 +13,7 @@
  */
 
 import type { PortfolioPlayer } from '../storage';
-import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded } from '../messages';
+import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded, AlgoStatusData } from '../messages';
 import { automationStatusItem, activityLogItem } from '../storage';
 
 // ── Non-blocking error notification ──────────────────────────────────────────
@@ -122,7 +122,7 @@ export function createOverlayPanel(): OverlayPanel {
   let draftExcludedCardTypes: string[] = [];  // Persisted across draft regenerates
   let sortKey: SortKey = 'efficiency';
   let sortDir: SortDir = 'desc';
-  let activeTab: 'actions' | 'portfolio' | 'dashboard' = 'actions';
+  let activeTab: 'actions' | 'portfolio' | 'dashboard' | 'algo' = 'actions';
 
   // ── Container (panel) ──────────────────────────────────────────────────────
 
@@ -217,7 +217,7 @@ export function createOverlayPanel(): OverlayPanel {
    * Tab bar appears ONLY inside renderConfirmed (D-02).
    * @param onSwitch - called with the selected tab name when user clicks a tab
    */
-  function renderTabBar(onSwitch: (tab: 'actions' | 'portfolio' | 'dashboard') => void): HTMLDivElement {
+  function renderTabBar(onSwitch: (tab: 'actions' | 'portfolio' | 'dashboard' | 'algo') => void): HTMLDivElement {
     const bar = document.createElement('div');
     bar.className = 'op-seller-tab-bar';
     Object.assign(bar.style, {
@@ -227,8 +227,8 @@ export function createOverlayPanel(): OverlayPanel {
       borderBottom: '1px solid #444',
     });
 
-    const tabLabels: Record<string, string> = { actions: 'Actions', portfolio: 'Portfolio', dashboard: 'Dashboard' };
-    (['actions', 'portfolio', 'dashboard'] as const).forEach(tab => {
+    const tabLabels: Record<string, string> = { actions: 'Actions', portfolio: 'Portfolio', dashboard: 'Dashboard', algo: 'Algo' };
+    (['actions', 'portfolio', 'dashboard', 'algo'] as const).forEach(tab => {
       const btn = document.createElement('button');
       btn.textContent = tabLabels[tab];
       btn.dataset.tab = tab;
@@ -1482,6 +1482,263 @@ export function createOverlayPanel(): OverlayPanel {
     });
   }
 
+  // ── Algo tab ───────────────────────────────────────────────────────────────
+
+  /** Interval ID for algo status polling (cleared on tab switch / destroy). */
+  let algoStatusIntervalId: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Render the Algo trading tab content into the given container element.
+   * Shows budget input, start/stop buttons, status display, and positions list.
+   */
+  function renderAlgoTab(parent: HTMLElement): void {
+    parent.innerHTML = '';
+
+    // Clean up previous polling interval
+    if (algoStatusIntervalId !== null) {
+      clearInterval(algoStatusIntervalId);
+      algoStatusIntervalId = null;
+    }
+
+    // ── Budget input ──────────────────────────────────────────────────────
+    const budgetInput = document.createElement('input');
+    budgetInput.type = 'number';
+    budgetInput.placeholder = 'Budget (coins)';
+    Object.assign(budgetInput.style, {
+      background: '#2a2a3e',
+      color: '#fff',
+      border: '1px solid #444',
+      padding: '8px 12px',
+      width: '100%',
+      borderRadius: '4px',
+      boxSizing: 'border-box',
+      fontSize: '14px',
+      marginBottom: '8px',
+    });
+    parent.appendChild(budgetInput);
+
+    // ── Start / Stop buttons ──────────────────────────────────────────────
+    const btnRow = document.createElement('div');
+    Object.assign(btnRow.style, { display: 'flex', gap: '8px', marginBottom: '12px' });
+
+    const startBtn = document.createElement('button');
+    startBtn.textContent = 'Start Algo';
+    styleButton(startBtn, '#2ecc71', { flex: '1', marginTop: '0' });
+
+    const stopBtn = document.createElement('button');
+    stopBtn.textContent = 'Stop Algo';
+    styleButton(stopBtn, '#e74c3c', { flex: '1', marginTop: '0' });
+
+    btnRow.appendChild(startBtn);
+    btnRow.appendChild(stopBtn);
+    parent.appendChild(btnRow);
+
+    // ── Status display ────────────────────────────────────────────────────
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'op-seller-algo-status';
+    Object.assign(statusDiv.style, {
+      background: '#2a2a3e',
+      padding: '10px',
+      borderRadius: '4px',
+      marginBottom: '12px',
+      fontSize: '12px',
+    });
+    statusDiv.textContent = 'Loading status...';
+    parent.appendChild(statusDiv);
+
+    // ── Positions list ────────────────────────────────────────────────────
+    const positionsDiv = document.createElement('div');
+    positionsDiv.className = 'op-seller-algo-positions';
+    parent.appendChild(positionsDiv);
+
+    // ── Status rendering helper ───────────────────────────────────────────
+    function renderStatus(data: AlgoStatusData): void {
+      const activeColor = data.is_active ? '#2ecc71' : '#e74c3c';
+      const activeLabel = data.is_active ? 'ACTIVE' : 'INACTIVE';
+      const pnlColor = data.total_pnl >= 0 ? '#2ecc71' : '#e74c3c';
+
+      statusDiv.innerHTML = '';
+
+      // Row 1: Active badge + pending signals
+      const row1 = document.createElement('div');
+      row1.style.display = 'flex';
+      row1.style.justifyContent = 'space-between';
+      row1.style.marginBottom = '6px';
+
+      const badge = document.createElement('span');
+      badge.textContent = activeLabel;
+      Object.assign(badge.style, {
+        background: activeColor,
+        color: '#fff',
+        padding: '2px 8px',
+        borderRadius: '4px',
+        fontSize: '11px',
+        fontWeight: 'bold',
+      });
+      row1.appendChild(badge);
+
+      const pendingEl = document.createElement('span');
+      pendingEl.textContent = `${data.pending_signals} pending signal${data.pending_signals !== 1 ? 's' : ''}`;
+      pendingEl.style.color = '#aaa';
+      row1.appendChild(pendingEl);
+      statusDiv.appendChild(row1);
+
+      // Row 2: Budget / Cash / P&L
+      const row2 = document.createElement('div');
+      row2.style.display = 'flex';
+      row2.style.justifyContent = 'space-between';
+
+      const budgetEl = document.createElement('div');
+      budgetEl.innerHTML = `<div style="color:#aaa">Budget</div><div style="color:#ccc;font-weight:bold">${fmt(data.budget)}</div>`;
+      row2.appendChild(budgetEl);
+
+      const cashEl = document.createElement('div');
+      cashEl.innerHTML = `<div style="color:#aaa">Cash</div><div style="color:#ccc;font-weight:bold">${fmt(data.cash)}</div>`;
+      row2.appendChild(cashEl);
+
+      const pnlEl = document.createElement('div');
+      pnlEl.innerHTML = `<div style="color:#aaa">P&L</div><div style="color:${pnlColor};font-weight:bold">${data.total_pnl >= 0 ? '+' : ''}${fmt(data.total_pnl)}</div>`;
+      row2.appendChild(pnlEl);
+      statusDiv.appendChild(row2);
+
+      // Positions list
+      positionsDiv.innerHTML = '';
+      if (data.positions.length === 0) {
+        const emptyEl = document.createElement('div');
+        emptyEl.textContent = 'No open positions.';
+        emptyEl.style.color = '#666';
+        emptyEl.style.fontSize = '12px';
+        emptyEl.style.padding = '8px 0';
+        positionsDiv.appendChild(emptyEl);
+        return;
+      }
+
+      const posHeader = document.createElement('div');
+      posHeader.textContent = `Positions (${data.positions.length})`;
+      Object.assign(posHeader.style, { color: '#aaa', fontSize: '12px', marginBottom: '6px', fontWeight: 'bold' });
+      positionsDiv.appendChild(posHeader);
+
+      for (const pos of data.positions) {
+        const row = document.createElement('div');
+        Object.assign(row.style, {
+          background: '#2a2a3e',
+          padding: '8px 10px',
+          marginBottom: '4px',
+          borderRadius: '4px',
+        });
+
+        const topLine = document.createElement('div');
+        topLine.style.display = 'flex';
+        topLine.style.justifyContent = 'space-between';
+        topLine.style.marginBottom = '2px';
+
+        const nameEl = document.createElement('span');
+        nameEl.textContent = `${pos.name} x${pos.quantity}`;
+        Object.assign(nameEl.style, { color: '#6cf', fontWeight: 'bold', fontSize: '13px' });
+        topLine.appendChild(nameEl);
+
+        const posPnlColor = pos.unrealized_pnl >= 0 ? '#2ecc71' : '#e74c3c';
+        const pnlBadge = document.createElement('span');
+        pnlBadge.textContent = `${pos.unrealized_pnl >= 0 ? '+' : ''}${fmt(pos.unrealized_pnl)}`;
+        Object.assign(pnlBadge.style, { color: posPnlColor, fontSize: '12px', fontWeight: 'bold' });
+        topLine.appendChild(pnlBadge);
+        row.appendChild(topLine);
+
+        const detailLine = document.createElement('div');
+        detailLine.style.fontSize = '11px';
+        detailLine.style.color = '#aaa';
+        detailLine.textContent = `Buy: ${fmt(pos.buy_price)} | Current: ${fmt(pos.current_price)} | Peak: ${fmt(pos.peak_price)}`;
+        row.appendChild(detailLine);
+
+        positionsDiv.appendChild(row);
+      }
+    }
+
+    // ── Fetch and display status ──────────────────────────────────────────
+    function fetchStatus(): void {
+      chrome.runtime.sendMessage({ type: 'ALGO_STATUS_REQUEST' } satisfies ExtensionMessage)
+        .then((res: ExtensionMessage) => {
+          if (res.type === 'ALGO_STATUS_RESULT') {
+            if (res.error || !res.data) {
+              statusDiv.textContent = `Error: ${res.error || 'No data'}`;
+              statusDiv.style.color = '#f44';
+              return;
+            }
+            renderStatus(res.data);
+            // Update budget input placeholder with current budget
+            if (res.data.budget > 0) {
+              budgetInput.placeholder = `Budget: ${fmt(res.data.budget)}`;
+            }
+          }
+        })
+        .catch((err: Error) => {
+          statusDiv.textContent = `Error: ${err.message}`;
+          statusDiv.style.color = '#f44';
+        });
+    }
+
+    fetchStatus();
+
+    // Poll status every 15s
+    algoStatusIntervalId = setInterval(fetchStatus, 15_000);
+
+    // ── Button handlers ───────────────────────────────────────────────────
+    startBtn.addEventListener('click', () => {
+      const budget = parseInt(budgetInput.value, 10);
+      if (!budget || budget <= 0) {
+        showErrorToast('Enter a valid budget before starting');
+        return;
+      }
+
+      startBtn.disabled = true;
+      startBtn.textContent = 'Starting...';
+
+      chrome.runtime.sendMessage({ type: 'ALGO_START', budget } satisfies ExtensionMessage)
+        .then((res: ExtensionMessage) => {
+          startBtn.disabled = false;
+          startBtn.textContent = 'Start Algo';
+          if (res.type === 'ALGO_START_RESULT') {
+            if (res.success) {
+              // Dispatch custom event for content script to start the loop
+              document.dispatchEvent(new CustomEvent('op-seller-algo-start'));
+              fetchStatus();
+            } else {
+              showErrorToast(`Algo start failed: ${res.error || 'Unknown error'}`);
+            }
+          }
+        })
+        .catch((err: Error) => {
+          startBtn.disabled = false;
+          startBtn.textContent = 'Start Algo';
+          showErrorToast(`Algo start error: ${err.message}`);
+        });
+    });
+
+    stopBtn.addEventListener('click', () => {
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'Stopping...';
+
+      chrome.runtime.sendMessage({ type: 'ALGO_STOP' } satisfies ExtensionMessage)
+        .then((res: ExtensionMessage) => {
+          stopBtn.disabled = false;
+          stopBtn.textContent = 'Stop Algo';
+          if (res.type === 'ALGO_STOP_RESULT') {
+            if (res.success) {
+              document.dispatchEvent(new CustomEvent('op-seller-algo-stop'));
+              fetchStatus();
+            } else {
+              showErrorToast(`Algo stop failed: ${res.error || 'Unknown error'}`);
+            }
+          }
+        })
+        .catch((err: Error) => {
+          stopBtn.disabled = false;
+          stopBtn.textContent = 'Stop Algo';
+          showErrorToast(`Algo stop error: ${err.message}`);
+        });
+    });
+  }
+
   /** Render CONFIRMED state: tab bar (Portfolio / Dashboard) + content area (D-01, D-02, D-03) */
   function renderConfirmed(): void {
     container.innerHTML = '';
@@ -1516,10 +1773,18 @@ export function createOverlayPanel(): OverlayPanel {
         });
       });
 
+      // Clean up algo polling when switching away from algo tab
+      if (activeTab !== 'algo' && algoStatusIntervalId !== null) {
+        clearInterval(algoStatusIntervalId);
+        algoStatusIntervalId = null;
+      }
+
       if (activeTab === 'actions') {
         renderActions();
       } else if (activeTab === 'portfolio') {
         renderPortfolioContent(contentArea);
+      } else if (activeTab === 'algo') {
+        renderAlgoTab(contentArea);
       } else {
         renderDashboard();
       }

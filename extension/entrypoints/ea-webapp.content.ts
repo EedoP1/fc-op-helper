@@ -168,6 +168,28 @@ export default defineContentScript({
       await automationEngine.stop();
     });
 
+    // ── Algo trading engine (separate from OP sell automation) ────────────
+    const algoEngine = new AutomationEngine(
+      (msg) => chrome.runtime.sendMessage(msg),
+    );
+
+    document.addEventListener('op-seller-algo-start', async () => {
+      const result = await algoEngine.start();
+      if (result.success) {
+        const { runAlgoAutomationLoop } = await import('../src/algo-automation-loop');
+        runAlgoAutomationLoop(algoEngine, (msg) => chrome.runtime.sendMessage(msg))
+          .catch(err => algoEngine.setError(err instanceof Error ? err.message : String(err)));
+      }
+    });
+
+    document.addEventListener('op-seller-algo-stop', async () => {
+      await algoEngine.stop();
+    });
+
+    ctx.onInvalidated(() => {
+      algoEngine.stop();
+    });
+
     // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────
     let tradeObserver: MutationObserver | null = null;
 
