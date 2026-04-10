@@ -141,7 +141,13 @@ export default defineContentScript({
         case 'ALGO_POSITION_RELIST':
         case 'ALGO_POSITION_RELIST_RESULT':
         case 'ALGO_SESSION_DEAD':
+          return false;
         case 'ALGO_HEALTH_CHECK':
+          // Relay to main world via bridge, return result to background worker
+          sendAutomationCommand('algo-health-check')
+            .then(result => sendResponse({ type: 'ALGO_HEALTH_CHECK_RESULT', ...result } satisfies ExtensionMessage))
+            .catch(() => sendResponse({ type: 'ALGO_HEALTH_CHECK_RESULT', healthy: false, relisted_algo: 0, relisted_other: 0 } satisfies ExtensionMessage));
+          return true; // async response
         case 'ALGO_HEALTH_CHECK_RESULT':
           return false;
         default:
