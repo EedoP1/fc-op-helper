@@ -14,7 +14,7 @@
 
 import type { PortfolioPlayer } from '../storage';
 import type { ExtensionMessage, DashboardData, DashboardPlayer, ActionsNeededData, ActionNeeded, AlgoStatusData } from '../messages';
-import { automationStatusItem, activityLogItem } from '../storage';
+import { automationStatusItem, activityLogItem, algoCredentialsItem } from '../storage';
 
 // ── Non-blocking error notification ──────────────────────────────────────────
 
@@ -1516,6 +1516,128 @@ export function createOverlayPanel(): OverlayPanel {
       marginBottom: '8px',
     });
     parent.appendChild(budgetInput);
+
+    // ── Credentials section ──────────────────────────────────────────────
+    const credsSection = document.createElement('div');
+    Object.assign(credsSection.style, {
+      background: '#1e1e2e',
+      padding: '10px',
+      borderRadius: '4px',
+      marginBottom: '12px',
+      border: '1px solid #333',
+    });
+
+    const credsTitle = document.createElement('div');
+    credsTitle.textContent = 'EA Login (auto-recovery)';
+    Object.assign(credsTitle.style, {
+      fontSize: '11px',
+      color: '#888',
+      marginBottom: '8px',
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+    });
+    credsSection.appendChild(credsTitle);
+
+    const emailInput = document.createElement('input');
+    emailInput.type = 'email';
+    emailInput.placeholder = 'EA Email';
+    Object.assign(emailInput.style, {
+      background: '#2a2a3e',
+      color: '#fff',
+      border: '1px solid #444',
+      padding: '6px 10px',
+      width: '100%',
+      borderRadius: '4px',
+      boxSizing: 'border-box',
+      fontSize: '13px',
+      marginBottom: '6px',
+    });
+    credsSection.appendChild(emailInput);
+
+    const passwordInput = document.createElement('input');
+    passwordInput.type = 'password';
+    passwordInput.placeholder = 'EA Password';
+    Object.assign(passwordInput.style, {
+      background: '#2a2a3e',
+      color: '#fff',
+      border: '1px solid #444',
+      padding: '6px 10px',
+      width: '100%',
+      borderRadius: '4px',
+      boxSizing: 'border-box',
+      fontSize: '13px',
+      marginBottom: '6px',
+    });
+    credsSection.appendChild(passwordInput);
+
+    const credsBtnRow = document.createElement('div');
+    Object.assign(credsBtnRow.style, { display: 'flex', gap: '8px', alignItems: 'center' });
+
+    const saveCredsBtn = document.createElement('button');
+    saveCredsBtn.textContent = 'Save';
+    Object.assign(saveCredsBtn.style, {
+      background: '#3498db',
+      color: '#fff',
+      border: 'none',
+      padding: '5px 14px',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      fontSize: '12px',
+    });
+
+    const credsStatus = document.createElement('span');
+    Object.assign(credsStatus.style, { fontSize: '11px', color: '#888' });
+
+    credsBtnRow.appendChild(saveCredsBtn);
+    credsBtnRow.appendChild(credsStatus);
+    credsSection.appendChild(credsBtnRow);
+
+    // Load existing credentials status
+    algoCredentialsItem.getValue().then(creds => {
+      if (creds) {
+        emailInput.value = creds.email;
+        // Don't show password — just indicate it's saved
+        passwordInput.placeholder = '••••••••';
+        credsStatus.textContent = 'Credentials saved';
+        credsStatus.style.color = '#2ecc71';
+      } else {
+        credsStatus.textContent = 'Not configured';
+        credsStatus.style.color = '#e74c3c';
+      }
+    });
+
+    saveCredsBtn.addEventListener('click', async () => {
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+
+      if (!email) {
+        credsStatus.textContent = 'Email required';
+        credsStatus.style.color = '#e74c3c';
+        return;
+      }
+
+      // If password is empty but we already have creds, keep the old password
+      if (!password) {
+        const existing = await algoCredentialsItem.getValue();
+        if (existing) {
+          await algoCredentialsItem.setValue({ email, password: existing.password });
+          credsStatus.textContent = 'Email updated';
+          credsStatus.style.color = '#2ecc71';
+          return;
+        }
+        credsStatus.textContent = 'Password required';
+        credsStatus.style.color = '#e74c3c';
+        return;
+      }
+
+      await algoCredentialsItem.setValue({ email, password });
+      passwordInput.value = '';
+      passwordInput.placeholder = '••••••••';
+      credsStatus.textContent = 'Credentials saved';
+      credsStatus.style.color = '#2ecc71';
+    });
+
+    parent.appendChild(credsSection);
 
     // ── Change budget link (shown when algo is active) ────────────────────
     const changeBudgetLink = document.createElement('a');
