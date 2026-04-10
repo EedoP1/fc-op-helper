@@ -389,17 +389,20 @@ async function attemptLogin(tabId: number): Promise<void> {
 
     if (!hasPasswordField) {
       // Step 1: Email page
-      console.log('[algo-master] On email page — filling email');
+      console.log('[algo-master] On email page — filling email:', credentials.email, 'tabId:', tabId);
       try {
-        await chrome.scripting.executeScript({
+        const result = await chrome.scripting.executeScript({
           target: { tabId },
           world: 'MAIN',
           func: fillEmailAndClickNext,
           args: [credentials.email],
         });
+        console.log('[algo-master] executeScript result:', JSON.stringify(result));
       } catch (err) {
-        console.error('[algo-master] Email fill failed:', err);
-        await startRecovery();
+        console.error('[algo-master] Email fill EXCEPTION:', err);
+        // Write error to master state so we can debug
+        await transition('RECOVERING', { errorMessage: `executeScript failed: ${err}` });
+        chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 10 / 60 });
         return;
       }
       // Schedule alarm to continue after page advances to step 2
@@ -463,29 +466,14 @@ function clickWebAppLoginButton(): void {
  * it CANNOT reference any other functions from this module. All logic must be inline.
  */
 function fillEmailAndClickNext(email: string): void {
-  const input = document.querySelector('input[placeholder*="email"]') as HTMLInputElement | null;
-  if (!input) { console.error('[algo-master] Email input not found'); return; }
+  // EA's signin uses jQuery — must use $.val() + $.trigger() for the form to recognize the value.
+  // This function runs in MAIN world via chrome.scripting.executeScript({ world: 'MAIN' })
+  // so it has access to the page's jQuery ($) global.
+  const jq = (window as any).$ || (window as any).jQuery;
+  if (!jq) { console.error('[algo-master] jQuery not found on signin page'); return; }
 
-  // Simulate typing — inline (can't call external functions from executeScript)
-  input.focus();
-  input.value = '';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  for (const char of email) {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-    input.value += char;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-  }
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-
-  if (!input.value) { console.error('[algo-master] Email value not set'); return; }
-
-  const nextBtn = document.getElementById('logInBtn');
-  if (nextBtn) {
-    nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  }
+  jq('#email').val(email).trigger('input').trigger('change');
+  jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
 }
 
 /**
@@ -494,29 +482,12 @@ function fillEmailAndClickNext(email: string): void {
  * it CANNOT reference any other functions from this module. All logic must be inline.
  */
 function fillPasswordAndClickSignIn(password: string): void {
-  const input = document.querySelector('input[type="password"]') as HTMLInputElement | null;
-  if (!input) { console.error('[algo-master] Password input not found'); return; }
+  // EA's signin uses jQuery — must use $.val() + $.trigger() for the form to recognize the value.
+  const jq = (window as any).$ || (window as any).jQuery;
+  if (!jq) { console.error('[algo-master] jQuery not found on signin page'); return; }
 
-  // Simulate typing — inline (can't call external functions from executeScript)
-  input.focus();
-  input.value = '';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  for (const char of password) {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-    input.value += char;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-  }
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-
-  if (!input.value) { console.error('[algo-master] Password value not set'); return; }
-
-  const signInBtn = document.getElementById('logInBtn');
-  if (signInBtn) {
-    signInBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    signInBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    signInBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  }
+  jq('input[type="password"]').val(password).trigger('input').trigger('change');
+  jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
 }
 
 function waitForUrlMatch(tabId: number, urlFragment: string, timeoutMs: number): Promise<boolean> {
