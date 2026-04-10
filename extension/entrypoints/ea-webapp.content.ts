@@ -17,19 +17,24 @@ import { ExtensionMessage, assertNever } from '../src/messages';
 import { createOverlayPanel } from '../src/overlay/panel';
 import { readTransferList, isTransferListPage } from '../src/trade-observer';
 import { portfolioItem, reportedOutcomesItem, automationStatusItem } from '../src/storage';
-import { TRANSFER_LIST_CONTAINER } from '../src/selectors';
-import { AutomationEngine } from '../src/automation';
-import { runAutomationLoop } from '../src/automation-loop';
+import {
+  initIsolatedWorldBridge,
+  initAutomationCommandClient,
+  sendAutomationCommand,
+} from '../src/ea-bridge';
+
+/** Inlined selector — only used for MutationObserver target in maybeStartTradeObserver. */
+const TRANSFER_LIST_CONTAINER = '.ut-transfer-list-view';
 
 export default defineContentScript({
   matches: ['https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*'],
   runAt: 'document_idle',
   main(ctx) {
-    // ── Automation engine (Plan 05: instantiated before handleMessage so the
-    //    AUTOMATION_STATUS_REQUEST handler can reference it) ──────────────────
-    const automationEngine = new AutomationEngine(
-      (msg) => chrome.runtime.sendMessage(msg),
-    );
+    // ── Bridge initialization ───────────────────────────────────────────────
+    // Set up the postMessage bridge so the main world content script can call
+    // chrome.runtime.sendMessage and chrome.storage.local through us.
+    initIsolatedWorldBridge();
+    initAutomationCommandClient();
 
     // Clear stale automation status from the previous session (D-06 design).
     // Page refresh kills the running loop but chrome.storage.local persists,
@@ -101,8 +106,14 @@ export default defineContentScript({
           // These are request types sent TO the service worker — not received via onMessage.
           return false;
         case 'AUTOMATION_STATUS_REQUEST':
-          // Return current engine status for external queries (e.g. service worker polling)
-          sendResponse({ type: 'AUTOMATION_STATUS_RESULT', status: automationEngine.getStatus() } satisfies ExtensionMessage);
+          // Return current engine status for external queries (e.g. service worker polling).
+          // Queries the main world engine via the postMessage bridge.
+          sendAutomationCommand('getStatus')
+            .then(status => sendResponse({ type: 'AUTOMATION_STATUS_RESULT', status } satisfies ExtensionMessage))
+            .catch(() => sendResponse({
+              type: 'AUTOMATION_STATUS_RESULT',
+              status: { isRunning: false, state: 'ERROR', currentAction: null, lastEvent: null, sessionProfit: 0, errorMessage: 'Bridge unavailable' },
+            } satisfies ExtensionMessage));
           return true;
         case 'AUTOMATION_START_RESULT':
         case 'AUTOMATION_STOP_RESULT':
@@ -149,23 +160,29 @@ export default defineContentScript({
     // Clean up on content script invalidation (panel + automation engine)
     ctx.onInvalidated(() => {
       panel.destroy();
-      automationEngine.stop();
+      sendAutomationCommand('stop').catch(() => {});
     });
 
     // ── Automation event listeners (Plan 05: D-16, UI-04) ─────────────────
     // Overlay panel dispatches custom events; content script wires them to the engine.
 
     document.addEventListener('op-seller-automation-start', async () => {
-      const result = await automationEngine.start();
-      if (result.success) {
-        // Run the main loop — errors are funneled through engine.setError (AUTO-06)
-        runAutomationLoop(automationEngine, (msg) => chrome.runtime.sendMessage(msg))
-          .catch(err => automationEngine.setError(err instanceof Error ? err.message : String(err)));
+      // Relay start command to the main world engine via the postMessage bridge.
+      // The main world handles AutomationEngine.start() + runAutomationLoop().
+      try {
+        await sendAutomationCommand('start');
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to start automation via bridge:', err);
       }
     });
 
     document.addEventListener('op-seller-automation-stop', async () => {
-      await automationEngine.stop();
+      // Relay stop command to the main world engine via the postMessage bridge.
+      try {
+        await sendAutomationCommand('stop');
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to stop automation via bridge:', err);
+      }
     });
 
     // ── Algo trading engine (separate from OP sell automation) ────────────

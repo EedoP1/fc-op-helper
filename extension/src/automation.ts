@@ -2,65 +2,28 @@
  * Automation engine for the OP Sell cycle.
  *
  * Exports:
- *   - AutomationError       — typed error with selectorName (AUTO-07)
- *   - requireElement()      — querySelector + throw on miss (AUTO-07, D-23)
  *   - jitter()              — random delay 800-2500ms, no two consecutive identical (AUTO-05, D-28)
- *   - typePrice()           — per-digit input event dispatch (D-27)
- *   - clickElement()        — full PointerEvent+MouseEvent sequence (verified live, selectors.ts)
- *   - waitForElement()      — polling querySelector with timeout (AUTO-07)
  *   - AutomationEngine      — state machine for buy/list/relist cycle (AUTO-05, AUTO-06)
- *
- * Click note (from selectors.ts): EA Web App ignores programmatic .click() on most buttons.
- * Use the full pointer event sequence (implemented in clickElement):
- *   pointerdown → mousedown → pointerup → mouseup → click
- * This was verified live: search, buy, list, clear sold, re-list all confirmed working.
  */
 import type { AutomationStatusData } from './messages';
 import type { AutomationStatus, ActivityLogEntry } from './storage';
-import { automationStatusItem, activityLogItem } from './storage';
-import {
-  SEARCH_RESULTS_LIST,
-  TRANSFER_LIST_ITEM,
-  SEARCH_NO_RESULTS,
-} from './selectors';
 
-// ── Error type ────────────────────────────────────────────────────────────────
+// ── Storage Adapter ──────────────────────────────────────────────────────────
 
 /**
- * Error thrown when a required DOM element cannot be found.
- * selectorName is the human-readable constant name (e.g. "SEARCH_PLAYER_NAME_INPUT")
- * for error messages — NOT the raw CSS selector string.
- * (AUTO-07, D-23)
+ * Abstract storage interface for persisting automation state.
+ *
+ * In the isolated world (content script), the default implementation uses
+ * WXT storage items (chrome.storage.local). In the main world, an adapter
+ * bridges calls to the isolated world via window.postMessage.
  */
-export class AutomationError extends Error {
-  constructor(public selectorName: string, message: string) {
-    super(message);
-    this.name = 'AutomationError';
-  }
+export interface AutomationStorageAdapter {
+  setStatus(status: AutomationStatus): Promise<void>;
+  getActivityLog(): Promise<ActivityLogEntry[]>;
+  setActivityLog(entries: ActivityLogEntry[]): Promise<void>;
 }
 
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Query a CSS selector and throw AutomationError if not found.
- * selectorName is the human-readable constant name (e.g. "SEARCH_PLAYER_NAME_INPUT")
- * for error messages. selector is the actual CSS string.
- * (AUTO-07, D-23)
- */
-export function requireElement<T extends Element = Element>(
-  selectorName: string,
-  selector: string,
-  root: Document | Element = document,
-): T {
-  const el = root.querySelector<T>(selector);
-  if (!el) {
-    throw new AutomationError(
-      selectorName,
-      `DOM mismatch: element not found for "${selectorName}" (selector: ${selector})`,
-    );
-  }
-  return el;
-}
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
  * Return a promise that resolves after a random delay between minMs and maxMs.
@@ -75,104 +38,6 @@ export function jitter(minMs = 800, maxMs = 2500): Promise<void> {
   } while (delay === lastJitterDelay);  // AUTO-05: no two consecutive identical
   lastJitterDelay = delay;
   return new Promise(resolve => setTimeout(resolve, delay));
-}
-
-/**
- * Clear the input and type each digit with small delays (D-27).
- * Dispatches per-digit input events + final change event so EA's SPA framework
- * picks up the value. Does NOT use clipboardData or keyboard events.
- */
-export async function typePrice(input: HTMLInputElement, price: number): Promise<void> {
-  input.focus();
-  input.value = '';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  await jitter(100, 300);
-
-  for (const char of String(price)) {
-    input.value += char;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await jitter(50, 150);
-  }
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-/**
- * Click an element using the full PointerEvent+MouseEvent sequence.
- * EA Web App ignores programmatic .click() on most buttons — this sequence
- * was verified live for search, buy, list, clear sold, and re-list actions.
- * (selectors.ts click note)
- */
-export async function clickElement(el: Element): Promise<void> {
-  await jitter();
-  el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-}
-
-/**
- * Poll for a selector to appear, with timeout.
- * Used after clicking buttons to wait for the next DOM state.
- * Returns the element if found, throws AutomationError with timeout message on timeout.
- * (AUTO-07)
- */
-export async function waitForElement<T extends Element = Element>(
-  selectorName: string,
-  selector: string,
-  root: Document | Element = document,
-  timeoutMs = 5000,
-  pollMs = 200,
-): Promise<T> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const el = root.querySelector<T>(selector);
-    if (el) return el;
-    await new Promise(r => setTimeout(r, pollMs));
-  }
-  throw new AutomationError(
-    selectorName,
-    `Timeout waiting for "${selectorName}" (selector: ${selector}) after ${timeoutMs}ms — possible CAPTCHA or DOM change`,
-  );
-}
-
-/**
- * Discriminated union describing the outcome of a search results wait.
- *   'results' — one or more .listFUTItem elements appeared in the results list
- *   'empty'   — EA's no-results indicator (.ut-no-results-view) was detected
- *   'timeout' — neither condition met within timeoutMs
- */
-export type SearchResultOutcome = { outcome: 'results' | 'empty' | 'timeout' };
-
-/**
- * Poll the DOM for search results after submitting a Transfer Market search.
- *
- * Replaces the blind jitter wait with a proper polling loop that detects
- * results, empty state, or timeout.
- *
- * @param root      DOM root to query (defaults to document)
- * @param timeoutMs Maximum time to poll in ms (default 15000ms / 15s)
- * @param pollMs    Interval between polls in ms (default 200ms)
- */
-export async function waitForSearchResults(
-  root: Document | Element = document,
-  timeoutMs = 15000,
-  pollMs = 200,
-): Promise<SearchResultOutcome> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    // Check for result items inside the paginated results list
-    const resultsList = root.querySelector(SEARCH_RESULTS_LIST);
-    if (resultsList) {
-      const items = resultsList.querySelectorAll(TRANSFER_LIST_ITEM);
-      if (items.length > 0) return { outcome: 'results' };
-    }
-    // Check for EA empty results indicator
-    const noResults = root.querySelector(SEARCH_NO_RESULTS);
-    if (noResults) return { outcome: 'empty' };
-    await new Promise(r => setTimeout(r, pollMs));
-  }
-  return { outcome: 'timeout' };
 }
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -205,9 +70,13 @@ export class AutomationEngine {
    * @param sendMessage — callback to send messages to the service worker.
    *   Injected by the content script so the engine is testable without a real
    *   chrome.runtime reference.
+   * @param storageAdapter — persistence adapter for automation status and activity log.
+   *   Injected so the engine works in both isolated world (direct chrome.storage)
+   *   and main world (bridged via postMessage).
    */
   constructor(
     private sendMessage: (msg: any) => Promise<any>,
+    private storageAdapter: AutomationStorageAdapter,
   ) {}
 
   /** Return current status as an AutomationStatusData snapshot. */
@@ -310,7 +179,7 @@ export class AutomationEngine {
     this.sessionProfit += amount;
   }
 
-  /** Write current state to chrome.storage.local so the overlay can read it. */
+  /** Write current state to storage so the overlay can read it. */
   private async persistStatus(): Promise<void> {
     const status: AutomationStatus = {
       isRunning: this.isRunning,
@@ -320,15 +189,15 @@ export class AutomationEngine {
       sessionProfit: this.sessionProfit,
       errorMessage: this.errorMessage,
     };
-    await automationStatusItem.setValue(status);
+    await this.storageAdapter.setStatus(status);
   }
 
   /** Append a timestamped message to the activity log, capped at 200 entries. */
   async log(message: string): Promise<void> {
-    const entries: ActivityLogEntry[] = await activityLogItem.getValue();
+    const entries: ActivityLogEntry[] = await this.storageAdapter.getActivityLog();
     entries.push({ timestamp: new Date().toISOString(), message });
     // Keep last 200 entries to avoid storage bloat
     if (entries.length > 200) entries.splice(0, entries.length - 200);
-    await activityLogItem.setValue(entries);
+    await this.storageAdapter.setActivityLog(entries);
   }
 }

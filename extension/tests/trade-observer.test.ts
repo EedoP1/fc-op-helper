@@ -1,27 +1,19 @@
 /**
  * Unit tests for the trade observer DOM reader.
  * Uses jsdom (provided by vitest's jsdom environment) to create DOM fragments
- * matching the real selectors from selectors.ts.
- *
- * All test HTML uses the actual selector constants — not hardcoded strings.
- * This ensures tests stay in sync with real selectors (AUTO-08).
+ * matching the EA Web App selectors used by trade-observer.ts.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { readTransferList, isTransferListPage } from '../src/trade-observer';
-import {
-  TRANSFER_LIST_CONTAINER,
-  TRANSFER_LIST_ITEM,
-  ITEM_STATUS_LABEL,
-  ITEM_PLAYER_NAME,
-  ITEM_BIN_PRICE,
-  ITEM_RATING,
-  ITEM_POSITION,
-} from '../src/selectors';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// Inlined selectors matching trade-observer.ts constants (kept in sync manually).
+const TRANSFER_LIST_CONTAINER = '.ut-transfer-list-view';
+const TRANSFER_LIST_ITEM = '.listFUTItem';
+const ITEM_STATUS_LABEL = '.auction-state .time';
+const ITEM_PLAYER_NAME = '.name';
+const ITEM_BIN_PRICE = '.auction .auctionValue:nth-child(3) .value';
+const ITEM_RATING = '.rating';
+const ITEM_POSITION = '.position';
 
 // ── DOM fixture helpers ───────────────────────────────────────────────────────
 
@@ -281,19 +273,3 @@ describe('isTransferListPage', () => {
   });
 });
 
-describe('trade-observer selector usage', () => {
-  it('imports selectors from selectors.ts — no hardcoded CSS selector strings', () => {
-    const sourcePath = resolve(__dirname, '../src/trade-observer.ts');
-    const source = readFileSync(sourcePath, 'utf-8');
-
-    // Must import from './selectors'
-    expect(source).toContain("from './selectors'");
-
-    // Verify the imported constants are used (not hardcoded)
-    // The source should NOT contain the raw selector strings as string literals
-    // (they are only allowed as the values exported from selectors.ts itself)
-    expect(source).not.toMatch(/querySelector\(['"]\.ut-transfer-list-view['"]\)/);
-    expect(source).not.toMatch(/querySelector\(['"]\.listFUTItem['"]\)/);
-    expect(source).not.toMatch(/querySelector\(['"]\.name['"]\)/);
-  });
-});
