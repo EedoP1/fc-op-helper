@@ -243,3 +243,39 @@ async def test_signal_complete_not_found(client, db):
         json={"outcome": "bought", "price": 10000, "quantity": 1},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_signal_complete_listed(client, db):
+    """POST /algo/signals/{id}/complete with outcome=listed updates position, keeps it."""
+    async with db() as session:
+        now = datetime.utcnow()
+        session.add(AlgoPosition(
+            ea_id=9001, quantity=5, buy_price=25000,
+            buy_time=now, peak_price=30000,
+        ))
+        session.add(AlgoSignal(
+            ea_id=9001, action="SELL", quantity=5, reference_price=45000,
+            status="CLAIMED", created_at=now, claimed_at=now,
+        ))
+        await session.commit()
+        signal_id = (await session.execute(select(AlgoSignal))).scalar_one().id
+
+    resp = await client.post(
+        f"/api/v1/algo/signals/{signal_id}/complete",
+        json={"outcome": "listed", "price": 45000, "quantity": 5},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    async with db() as session:
+        sig = (await session.execute(select(AlgoSignal))).scalar_one()
+        positions = (await session.execute(select(AlgoPosition))).scalars().all()
+
+    assert sig.status == "DONE"
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos.ea_id == 9001
+    assert pos.quantity == 5
+    assert pos.listed_price == 45000
+    assert pos.listed_at is not None

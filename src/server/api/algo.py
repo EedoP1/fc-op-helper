@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.server.models_db import AlgoConfig, AlgoPosition, AlgoSignal, PlayerRecord
+from src.server.models_db import AlgoConfig, AlgoPosition, AlgoSignal, AlgoTrade, PlayerRecord
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ async def complete_signal(signal_id: int, payload: CompletePayload, request: Req
         HTTPException 404 if signal not found.
         HTTPException 400 if outcome is invalid.
     """
-    valid_outcomes = {"bought", "sold", "failed", "skipped"}
+    valid_outcomes = {"bought", "sold", "listed", "failed", "skipped"}
     if payload.outcome not in valid_outcomes:
         raise HTTPException(status_code=400, detail=f"Invalid outcome: {payload.outcome}")
 
@@ -349,6 +349,17 @@ async def complete_signal(signal_id: int, payload: CompletePayload, request: Req
                 peak_price=payload.price,
             )
             session.add(pos)
+            signal.status = "DONE"
+            signal.completed_at = now
+
+        elif payload.outcome == "listed":
+            pos_result = await session.execute(
+                select(AlgoPosition).where(AlgoPosition.ea_id == signal.ea_id)
+            )
+            pos = pos_result.scalar_one_or_none()
+            if pos is not None:
+                pos.listed_price = payload.price
+                pos.listed_at = now
             signal.status = "DONE"
             signal.completed_at = now
 
