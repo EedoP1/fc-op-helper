@@ -352,6 +352,7 @@ async function attemptLogin(tabId: number): Promise<void> {
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
+        world: 'MAIN',
         func: clickWebAppLoginButton,
       });
     } catch (err) {
@@ -374,6 +375,7 @@ async function attemptLogin(tabId: number): Promise<void> {
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
+          world: 'MAIN',
           func: fillEmailAndClickNext,
           args: [credentials.email],
         });
@@ -391,6 +393,7 @@ async function attemptLogin(tabId: number): Promise<void> {
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
+          world: 'MAIN',
           func: fillPasswordAndClickSignIn,
           args: [credentials.password],
         });
@@ -414,6 +417,7 @@ async function checkForPasswordField(tabId: number): Promise<boolean> {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
+      world: 'MAIN',
       func: () => !!document.querySelector('input[type="password"]'),
     });
     return results?.[0]?.result ?? false;
@@ -604,6 +608,7 @@ async function checkSessionViaTab(tabId: number): Promise<boolean> {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
+      world: 'MAIN',
       func: () => {
         // Check ALL buttons for EA's in-app login screen.
         // Can't just check the first button — our overlay toggle ("OP") may be first.
