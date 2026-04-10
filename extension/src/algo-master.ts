@@ -376,75 +376,18 @@ async function attemptLogin(tabId: number): Promise<void> {
   }
 
   if (url.includes('signin.ea.com')) {
-    // Wait for page to fully load before interacting with the form
-    const loaded = await waitForPageLoad(tabId);
-    if (!loaded) {
-      console.log('[algo-master] Signin page still loading — retrying');
-      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
-      return;
-    }
-
-    // On EA sign-in page — detect which step we're on
-    const hasPasswordField = await checkForPasswordField(tabId);
-
-    if (!hasPasswordField) {
-      // Step 1: Email page
-      console.log('[algo-master] On email page — filling email:', credentials.email, 'tabId:', tabId);
-      try {
-        const result = await chrome.scripting.executeScript({
-          target: { tabId },
-          world: 'MAIN',
-          func: fillEmailAndClickNext,
-          args: [credentials.email],
-        });
-        console.log('[algo-master] executeScript result:', JSON.stringify(result));
-      } catch (err) {
-        console.error('[algo-master] Email fill EXCEPTION:', err);
-        // Write error to master state so we can debug
-        await transition('RECOVERING', { errorMessage: `executeScript failed: ${err}` });
-        chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 10 / 60 });
-        return;
-      }
-      // Schedule alarm to continue after page advances to step 2
-      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
-      return;
-    } else {
-      // Step 2: Password page
-      console.log('[algo-master] On password page — filling password');
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          world: 'MAIN',
-          func: fillPasswordAndClickSignIn,
-          args: [credentials.password],
-        });
-      } catch (err) {
-        console.error('[algo-master] Password fill failed:', err);
-        await startRecovery();
-        return;
-      }
-      // Schedule alarm to continue after redirect back to web app
-      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 8 / 60 });
-      return;
-    }
+    // The ea-signin.content.ts content script handles form filling on signin.ea.com.
+    // It auto-injects on page load, reads credentials from storage, and fills the form
+    // via <script> tag injection (jQuery in MAIN world).
+    // Master just waits for the content script to complete login, then checks again.
+    console.log('[algo-master] On signin.ea.com — content script will handle login');
+    chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 8 / 60 });
+    return;
   }
 
   // Unknown page — wait and retry
   console.log(`[algo-master] Unknown page during login: ${url}`);
   chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
-}
-
-async function checkForPasswordField(tabId: number): Promise<boolean> {
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      func: () => !!document.querySelector('input[type="password"]'),
-    });
-    return results?.[0]?.result ?? false;
-  } catch {
-    return false;
-  }
 }
 
 /** Injected into web app — clicks the "Login" button via mousedown+mouseup+click. */
@@ -458,36 +401,6 @@ function clickWebAppLoginButton(): void {
       return;
     }
   }
-}
-
-/**
- * Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn).
- * IMPORTANT: This function is serialized by chrome.scripting.executeScript —
- * it CANNOT reference any other functions from this module. All logic must be inline.
- */
-function fillEmailAndClickNext(email: string): void {
-  // EA's signin uses jQuery — must use $.val() + $.trigger() for the form to recognize the value.
-  // This function runs in MAIN world via chrome.scripting.executeScript({ world: 'MAIN' })
-  // so it has access to the page's jQuery ($) global.
-  const jq = (window as any).$ || (window as any).jQuery;
-  if (!jq) { console.error('[algo-master] jQuery not found on signin page'); return; }
-
-  jq('#email').val(email).trigger('input').trigger('change');
-  jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
-}
-
-/**
- * Injected into signin.ea.com step 2 — fills password, clicks SIGN IN (#logInBtn).
- * IMPORTANT: This function is serialized by chrome.scripting.executeScript —
- * it CANNOT reference any other functions from this module. All logic must be inline.
- */
-function fillPasswordAndClickSignIn(password: string): void {
-  // EA's signin uses jQuery — must use $.val() + $.trigger() for the form to recognize the value.
-  const jq = (window as any).$ || (window as any).jQuery;
-  if (!jq) { console.error('[algo-master] jQuery not found on signin page'); return; }
-
-  jq('input[type="password"]').val(password).trigger('input').trigger('change');
-  jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
 }
 
 function waitForUrlMatch(tabId: number, urlFragment: string, timeoutMs: number): Promise<boolean> {
