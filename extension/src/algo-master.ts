@@ -458,29 +458,25 @@ function clickWebAppLoginButton(): void {
 }
 
 /**
- * Simulate typing into an input by dispatching keydown/input/keyup per character.
- * This triggers framework event handlers that native setter + input event may miss.
+ * Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn).
+ * IMPORTANT: This function is serialized by chrome.scripting.executeScript —
+ * it CANNOT reference any other functions from this module. All logic must be inline.
  */
-function simulateTyping(input: HTMLInputElement, text: string): void {
+function fillEmailAndClickNext(email: string): void {
+  const input = document.querySelector('input[placeholder*="email"]') as HTMLInputElement | null;
+  if (!input) { console.error('[algo-master] Email input not found'); return; }
+
+  // Simulate typing — inline (can't call external functions from executeScript)
   input.focus();
   input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-
-  for (const char of text) {
+  for (const char of email) {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
     input.value += char;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
   }
   input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-/** Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn). */
-function fillEmailAndClickNext(email: string): void {
-  const input = document.querySelector('input[placeholder*="email"]') as HTMLInputElement | null;
-  if (!input) { console.error('[algo-master] Email input not found'); return; }
-
-  simulateTyping(input, email);
 
   if (!input.value) { console.error('[algo-master] Email value not set'); return; }
 
@@ -492,12 +488,26 @@ function fillEmailAndClickNext(email: string): void {
   }
 }
 
-/** Injected into signin.ea.com step 2 — fills password, clicks SIGN IN (#logInBtn). */
+/**
+ * Injected into signin.ea.com step 2 — fills password, clicks SIGN IN (#logInBtn).
+ * IMPORTANT: This function is serialized by chrome.scripting.executeScript —
+ * it CANNOT reference any other functions from this module. All logic must be inline.
+ */
 function fillPasswordAndClickSignIn(password: string): void {
   const input = document.querySelector('input[type="password"]') as HTMLInputElement | null;
   if (!input) { console.error('[algo-master] Password input not found'); return; }
 
-  simulateTyping(input, password);
+  // Simulate typing — inline (can't call external functions from executeScript)
+  input.focus();
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  for (const char of password) {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+    input.value += char;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+  }
+  input.dispatchEvent(new Event('change', { bubbles: true }));
 
   if (!input.value) { console.error('[algo-master] Password value not set'); return; }
 
