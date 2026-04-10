@@ -41,6 +41,8 @@ export interface EAItem {
     readonly lastName: string;
   };
   getAuctionData(): EAAuctionData;
+  isDuplicate(): boolean;
+  getSearchType?(): string;
 }
 
 /** EA observable — the pattern EA uses for async callbacks. */
@@ -77,6 +79,8 @@ declare const services: {
 declare const repositories: {
   Item: {
     isPileFull(pile: number): boolean;
+    numItemsInCache(pile: number): number;
+    getUnassignedItems(): EAItem[];
   };
 };
 
@@ -390,4 +394,79 @@ export function getCoins(): number {
  */
 export function isPileFull(pile: number): boolean {
   return repositories.Item.isPileFull(pile);
+}
+
+// ── Unassigned Glitch ────────────────────────────────────────────────────────
+
+/** Error code EA returns when the unassigned pile (INBOX) is full. */
+export const DESTINATION_FULL_ERROR_CODE = 473;
+
+/**
+ * Check if the unassigned glitch can be performed.
+ * Mirrors FUT Enhancer's canPerformUnassignedGlitch:
+ *   - Unassigned pile has >= 50 items
+ *   - There are duplicate items (cards also in club)
+ *   - INBOX item count < duplicate count (room to swap)
+ */
+export function canPerformUnassignedGlitch(): boolean {
+  const inboxCount = repositories.Item.numItemsInCache(ItemPile.INBOX);
+  const unassigned = repositories.Item.getUnassignedItems();
+  const duplicateCount = unassigned.filter(item => item.isDuplicate()).length;
+  return unassigned.length >= 50 && inboxCount < duplicateCount && duplicateCount > 0;
+}
+
+/**
+ * Perform the unassigned glitch — exactly mirrors FUT Enhancer's algorithm:
+ *
+ * 1. Search transfer market for any cheap card (maxBuy=200)
+ * 2. Bid 200 on the first result — intentionally triggers error 473
+ * 3. After 473, refresh the unassigned pile from the server
+ * 4. Find duplicate items in unassigned (cards also in club)
+ * 5. Move each duplicate to club, freeing unassigned slots
+ *
+ * Returns the number of slots freed.
+ */
+export async function performUnassignedGlitch(): Promise<number> {
+  // Step 1: Search for any cheap card
+  const criteria = new UTSearchCriteriaDTO();
+  criteria.maxBuy = 200;
+
+  const searchResult = await searchMarket(criteria);
+  const dummyItem = searchResult.items[0];
+  if (!dummyItem) return 0;
+
+  // Step 2: Dummy bid to trigger error 473
+  await delay(500);
+  const bidResult = await observableToPromise(
+    services.Item.bid(dummyItem, 200),
+  );
+  if (bidResult.error !== DESTINATION_FULL_ERROR_CODE) return 0;
+
+  // Step 3: Refresh unassigned pile from server
+  await delay(500);
+  await getUnassigned();
+  await delay(1000);
+
+  // Step 4: Find duplicates in the refreshed cache
+  const duplicates = repositories.Item.getUnassignedItems()
+    .filter(item => item.isDuplicate());
+
+  // Step 5: Move duplicates to club
+  let slotsFreed = 0;
+  for (let i = duplicates.length - 1; i >= 0; i--) {
+    const item = repositories.Item.getUnassignedItems()
+      .filter(it => it.isDuplicate())[i];
+    if (!item) break;
+
+    await moveItem(item, ItemPile.CLUB);
+    await delay(500);
+    slotsFreed++;
+  }
+
+  return slotsFreed;
+}
+
+/** Simple delay helper. */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

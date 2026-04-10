@@ -16,6 +16,9 @@ import {
   searchMarket,
   buyItem,
   getBeforeStepValue,
+  canPerformUnassignedGlitch,
+  performUnassignedGlitch,
+  DESTINATION_FULL_ERROR_CODE,
   type EAItem,
 } from './ea-services';
 import { jitter } from './automation';
@@ -177,6 +180,19 @@ export async function executeAlgoBuyCycle(
         await jitter(4000, 8000);
         attempt--; // don't count rate limit as a retry
         continue;
+      }
+      if (buyResult.error === DESTINATION_FULL_ERROR_CODE) {
+        // Unassigned pile full — attempt glitch to free slots
+        if (canPerformUnassignedGlitch()) {
+          console.log('[algo-buy] Unassigned pile full, performing glitch...');
+          const freed = await performUnassignedGlitch();
+          console.log(`[algo-buy] Glitch freed ${freed} slots`);
+          if (freed > 0) {
+            attempt--; // don't count as a retry, we freed space
+            continue;
+          }
+        }
+        return { outcome: 'error', reason: 'Unassigned pile full (no duplicates to swap)' };
       }
       return { outcome: 'error', reason: `Buy failed (error ${buyResult.error})` };
     }
