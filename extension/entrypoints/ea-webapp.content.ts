@@ -140,6 +140,9 @@ export default defineContentScript({
         case 'ALGO_POSITION_SOLD_RESULT':
         case 'ALGO_POSITION_RELIST':
         case 'ALGO_POSITION_RELIST_RESULT':
+        case 'ALGO_SESSION_DEAD':
+        case 'ALGO_HEALTH_CHECK':
+        case 'ALGO_HEALTH_CHECK_RESULT':
           return false;
         default:
           assertNever(msg);

@@ -157,7 +157,11 @@ export type ExtensionMessage =
   | { type: 'ALGO_POSITION_SOLD'; ea_id: number; sell_price: number; quantity: number }
   | { type: 'ALGO_POSITION_SOLD_RESULT'; success: boolean; pnl?: number; error?: string }
   | { type: 'ALGO_POSITION_RELIST'; ea_id: number; price: number; quantity: number }
-  | { type: 'ALGO_POSITION_RELIST_RESULT'; success: boolean; error?: string };
+  | { type: 'ALGO_POSITION_RELIST_RESULT'; success: boolean; error?: string }
+  // Algo session recovery (master ↔ worker)
+  | { type: 'ALGO_SESSION_DEAD' }
+  | { type: 'ALGO_HEALTH_CHECK' }
+  | { type: 'ALGO_HEALTH_CHECK_RESULT'; healthy: boolean; relisted_algo: number; relisted_other: number };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.

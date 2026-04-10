@@ -113,3 +113,44 @@ export const activityLogItem = storage.defineItem<ActivityLogEntry[]>(
   'local:activityLog',
   { fallback: [] },
 );
+
+/**
+ * EA login credentials for auto-recovery.
+ * Stored locally in the browser — never sent to the backend server.
+ */
+export type AlgoCredentials = {
+  email: string;
+  password: string;
+};
+
+export const algoCredentialsItem = storage.defineItem<AlgoCredentials | null>(
+  'local:algoCredentials',
+  { fallback: null },
+);
+
+/**
+ * Master state machine for algo session management.
+ * Persisted so the background service worker can resume after MV3 restarts.
+ */
+export type AlgoMasterStatus = 'IDLE' | 'SPAWNING' | 'MONITORING' | 'RECOVERING' | 'WAITING_FOR_LOGIN' | 'ERROR';
+
+export type AlgoMasterState = {
+  status: AlgoMasterStatus;
+  tabId: number | null;
+  recoveryAttempts: number;
+  lastHealthCheck: string | null;
+  errorMessage: string | null;
+};
+
+export const algoMasterStateItem = storage.defineItem<AlgoMasterState>(
+  'local:algoMasterState',
+  {
+    fallback: {
+      status: 'IDLE',
+      tabId: null,
+      recoveryAttempts: 0,
+      lastHealthCheck: null,
+      errorMessage: null,
+    },
+  },
+);
