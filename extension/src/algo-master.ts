@@ -547,14 +547,20 @@ async function waitForWorkerAndStart(tabId: number): Promise<void> {
     return;
   }
 
-  console.log('[algo-master] Worker is alive — verifying session');
+  console.log('[algo-master] Worker is alive — waiting for EA app to render, then verifying session');
 
-  // Check for in-app login screen
-  const sessionAlive = await checkSessionViaTab(tabId);
-  if (!sessionAlive) {
-    console.log('[algo-master] Content script alive but session dead — starting login flow');
-    await attemptLogin(tabId);
-    return;
+  // Check for in-app login screen.
+  // The EA app renders a loading screen before showing the Login button,
+  // so we check multiple times with delays to catch it after render.
+  for (let check = 0; check < 3; check++) {
+    // Wait 3s for EA app to render (loading spinner → login screen or home)
+    await new Promise(r => setTimeout(r, 3_000));
+    const sessionAlive = await checkSessionViaTab(tabId);
+    if (!sessionAlive) {
+      console.log('[algo-master] Content script alive but session dead — starting login flow');
+      await attemptLogin(tabId);
+      return;
+    }
   }
 
   // Session confirmed alive — start the algo loop
