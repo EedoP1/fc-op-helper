@@ -1,232 +1,135 @@
 /**
  * Main automation loop orchestrator.
  *
- * Drives the continuous buy/list/relist cycle per D-02:
- *   Phase A: Get actions-needed from backend (D-19, D-33)
- *   Phase B: Buy cycle for each BUY action (D-02)
- *   Phase C: Scan transfer list + relist + clear sold (D-02)
- *   Phase D: Handle sold players — rebuy (D-14, D-15)
- *   Loop: repeat until stopped or error
+ * Drives the continuous buy/list/relist cycle:
+ *   Phase 0: Sweep unassigned pile
+ *   Phase A: Transfer list cycle (relist + clear + report)
+ *   Phase B: Fetch actions-needed from backend
+ *   Phase C: Buy cycle for each BUY action
+ *   Inter-cycle: sleep until earliest card expires
  *
- * Key decisions:
- *   D-17: Graceful stop — checks stopped() between actions
- *   D-18: Resume scans DOM to detect current state before acting
- *   D-19: Cold start fetches actions-needed from backend then scans DOM
- *   D-22: AutomationError triggers alert via engine.setError
- *   D-24: Daily cap checked before every buy phase
- *   D-35: Out of coins degrades to relist-only mode
- *   D-38: Session expiry detected and automation stopped with alert
+ * No DOM interaction — all operations use EA service layer and message passing.
+ *
+ * Error handling follows FUT Enhancer's approach:
+ * - EA calls return {success, error, items} — destructure and check per-call
+ * - No try/catch around EA calls
+ * - Check getCoins() BEFORE buying instead of string-matching error messages
+ * - If session expires, every EA call fails, consecutive failures hit threshold
+ * - Keep try/catch only around sendMessage (extension backend, not EA)
  */
-import { AutomationEngine, AutomationError, jitter, clickElement, waitForElement } from './automation';
-import { executeBuyCycle, type BuyCycleResult } from './buy-cycle';
-import {
-  executeTransferListCycle,
-  scanTransferList,
-  type TransferListCycleResult,
-} from './transfer-list-cycle';
+import { AutomationEngine, jitter } from './automation';
+import { executeBuyCycle } from './buy-cycle';
+import { executeTransferListCycle } from './transfer-list-cycle';
+import { getUnassigned, moveItem, getCoins, listItem, roundToNearestStep, getBeforeStepValue } from './ea-services';
 import type { ActionNeeded, ExtensionMessage } from './messages';
-import * as SELECTORS from './selectors';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Parse EA time-remaining string (e.g. "55 Minutes", "1 Hour", "30 Seconds")
- * into milliseconds. Returns Infinity if unparseable.
- */
-function parseTimeRemainingMs(timeStr: string): number {
-  const lower = timeStr.toLowerCase();
-  const match = lower.match(/(\d+)\s*(second|minute|hour)/);
-  if (!match) return Infinity;
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  if (unit.startsWith('second')) return value * 1_000;
-  if (unit.startsWith('minute')) return value * 60_000;
-  if (unit.startsWith('hour')) return value * 3_600_000;
-  return Infinity;
-}
-
-/**
- * Check if the current page has the EA session login view visible.
- * Used to detect D-38: session expiry after any navigation or automation step.
- */
-function isSessionExpired(): boolean {
-  return document.querySelector('.ut-login-view') !== null;
-}
-
-/**
- * Check if a BuyCycleResult error reason indicates insufficient coins.
- * EA Web App shows coin-related errors in DOM notification layer text.
- * We also check the reason string as a fallback.
- */
-function isInsufficientCoinsError(reason: string): boolean {
-  const lower = reason.toLowerCase();
-  if (lower.includes('coin') || lower.includes('insufficient') || lower.includes('funds')) {
-    return true;
-  }
-  // Check notification layer DOM (EA shows coin errors as toast notifications)
-  const notifLayer = document.querySelector('#NotificationLayer');
-  if (notifLayer) {
-    const text = notifLayer.textContent?.toLowerCase() ?? '';
-    if (text.includes('coin') || text.includes('insufficient') || text.includes('funds')) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// ── Main loop export ──────────────────────────────────────────────────────────
+// ── Main loop export ─────────────────────────────────────────────────────────
 
 /**
  * Run the continuous automation cycle until stopped or an error occurs.
  *
- * Called by the content script when the user clicks "Start Automation".
- * Alternates between buying all portfolio players and scanning/relisting
- * the transfer list. Sold cards are detected and requeued for rebuy.
- *
- * @param engine       AutomationEngine state machine (tracks state, logs, persists status)
+ * @param engine       AutomationEngine state machine
  * @param sendMessage  Callback to relay messages to the service worker / backend
  */
 export async function runAutomationLoop(
   engine: AutomationEngine,
   sendMessage: (msg: any) => Promise<any>,
 ): Promise<void> {
-  // Capture this loop's abort signal at start. Each loop invocation checks
-  // ITS OWN signal — if start() creates a new controller, old loops see
-  // their signal as aborted and exit, preventing ghost loops.
   const signal = engine.getAbortSignal();
   const stopped = () => signal?.aborted ?? false;
 
-  // Price guard cooldown: tracks ea_ids that were skipped due to price being above guard,
-  // with the timestamp of the skip. Prevents retrying the same overpriced player on every
-  // outer cycle iteration — prices don't change that fast between consecutive scans.
-  // Cleared entry-by-entry when the cooldown window expires (5 minutes per player).
-  const PRICE_GUARD_COOLDOWN_MS = 5 * 60_000; // 5 minutes
-  const priceGuardCooldown = new Map<number, number>(); // ea_id -> skippedAt ms
+  // Price guard cooldown: prevents retrying overpriced players every cycle.
+  const PRICE_GUARD_COOLDOWN_MS = 5 * 60_000;
+  const priceGuardCooldown = new Map<number, number>();
+
+  // Track ea_ids already on the TL or bought this session to avoid duplicates.
+  const ownedEaIds = new Set<number>();
 
   try {
     while (!stopped()) {
-      // ── Phase 0: Sweep unassigned pile for orphaned cards ────────────
-      // Cards end up here when listing fails silently (TL full, EA glitch).
-      // Check the unassigned badge count on the Transfers hub — if > 0,
-      // navigate in and try to list each card.
-      try {
-        const transfersBtn = document.querySelector<HTMLElement>(SELECTORS.NAV_TRANSFERS);
-        if (transfersBtn) {
-          await clickElement(transfersBtn);
-          await jitter(1000, 2000);
-
-          const badge = document.querySelector(SELECTORS.UNASSIGNED_COUNT);
-          const unassignedCount = parseInt(badge?.textContent?.trim() ?? '0', 10);
-
-          if (unassignedCount > 0) {
-            await engine.log(`Found ${unassignedCount} unassigned items — attempting to list`);
-
-            const unassignedTile = document.querySelector<HTMLElement>(SELECTORS.TILE_UNASSIGNED);
-            if (unassignedTile) {
-              await clickElement(unassignedTile);
-              await jitter(1000, 2000);
-
-              // For each item in the unassigned pile, click it and try to list
-              const items = document.querySelectorAll<HTMLElement>(SELECTORS.TRANSFER_LIST_ITEM);
-              for (const item of Array.from(items)) {
-                if (stopped()) return;
-                await clickElement(item);
-                await jitter();
-
-                // Try to open the list accordion and list at default price
-                const accordion = document.querySelector<HTMLElement>(SELECTORS.LIST_ON_MARKET_ACCORDION);
-                if (accordion) {
-                  await clickElement(accordion);
-                  await jitter();
-
-                  // Wait for quick list panel then click List for Transfer
-                  try {
-                    await waitForElement('QUICK_LIST_PANEL', SELECTORS.QUICK_LIST_PANEL, document, 5_000);
-                    const confirmBtn = document.querySelector<HTMLButtonElement>(
-                      `${SELECTORS.QUICK_LIST_PANEL} button.btn-standard.primary`,
-                    );
-                    if (confirmBtn) {
-                      await clickElement(confirmBtn);
-                      await jitter(1500, 3000);
-                      await engine.log('Listed orphaned card from unassigned pile');
-                    }
-                  } catch {
-                    await engine.log('Could not list unassigned item — skipping');
-                  }
-                }
-              }
-            }
+      // ── Phase 0: Sweep unassigned pile ──────────────────────────────────
+      const { items: unassigned } = await getUnassigned();
+      if (unassigned.length > 0) {
+        await engine.log(`Found ${unassigned.length} unassigned items — moving to transfer list`);
+        for (const item of unassigned) {
+          if (stopped()) return;
+          const { success } = await moveItem(item, 5); // 5 = ItemPile.TRANSFER
+          if (!success) {
+            await engine.log(`Failed to move item ${item.definitionId} to transfer list`);
           }
         }
-      } catch (err) {
-        await engine.log(`Unassigned sweep error: ${err instanceof Error ? err.message : String(err)} — continuing`);
       }
 
       if (stopped()) return;
+      await jitter(1000, 2000);
 
-      // ── Phase A: Scan transfer list + relist + clear sold (D-02, D-03) ───
-      // Runs FIRST so expired cards get relisted immediately, sold cards are
-      // cleared, and trade reports are sent before fetching actions_needed.
-      // Also builds the reconciliation set to skip players already listed.
-
+      // ── Phase A: Transfer list cycle ───────────────────────────────────
       await engine.setState('SCANNING', 'Scanning transfer list');
 
-      let alreadyListedNames: Set<string> = new Set();
-      let cycleResult: TransferListCycleResult | null = null;
-      try {
-        cycleResult = await executeTransferListCycle(sendMessage);
+      const cycleResult = await executeTransferListCycle(sendMessage);
 
-        // Build reconciliation set from scan results
-        for (const item of cycleResult.scanned.listed) {
-          alreadyListedNames.add(item.playerName.toLowerCase());
-        }
+      await engine.setLastEvent(
+        `Transfer list: ${cycleResult.groups.active.length} active, ${cycleResult.groups.expired.length} expired, ${cycleResult.groups.sold.length} sold`,
+      );
 
-        await engine.setLastEvent(
-          `Transfer list scan: ${cycleResult.scanned.listed.length} listed, ${cycleResult.scanned.expired.length} expired, ${cycleResult.scanned.sold.length} sold`,
-        );
+      if (cycleResult.relistedCount > 0) {
+        await engine.setLastEvent(`Relisted ${cycleResult.relistedCount} cards`);
+      }
 
-        if (cycleResult.relistedCount > 0) {
-          await engine.setLastEvent(`Relisted ${cycleResult.relistedCount} cards`);
-        }
+      if (cycleResult.soldCleared > 0) {
+        await engine.log(`Cleared ${cycleResult.soldCleared} sold cards`);
+      }
 
-        if (cycleResult.soldCleared > 0) {
-          await engine.log(`Cleared ${cycleResult.soldCleared} sold cards`);
-        }
+      // Log profit for sold cards
+      for (const soldItem of cycleResult.groups.sold) {
+        const price = soldItem.getAuctionData().buyNowPrice;
+        await engine.log(`Sold: defId=${soldItem.definitionId} for ${price.toLocaleString()} — rebuy queued via backend`);
+        engine.addProfit(price);
+      }
 
-        // Log profit for sold cards now that the transfer list cycle has reported
-        // them to the backend. Phase D rebuy is removed — the backend already
-        // returns action=BUY for sold players, so Phase C handles the rebuy.
-        // Profit tracking stays here so it isn't lost.
-        for (const soldItem of cycleResult.scanned.sold) {
-          // Match sold DOM item to a portfolio player by name (endsWith) + rating.
-          // actionsNeeded is not yet populated at this point, so we approximate
-          // buy_price as 0 for the log; backend tracks exact profit via trade records.
-          await engine.log(
-            `Sold: ${soldItem.playerName} (${soldItem.rating}) for ${soldItem.price.toLocaleString()} — rebuy queued via backend`,
-          );
-          engine.addProfit(soldItem.price); // gross proceeds; backend computes net
-        }
+      await engine.setState('SCANNING', 'Transfer list cycle complete');
 
-        await engine.setState('SCANNING', 'Transfer list cycle complete');
-
-      } catch (err) {
-        if (err instanceof AutomationError) {
-          if (isSessionExpired()) {
-            await engine.setError('EA session expired — please log in and restart automation');
-            return;
-          }
-          await engine.setError(err.message);
-          return;
-        }
-        await engine.log(`Transfer list cycle error: ${err instanceof Error ? err.message : String(err)} — proceeding without reconciliation`);
+      // Refresh owned set from current TL (active + unlisted still on pile)
+      ownedEaIds.clear();
+      for (const item of cycleResult.groups.active) {
+        ownedEaIds.add(item.definitionId);
+      }
+      for (const item of cycleResult.groups.unlisted) {
+        ownedEaIds.add(item.definitionId);
       }
 
       if (stopped()) return;
 
-      // ── Phase B: Get actions-needed (D-19: cold start / D-18: resume) ────
-      // Fetched AFTER scan+relist so trade reports from Phase A are processed
-      // and backend state is current.
+      // ── Phase A.5: List any unlisted cards on the transfer pile ────────
+      if (cycleResult.groups.unlisted.length > 0) {
+        await engine.log(`Found ${cycleResult.groups.unlisted.length} unlisted cards — fetching prices to list`);
+        for (const item of cycleResult.groups.unlisted) {
+          if (stopped()) return;
+          try {
+            const priceRes = await sendMessage({
+              type: 'FRESH_PRICE_REQUEST',
+              ea_id: item.definitionId,
+            } satisfies ExtensionMessage);
+            if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
+              const sellBin = roundToNearestStep(priceRes.sell_price);
+              const sellStart = roundToNearestStep(getBeforeStepValue(priceRes.sell_price));
+              await jitter(500, 1000);
+              const { success, error } = await listItem(item, sellStart, sellBin);
+              if (success) {
+                await engine.log(`Listed unlisted card defId=${item.definitionId} at ${sellBin.toLocaleString()}`);
+              } else {
+                await engine.log(`Failed to list defId=${item.definitionId} (error ${error}, sellBin=${sellBin}, sellStart=${sellStart}, sell_price=${priceRes.sell_price})`);
+              }
+            }
+          } catch {
+            await engine.log(`Price lookup failed for unlisted card defId=${item.definitionId}`);
+          }
+        }
+      }
 
+      if (stopped()) return;
+
+      // ── Phase B: Get actions-needed ────────────────────────────────────
       await engine.setState('SCANNING', 'Fetching portfolio actions');
 
       let actionsNeeded: ActionNeeded[] = [];
@@ -241,20 +144,22 @@ export async function runAutomationLoop(
 
       if (stopped()) return;
 
-      // ── Phase C: Buy all portfolio players (D-02) ─────────────────────────
+      // ── Phase C: Buy cycle ─────────────────────────────────────────────
 
-      // Check daily cap before starting buy phase (D-24, AUTO-04)
-      let isCapped = false;
-      try {
-        const capRes = await sendMessage({ type: 'DAILY_CAP_REQUEST' } satisfies ExtensionMessage);
-        if (capRes && capRes.type === 'DAILY_CAP_RESULT') {
-          isCapped = capRes.capped === true;
+      // Check daily cap from cycle result or fresh request
+      let isCapped = cycleResult.isCapped;
+      if (!isCapped) {
+        try {
+          const capRes = await sendMessage({ type: 'DAILY_CAP_REQUEST' } satisfies ExtensionMessage);
+          if (capRes && capRes.type === 'DAILY_CAP_RESULT') {
+            isCapped = capRes.capped === true;
+          }
+        } catch {
+          await engine.log('DAILY_CAP_REQUEST failed — assuming not capped');
         }
-      } catch {
-        await engine.log('DAILY_CAP_REQUEST failed — assuming not capped');
       }
 
-      // Purge expired cooldown entries before building the buy list.
+      // Purge expired cooldown entries
       const now = Date.now();
       for (const [ea_id, skippedAt] of priceGuardCooldown) {
         if (now - skippedAt >= PRICE_GUARD_COOLDOWN_MS) {
@@ -262,217 +167,172 @@ export async function runAutomationLoop(
         }
       }
 
-      // Filter out players still within their price-guard cooldown window so the outer
-      // loop does not retry players whose market price was already confirmed above guard.
       const buyPlayers = actionsNeeded.filter(
-        a => a.action === 'BUY' && !priceGuardCooldown.has(a.ea_id),
+        a => a.action === 'BUY' && !priceGuardCooldown.has(a.ea_id) && !ownedEaIds.has(a.ea_id),
       );
-      let outOfCoins = false;
 
-      // D-36: Track transfer list occupancy — EA caps at 100 active listings.
-      // All three states (listed, expired, sold) occupy TL slots. Subtract
-      // soldCleared because those slots were freed during the relist cycle.
-      const EA_TRANSFER_LIST_MAX = 100;
-      let transferListCount = cycleResult
-        ? cycleResult.scanned.listed.length + cycleResult.scanned.expired.length
-          + cycleResult.scanned.sold.length - cycleResult.soldCleared
-        : 0;
-      const transferListFull = transferListCount >= EA_TRANSFER_LIST_MAX;
+      // Transfer list full check — use our own count, not EA's cached isPileFull
+      // which goes stale after clearSold()
+      const TL_CAPACITY = 100;
+      let transferListCount = cycleResult.groups.all.length - cycleResult.soldCleared;
+      const transferListFull = transferListCount >= TL_CAPACITY;
 
       if (!isCapped && !transferListFull && buyPlayers.length > 0) {
-        await engine.setState('BUYING', 'Starting buy cycle');
+        // Check coins BEFORE the buy loop (like FUT Enhancer)
+        const cheapestBuyPrice = Math.min(...buyPlayers.map(p => p.buy_price));
+        if (getCoins() < cheapestBuyPrice) {
+          await engine.log('Out of coins — switching to relist-only mode for this cycle');
+        } else {
+          await engine.setState('BUYING', 'Starting buy cycle');
 
-        let consecutiveFailures = 0;
-        const CAPTCHA_THRESHOLD = 3;  // D-22: 3 consecutive failures = possible CAPTCHA
+          let consecutiveFailures = 0;
+          const FAILURE_THRESHOLD = 3;
 
-        for (const player of buyPlayers) {
-          if (stopped()) return; // D-17: graceful stop between actions
+          for (const player of buyPlayers) {
+            if (stopped()) return;
 
-          // D-22: Too many consecutive failures — likely CAPTCHA or blocked UI
-          if (consecutiveFailures >= CAPTCHA_THRESHOLD) {
-            if (isSessionExpired()) {
-              await engine.setError('EA session expired — please log in and restart automation');
-              return;
-            }
-            await engine.setError(`${consecutiveFailures} consecutive buy failures — possible CAPTCHA or UI block. Please check the EA Web App.`);
-            return;
-          }
-
-          // D-36: Stop buying if transfer list is full
-          if (transferListCount >= EA_TRANSFER_LIST_MAX) {
-            await engine.log('Transfer list full (100) — stopping buy phase');
-            break;
-          }
-
-          // D-35: if already out of coins, skip buy phase entirely
-          if (outOfCoins) {
-            await engine.log(`Out of coins — skipping buy for ${player.name}`);
-            continue;
-          }
-
-          // D-13 / D-31: Fetch fresh price before buying
-          let freshPlayer = { ...player };
-          try {
-            const priceRes = await sendMessage({
-              type: 'FRESH_PRICE_REQUEST',
-              ea_id: player.ea_id,
-            } satisfies ExtensionMessage);
-            if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
-              freshPlayer = {
-                ...player,
-                buy_price: priceRes.buy_price,
-                sell_price: priceRes.sell_price,
-              };
-            }
-          } catch {
-            await engine.log(`Fresh price unavailable for ${player.name} — using cached price`);
-          }
-
-          // D-19 / D-18 reconciliation: skip if DOM already shows this player listed.
-          // EA shows surname-only on transfer list cards (e.g. "Tonali" not "Sandro Tonali"),
-          // so exact match fails. Use substring: if any listed name is contained in the
-          // backend name (or vice versa), it's a match.
-          const pName = player.name.toLowerCase();
-          const isAlreadyListed = alreadyListedNames.has(pName)
-            || Array.from(alreadyListedNames).some(domName =>
-              pName.includes(domName) || domName.includes(pName)
-            );
-          if (isAlreadyListed) {
-            await engine.log(`Skipping ${player.name} — already listed on transfer list`);
-            continue;
-          }
-
-          await engine.setState('BUYING', `Buying: ${player.name}`);
-
-          // Increment daily cap counter per buy attempt (D-24)
-          sendMessage({ type: 'DAILY_CAP_INCREMENT' } satisfies ExtensionMessage).catch(() => {});
-
-          const result: BuyCycleResult = await executeBuyCycle(freshPlayer, sendMessage);
-
-          if (result.outcome === 'bought') {
-            consecutiveFailures = 0;  // D-22: reset on success
-            transferListCount++;  // D-36: track new listing
-            // D-18/D-19 reconciliation: mark this player as listed so subsequent
-            // iterations in this same cycle don't buy again (alreadyListedNames is
-            // only seeded from the pre-cycle scan — it must be updated live here).
-            alreadyListedNames.add(player.name.toLowerCase());
-            await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
-
-            // Report buy + list to backend (D-30) — await to ensure backend
-            // state is up to date before the next cycle fetches actions_needed.
-            try {
-              await sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: player.ea_id,
-                price: result.buyPrice,
-                outcome: 'bought',
-              } satisfies ExtensionMessage);
-              await sendMessage({
-                type: 'TRADE_REPORT',
-                ea_id: player.ea_id,
-                price: freshPlayer.sell_price,
-                outcome: 'listed',
-              } satisfies ExtensionMessage);
-            } catch {
-              await engine.log(`Trade report failed for ${player.name} — backend state may be stale`);
-            }
-
-            // Check if now capped after this buy
-            try {
-              const capCheckRes = await sendMessage({ type: 'DAILY_CAP_REQUEST' } satisfies ExtensionMessage);
-              if (capCheckRes && capCheckRes.type === 'DAILY_CAP_RESULT' && capCheckRes.capped) {
-                await engine.log('Daily cap reached — stopping buy phase');
-                break;
-              }
-            } catch { /* ignore */ }
-
-          } else if (result.outcome === 'skipped') {
-            // Sniped is normal market competition — reset failure counter.
-            // Only DOM/timeout failures count toward CAPTCHA detection.
-            const isDomFailure = result.reason.includes('search button not found')
-              || result.reason.includes('DOM mismatch')
-              || result.reason.includes('Timeout waiting');
-            if (isDomFailure) {
-              consecutiveFailures++;
-            } else {
-              consecutiveFailures = 0;
-            }
-
-            // Price-guard skip: market price is above our tolerance. Record a cooldown
-            // so this player is not retried on the next outer cycle iteration. Without
-            // this, the backend returns the same BUY list every cycle (no trade record
-            // is written for a skip), causing the loop to retry overpriced players
-            // indefinitely instead of moving on to unprocessed players.
-            const isPriceGuard = result.reason.toLowerCase().includes('price guard')
-              || result.reason.toLowerCase().includes('above guard');
-            if (isPriceGuard) {
-              priceGuardCooldown.set(player.ea_id, Date.now());
-            }
-
-            await engine.setLastEvent(`Skipped ${player.name}: ${result.reason}`);
-          } else if (result.outcome === 'error') {
-            consecutiveFailures++;
-
-            // D-38: Check for session expiry
-            if (isSessionExpired()) {
-              await engine.setError('EA session expired — please log in and restart automation');
+            // Too many consecutive failures — something is wrong
+            if (consecutiveFailures >= FAILURE_THRESHOLD) {
+              await engine.setError(`${consecutiveFailures} consecutive buy failures — please check the EA Web App.`);
               return;
             }
 
-            // D-35: Detect out-of-coins condition
-            if (isInsufficientCoinsError(result.reason)) {
-              outOfCoins = true;
-              await engine.log('Out of coins — switching to relist-only mode for this cycle');
-              continue;
-            }
-
-            // Listing failed because TL is full — card bought but stuck in unassigned pile.
-            // Stop buying immediately to avoid piling up more unassigned cards.
-            if (result.reason.includes('unassigned pile')) {
-              transferListCount = EA_TRANSFER_LIST_MAX; // force TL-full guard
-              await engine.log('Listing failed (TL full) — stopping buy phase');
+            // Transfer list full check
+            if (transferListCount >= TL_CAPACITY) {
+              await engine.log('Transfer list full — stopping buy phase');
               break;
             }
 
-            // Non-critical error — log and continue to next player
-            await engine.setLastEvent(`Error buying ${player.name}: ${result.reason}`);
-          }
+            // Check coins before each buy attempt
+            if (getCoins() < player.buy_price) {
+              await engine.log(`Out of coins — skipping buy for ${player.name}`);
+              continue;
+            }
 
-          // Brief pause between players (D-28 / AUTO-05)
-          if (!stopped()) {
-            await jitter();
+            await engine.setState('BUYING', `Buying: ${player.name}`);
+
+            // Fetch fresh price before buying
+            let freshPlayer = { ...player };
+            try {
+              const priceRes = await sendMessage({
+                type: 'FRESH_PRICE_REQUEST',
+                ea_id: player.ea_id,
+              } satisfies ExtensionMessage);
+              if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
+                freshPlayer = {
+                  ...player,
+                  buy_price: priceRes.buy_price,
+                  sell_price: priceRes.sell_price,
+                };
+              }
+            } catch {
+              await engine.log(`Fresh price unavailable for ${player.name} — using cached price`);
+            }
+
+            // Increment daily cap counter per buy attempt
+            sendMessage({ type: 'DAILY_CAP_INCREMENT' } satisfies ExtensionMessage).catch(() => {});
+
+            const result = await executeBuyCycle(freshPlayer, sendMessage);
+
+            if (result.outcome === 'bought') {
+              consecutiveFailures = 0;
+              transferListCount++;
+              ownedEaIds.add(player.ea_id);
+              await engine.setLastEvent(`Bought ${player.name} for ${result.buyPrice.toLocaleString()}`);
+
+              // Report buy + list to backend
+              try {
+                await sendMessage({
+                  type: 'TRADE_REPORT',
+                  ea_id: player.ea_id,
+                  price: result.buyPrice,
+                  outcome: 'bought',
+                } satisfies ExtensionMessage);
+                await sendMessage({
+                  type: 'TRADE_REPORT',
+                  ea_id: player.ea_id,
+                  price: freshPlayer.sell_price,
+                  outcome: 'listed',
+                } satisfies ExtensionMessage);
+              } catch {
+                await engine.log(`Trade report failed for ${player.name} — backend state may be stale`);
+              }
+
+              // Check if now capped
+              try {
+                const capCheckRes = await sendMessage({ type: 'DAILY_CAP_REQUEST' } satisfies ExtensionMessage);
+                if (capCheckRes && capCheckRes.type === 'DAILY_CAP_RESULT' && capCheckRes.capped) {
+                  await engine.log('Daily cap reached — stopping buy phase');
+                  break;
+                }
+              } catch { /* ignore */ }
+
+            } else if (result.outcome === 'skipped') {
+              consecutiveFailures = 0;
+
+              // Price guard cooldown
+              const isPriceGuard = result.reason.toLowerCase().includes('price guard')
+                || result.reason.toLowerCase().includes('above guard');
+              if (isPriceGuard) {
+                priceGuardCooldown.set(player.ea_id, Date.now());
+              }
+
+              await engine.setLastEvent(`Skipped ${player.name}: ${result.reason}`);
+
+            } else if (result.outcome === 'error') {
+              consecutiveFailures++;
+
+              await engine.log(`Buy error for ${player.name}: ${result.reason}`);
+
+              await engine.setLastEvent(`Error buying ${player.name}: ${result.reason}`);
+            }
+
+            if (!stopped()) await jitter();
           }
         }
       } else if (transferListFull) {
-        await engine.log(`Transfer list full (${transferListCount}/${EA_TRANSFER_LIST_MAX}) — skipping buy phase`);
+        await engine.log('Transfer list full — skipping buy phase');
       } else if (isCapped) {
         await engine.log('Daily cap reached — skipping buy phase');
       } else if (buyPlayers.length === 0) {
-        await engine.log(`No BUY actions from backend (TL: ${transferListCount}/${EA_TRANSFER_LIST_MAX}, ${actionsNeeded.length} total actions)`);
+        await engine.log(`No BUY actions from backend (${actionsNeeded.length} total actions)`);
       }
 
       if (stopped()) return;
 
-      // ── Inter-cycle pause ─────────────────────────────────────────────────
-      // If nothing productive can happen (TL full, no buy actions, capped),
-      // sleep until the earliest card expires instead of rescanning every 10s.
+      // ── Inter-cycle pause ──────────────────────────────────────────────
+      // Sleep until the earliest card expires instead of rescanning constantly.
       const nothingToBuy = buyPlayers.length === 0 || isCapped || transferListFull;
-      if (nothingToBuy && cycleResult && cycleResult.scanned.listed.length > 0) {
-        let earliestMs = Infinity;
-        for (const item of cycleResult.scanned.listed) {
-          if (item.timeRemaining) {
-            const ms = parseTimeRemainingMs(item.timeRemaining);
-            if (ms < earliestMs) earliestMs = ms;
+      if (nothingToBuy) {
+        // Try to find earliest expiry from active items
+        let earliestExpireMs = Infinity;
+        if (cycleResult.groups.active.length > 0) {
+          for (const item of cycleResult.groups.active) {
+            const remainSec = item.getAuctionData().expires; // seconds remaining, NOT a Unix timestamp
+            const remainMs = remainSec * 1000;
+            if (remainMs > 0 && remainMs < earliestExpireMs) {
+              earliestExpireMs = remainMs;
+            }
           }
         }
-        if (earliestMs < Infinity && earliestMs > 10_000) {
-          // Add a small buffer so the card is definitely expired when we rescan
-          const waitMs = earliestMs + 5_000;
+
+        if (earliestExpireMs < Infinity && earliestExpireMs > 10_000) {
+          const waitMs = earliestExpireMs + 5_000;
           const waitMin = Math.max(1, Math.round(waitMs / 60_000));
           await engine.setState('IDLE', `Waiting ~${waitMin}m for next card to expire`);
           await engine.log(`Nothing to buy — sleeping ${waitMin}m until next card expires`);
-          // Sleep in 30s chunks so we can respond to stop requests
           let remaining = waitMs;
+          while (remaining > 0 && !stopped()) {
+            const chunk = Math.min(remaining, 30_000);
+            await new Promise(r => setTimeout(r, chunk));
+            remaining -= chunk;
+          }
+        } else if (transferListFull) {
+          // TL full but no expiry data available — sleep 5 minutes
+          const FALLBACK_SLEEP_MS = 5 * 60_000;
+          await engine.setState('IDLE', 'Transfer list full — waiting 5m before rechecking');
+          await engine.log('No expiry data — sleeping 5m before rechecking transfer list');
+          let remaining = FALLBACK_SLEEP_MS;
           while (remaining > 0 && !stopped()) {
             const chunk = Math.min(remaining, 30_000);
             await new Promise(r => setTimeout(r, chunk));
@@ -488,10 +348,6 @@ export async function runAutomationLoop(
       }
     }
   } catch (err) {
-    if (err instanceof AutomationError) {
-      await engine.setError(err.message);
-      return;
-    }
     const msg = err instanceof Error ? err.message : String(err);
     await engine.setError(`Unexpected error: ${msg}`);
   }
