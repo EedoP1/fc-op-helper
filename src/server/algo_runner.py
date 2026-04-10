@@ -104,13 +104,18 @@ async def run_signal_engine(session_factory: async_sessionmaker) -> int:
         engine.strategy._buy_ts[pos.ea_id] = bt
         engine.strategy._peak_prices[pos.ea_id] = pos.peak_price
 
-    # Step 6: Replay all ticks
+    # Step 6: Replay all ticks — warm up strategy state on history,
+    # but only keep signals from the LAST (current) tick.
+    # The strategy needs the full price history to compute trends,
+    # but only the current market state should produce actionable signals.
+    last_ts = sorted_timestamps[-1]
     all_signals: list[tuple[datetime, str, int, int, int]] = []
     for ts in sorted_timestamps:
         ticks = timeline[ts]
         results = engine.process_tick(ticks, ts)
-        for action, ea_id, quantity, price in results:
-            all_signals.append((ts, action, ea_id, quantity, price))
+        if ts == last_ts:
+            for action, ea_id, quantity, price in results:
+                all_signals.append((ts, action, ea_id, quantity, price))
 
     if not all_signals:
         logger.info("No signals from engine run")

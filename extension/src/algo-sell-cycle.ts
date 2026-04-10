@@ -61,28 +61,59 @@ function findMatchingItem(items: EAItem[], signal: AlgoSignal): EAItem | null {
 
 /**
  * Discover the cheapest BIN for a player on the transfer market.
- * Searches by ea_id and finds the lowest buyNowPrice in results.
+ * Narrows down through price tiers (like the buy cycle) to find the
+ * true floor price, not just the cheapest in the first 20 results.
  */
 async function discoverLowestBin(
   ea_id: number,
   fallbackPrice: number,
 ): Promise<number> {
-  const criteria = buildCriteria(ea_id, MAX_PRICE);
-  const result = await searchMarket(criteria);
+  const MAX_NARROW_STEPS = 6;
+  const EA_PAGE_SIZE = 20;
+  let currentMax = MAX_PRICE;
+  let lastCheapest = fallbackPrice;
 
-  if (!result.success || result.items.length === 0) {
-    return fallbackPrice;
-  }
+  for (let step = 0; step < MAX_NARROW_STEPS; step++) {
+    const criteria = buildCriteria(ea_id, currentMax);
+    if (step > 0) await jitter(1000, 2000);
+    const result = await searchMarket(criteria);
 
-  let cheapest = Infinity;
-  for (const item of result.items) {
-    const bin = item.getAuctionData().buyNowPrice;
-    if (bin < cheapest) {
-      cheapest = bin;
+    if (!result.success) {
+      if (result.error === RATE_LIMIT_ERROR_CODE) {
+        await jitter(4000, 8000);
+        step--;
+        continue;
+      }
+      return lastCheapest;
+    }
+
+    if (result.items.length === 0) {
+      return lastCheapest;
+    }
+
+    let lowestBin = Infinity;
+    for (const item of result.items) {
+      const bin = item.getAuctionData().buyNowPrice;
+      if (bin < lowestBin) lowestBin = bin;
+    }
+    lastCheapest = lowestBin;
+
+    // Less than a full page — we've found the floor
+    if (result.items.length < EA_PAGE_SIZE) {
+      return lowestBin;
+    }
+
+    // Narrow: if lowest is same as current max, step below to check for cheaper
+    if (currentMax === lowestBin) {
+      const below = getBeforeStepValue(lowestBin);
+      if (below <= 0) return lowestBin;
+      currentMax = below;
+    } else {
+      currentMax = lowestBin;
     }
   }
 
-  return cheapest < Infinity ? cheapest : fallbackPrice;
+  return lastCheapest;
 }
 
 // ── Main Export ──────────────────────────────────────────────────────────────
@@ -115,11 +146,11 @@ export async function executeAlgoSellCycle(
     };
   }
 
-  // Step 3: Discover cheapest BIN via market search
+  // Step 3: Discover cheapest BIN via market search, undercut by 1 step
   await jitter(1000, 2000);
   const discoveredPrice = await discoverLowestBin(signal.ea_id, signal.reference_price);
-  const listBin = roundToNearestStep(discoveredPrice);
-  const listStart = roundToNearestStep(getBeforeStepValue(discoveredPrice));
+  const listBin = roundToNearestStep(getBeforeStepValue(discoveredPrice));
+  const listStart = roundToNearestStep(getBeforeStepValue(listBin));
 
   // Step 4: List the card
   await jitter(1000, 2000);

@@ -1517,6 +1517,26 @@ export function createOverlayPanel(): OverlayPanel {
     });
     parent.appendChild(budgetInput);
 
+    // ── Change budget link (shown when algo is active) ────────────────────
+    const changeBudgetLink = document.createElement('a');
+    changeBudgetLink.textContent = 'Change budget';
+    changeBudgetLink.href = '#';
+    Object.assign(changeBudgetLink.style, {
+      color: '#6cf',
+      fontSize: '12px',
+      display: 'none',
+      marginBottom: '8px',
+      cursor: 'pointer',
+    });
+    changeBudgetLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      budgetInput.dataset.forceShow = '1';
+      budgetInput.style.display = '';
+      changeBudgetLink.style.display = 'none';
+      startBtn.textContent = 'Update Budget';
+    });
+    parent.appendChild(changeBudgetLink);
+
     // ── Start / Stop buttons ──────────────────────────────────────────────
     const btnRow = document.createElement('div');
     Object.assign(btnRow.style, { display: 'flex', gap: '8px', marginBottom: '12px' });
@@ -1553,9 +1573,21 @@ export function createOverlayPanel(): OverlayPanel {
 
     // ── Status rendering helper ───────────────────────────────────────────
     function renderStatus(data: AlgoStatusData): void {
+      backendActive = data.is_active;
       const activeColor = data.is_active ? '#2ecc71' : '#e74c3c';
       const activeLabel = data.is_active ? 'ACTIVE' : 'INACTIVE';
-      const pnlColor = data.total_pnl >= 0 ? '#2ecc71' : '#e74c3c';
+      const pnlColor = data.realized_pnl >= 0 ? '#2ecc71' : '#e74c3c';
+
+      // Hide budget input when already active unless user toggled it open
+      if (data.is_active && !budgetInput.dataset.forceShow) {
+        budgetInput.style.display = 'none';
+        changeBudgetLink.style.display = '';
+        startBtn.textContent = 'Resume Algo';
+      } else {
+        budgetInput.style.display = '';
+        changeBudgetLink.style.display = 'none';
+        startBtn.textContent = data.is_active ? 'Update Budget' : 'Start Algo';
+      }
 
       statusDiv.innerHTML = '';
 
@@ -1597,7 +1629,7 @@ export function createOverlayPanel(): OverlayPanel {
       row2.appendChild(cashEl);
 
       const pnlEl = document.createElement('div');
-      pnlEl.innerHTML = `<div style="color:#aaa">P&L</div><div style="color:${pnlColor};font-weight:bold">${data.total_pnl >= 0 ? '+' : ''}${fmt(data.total_pnl)}</div>`;
+      pnlEl.innerHTML = `<div style="color:#aaa">P&L</div><div style="color:${pnlColor};font-weight:bold">${data.realized_pnl >= 0 ? '+' : ''}${fmt(data.realized_pnl)}</div>`;
       row2.appendChild(pnlEl);
       statusDiv.appendChild(row2);
 
@@ -1633,7 +1665,7 @@ export function createOverlayPanel(): OverlayPanel {
         topLine.style.marginBottom = '2px';
 
         const nameEl = document.createElement('span');
-        nameEl.textContent = `${pos.name} x${pos.quantity}`;
+        nameEl.textContent = `${pos.player_name} x${pos.quantity}`;
         Object.assign(nameEl.style, { color: '#6cf', fontWeight: 'bold', fontSize: '13px' });
         topLine.appendChild(nameEl);
 
@@ -1647,7 +1679,7 @@ export function createOverlayPanel(): OverlayPanel {
         const detailLine = document.createElement('div');
         detailLine.style.fontSize = '11px';
         detailLine.style.color = '#aaa';
-        detailLine.textContent = `Buy: ${fmt(pos.buy_price)} | Current: ${fmt(pos.current_price)} | Peak: ${fmt(pos.peak_price)}`;
+        detailLine.textContent = `Buy: ${fmt(pos.buy_price)} | Current: ${fmt(pos.current_price)}`;
         row.appendChild(detailLine);
 
         positionsDiv.appendChild(row);
@@ -1682,8 +1714,18 @@ export function createOverlayPanel(): OverlayPanel {
     // Poll status every 15s
     algoStatusIntervalId = setInterval(fetchStatus, 15_000);
 
+    // ── Track whether backend algo is active (updated by fetchStatus) ────
+    let backendActive = false;
+
     // ── Button handlers ───────────────────────────────────────────────────
     startBtn.addEventListener('click', () => {
+      if (backendActive) {
+        // Already active on backend — just start the automation loop
+        document.dispatchEvent(new CustomEvent('op-seller-algo-start'));
+        fetchStatus();
+        return;
+      }
+
       const budget = parseInt(budgetInput.value, 10);
       if (!budget || budget <= 0) {
         showErrorToast('Enter a valid budget before starting');
@@ -1699,7 +1741,6 @@ export function createOverlayPanel(): OverlayPanel {
           startBtn.textContent = 'Start Algo';
           if (res.type === 'ALGO_START_RESULT') {
             if (res.success) {
-              // Dispatch custom event for content script to start the loop
               document.dispatchEvent(new CustomEvent('op-seller-algo-start'));
               fetchStatus();
             } else {
@@ -1718,13 +1759,15 @@ export function createOverlayPanel(): OverlayPanel {
       stopBtn.disabled = true;
       stopBtn.textContent = 'Stopping...';
 
+      // Always stop the automation loop
+      document.dispatchEvent(new CustomEvent('op-seller-algo-stop'));
+
       chrome.runtime.sendMessage({ type: 'ALGO_STOP' } satisfies ExtensionMessage)
         .then((res: ExtensionMessage) => {
           stopBtn.disabled = false;
           stopBtn.textContent = 'Stop Algo';
           if (res.type === 'ALGO_STOP_RESULT') {
             if (res.success) {
-              document.dispatchEvent(new CustomEvent('op-seller-algo-stop'));
               fetchStatus();
             } else {
               showErrorToast(`Algo stop failed: ${res.error || 'Unknown error'}`);
@@ -1777,6 +1820,13 @@ export function createOverlayPanel(): OverlayPanel {
       if (activeTab !== 'algo' && algoStatusIntervalId !== null) {
         clearInterval(algoStatusIntervalId);
         algoStatusIntervalId = null;
+      }
+
+      // Hide the Start/Stop Automation BUTTON when on algo tab (prevents
+      // accidentally starting the OP loop), but keep the status + activity log visible.
+      const automationBtn = container.querySelector('.op-seller-automation-btn') as HTMLElement | null;
+      if (automationBtn) {
+        automationBtn.style.display = activeTab === 'algo' ? 'none' : '';
       }
 
       if (activeTab === 'actions') {

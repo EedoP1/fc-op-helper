@@ -280,6 +280,21 @@ async def get_pending_signal(request: Request):
             sig.status = "PENDING"
             sig.claimed_at = None
 
+        # Step 1b: expire signals older than 3 hours
+        ttl_threshold = now - timedelta(hours=3)
+        expired_result = await session.execute(
+            select(AlgoSignal).where(
+                AlgoSignal.status == "PENDING",
+                AlgoSignal.created_at <= ttl_threshold,
+            )
+        )
+        expired_count = 0
+        for sig in expired_result.scalars().all():
+            sig.status = "EXPIRED"
+            expired_count += 1
+        if expired_count:
+            logger.info("Expired %d stale signals (>3h old)", expired_count)
+
         # Step 2: find next PENDING signal
         pending_result = await session.execute(
             select(AlgoSignal)

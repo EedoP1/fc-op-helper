@@ -28,6 +28,10 @@ import {
 import { jitter } from './automation';
 import type { ExtensionMessage } from './messages';
 
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const RATE_LIMIT_ERROR_CODE = 460;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type AlgoSweepResult = {
@@ -74,27 +78,56 @@ function matchItemToPosition(
 
 /**
  * Discover current lowest BIN for a player via transfer market search.
+ * Narrows down through price tiers to find the true floor.
  */
 async function discoverLowestBin(
   ea_id: number,
   fallbackPrice: number,
 ): Promise<number> {
-  const criteria = buildCriteria(ea_id, MAX_PRICE);
-  const result = await searchMarket(criteria);
+  const MAX_NARROW_STEPS = 6;
+  const EA_PAGE_SIZE = 20;
+  let currentMax = MAX_PRICE;
+  let lastCheapest = fallbackPrice;
 
-  if (!result.success || result.items.length === 0) {
-    return fallbackPrice;
-  }
+  for (let step = 0; step < MAX_NARROW_STEPS; step++) {
+    const criteria = buildCriteria(ea_id, currentMax);
+    if (step > 0) await jitter(1000, 2000);
+    const result = await searchMarket(criteria);
 
-  let cheapest = Infinity;
-  for (const item of result.items) {
-    const bin = item.getAuctionData().buyNowPrice;
-    if (bin < cheapest) {
-      cheapest = bin;
+    if (!result.success) {
+      if (result.error === RATE_LIMIT_ERROR_CODE) {
+        await jitter(4000, 8000);
+        step--;
+        continue;
+      }
+      return lastCheapest;
+    }
+
+    if (result.items.length === 0) {
+      return lastCheapest;
+    }
+
+    let lowestBin = Infinity;
+    for (const item of result.items) {
+      const bin = item.getAuctionData().buyNowPrice;
+      if (bin < lowestBin) lowestBin = bin;
+    }
+    lastCheapest = lowestBin;
+
+    if (result.items.length < EA_PAGE_SIZE) {
+      return lowestBin;
+    }
+
+    if (currentMax === lowestBin) {
+      const below = getBeforeStepValue(lowestBin);
+      if (below <= 0) return lowestBin;
+      currentMax = below;
+    } else {
+      currentMax = lowestBin;
     }
   }
 
-  return cheapest < Infinity ? cheapest : fallbackPrice;
+  return lastCheapest;
 }
 
 // ── Main Export ──────────────────────────────────────────────────────────────
@@ -182,8 +215,8 @@ export async function runAlgoTransferListSweep(
 
     if (stopped()) return result;
 
-    const listBin = roundToNearestStep(lowestBin);
-    const listStart = roundToNearestStep(getBeforeStepValue(lowestBin));
+    const listBin = roundToNearestStep(getBeforeStepValue(lowestBin));
+    const listStart = roundToNearestStep(getBeforeStepValue(listBin));
 
     // Relist each expired card individually at current market price
     for (const expItem of expiredItems) {
