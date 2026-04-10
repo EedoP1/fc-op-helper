@@ -26,6 +26,10 @@ const emailInput = document.getElementById('email') as HTMLInputElement;
 const passwordInput = document.getElementById('password') as HTMLInputElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const credsStatus = document.getElementById('creds-status') as HTMLSpanElement;
+const budgetInput = document.getElementById('budget') as HTMLInputElement;
+const startBtn = document.getElementById('start-btn') as HTMLButtonElement;
+const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement;
+const algoStatus = document.getElementById('algo-status') as HTMLDivElement;
 const statusDot = document.getElementById('status-dot') as HTMLDivElement;
 const statusLabel = document.getElementById('status-label') as HTMLSpanElement;
 const statusDetail = document.getElementById('status-detail') as HTMLDivElement;
@@ -122,6 +126,63 @@ async function refreshStatus(): Promise<void> {
     statusDetail.style.color = '#888';
   }
 }
+
+// ── Algo Start / Stop ───────────────────────────────────────────────────────
+
+startBtn.addEventListener('click', async () => {
+  const budget = parseInt(budgetInput.value, 10);
+  if (!budget || budget <= 0) {
+    algoStatus.textContent = 'Enter a valid budget';
+    algoStatus.style.color = '#e74c3c';
+    return;
+  }
+
+  startBtn.disabled = true;
+  startBtn.textContent = 'Starting...';
+  algoStatus.textContent = '';
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'ALGO_START', budget });
+    if (res?.type === 'ALGO_START_RESULT' && res.success) {
+      algoStatus.textContent = `Started with ${budget.toLocaleString()} budget`;
+      algoStatus.style.color = '#2ecc71';
+      budgetInput.value = '';
+    } else {
+      algoStatus.textContent = `Failed: ${res?.error || 'Unknown error'}`;
+      algoStatus.style.color = '#e74c3c';
+    }
+  } catch (err) {
+    algoStatus.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+    algoStatus.style.color = '#e74c3c';
+  }
+
+  startBtn.disabled = false;
+  startBtn.textContent = 'Start Algo';
+  refreshStatus();
+});
+
+stopBtn.addEventListener('click', async () => {
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping...';
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'ALGO_STOP' });
+    if (res?.type === 'ALGO_STOP_RESULT' && res.success) {
+      algoStatus.textContent = 'Algo stopped';
+      algoStatus.style.color = '#888';
+    } else {
+      algoStatus.textContent = `Failed: ${res?.error || 'Unknown error'}`;
+      algoStatus.style.color = '#e74c3c';
+    }
+  } catch (err) {
+    algoStatus.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+    algoStatus.style.color = '#e74c3c';
+  }
+
+  stopBtn.disabled = false;
+  stopBtn.textContent = 'Stop Algo';
+  refreshStatus();
+});
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
