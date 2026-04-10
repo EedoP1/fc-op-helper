@@ -813,9 +813,13 @@ async def run_cli(
 @click.option("--source", default="price_history", type=click.Choice(["price_history", "market_snapshots"]),
               help="Data source: price_history (FUTBIN daily) or market_snapshots (real hourly)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, source, db_url):
+@click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG logging for strategy decisions")
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, source, db_url, verbose):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if verbose:
+        logging.getLogger("src.algo.strategies").setLevel(logging.DEBUG)
+        logging.getLogger("src.algo.models").setLevel(logging.DEBUG)
     asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price, source=source))
 
 

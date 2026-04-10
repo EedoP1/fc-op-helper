@@ -1,6 +1,9 @@
 """Domain models for the algo trading backtester."""
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -76,6 +79,10 @@ class Portfolio:
         """Execute a buy. Deducts cash, creates position."""
         cost = price * quantity
         if cost > self._cash:
+            logger.debug(
+                f"[{timestamp}] BUY REJECTED (insufficient funds): ea_id={ea_id} "
+                f"qty={quantity} price={price:,} cost={cost:,} cash={self._cash:,}"
+            )
             return  # skip if insufficient funds
         self._cash -= cost
         self._positions.append(Position(

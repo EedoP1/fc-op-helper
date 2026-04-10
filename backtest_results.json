@@ -1,0 +1,145 @@
+[
+  {
+    "strategy_name": "promo_dip_buy",
+    "params": "{\"trend_pct\": 0.21, \"trend_lookback\": 12, \"snapshot_hour\": 176, \"snapshot_top_n\": 3, \"snapshot_floor\": 0.0, \"sell_lookback\": 24, \"sell_trend_pct\": 0.05, \"sell_confirm_hours\": 3, \"stop_delay_hours\": 48, \"max_hold_hours\": 336, \"max_age_days\": 10, \"min_price\": 12000, \"max_price\": 1500000, \"snapshot_max_pct\": 0.2, \"tick_max_pct\": 0.2}",
+    "started_budget": 1000000,
+    "final_budget": 1780975,
+    "total_pnl": 780975,
+    "total_trades": 13,
+    "win_rate": 1.0,
+    "max_drawdown": 0.99375,
+    "sharpe_ratio": 1.2329401037210126,
+    "trades": [
+      {
+        "futbin_id": 50539058,
+        "ea_id": 50539058,
+        "qty": 2,
+        "buy_price": 50000,
+        "sell_price": 60000,
+        "net_profit": 14000,
+        "buy_time": "2026-03-28T08:00:00+00:00",
+        "sell_time": "2026-03-31T01:00:00+00:00"
+      },
+      {
+        "futbin_id": 67342712,
+        "ea_id": 67342712,
+        "qty": 12,
+        "buy_price": 16000,
+        "sell_price": 25000,
+        "net_profit": 93000,
+        "buy_time": "2026-03-28T02:00:00+00:00",
+        "sell_time": "2026-03-31T11:00:00+00:00"
+      },
+      {
+        "futbin_id": 67333022,
+        "ea_id": 67333022,
+        "qty": 4,
+        "buy_price": 47750,
+        "sell_price": 69500,
+        "net_profit": 73100,
+        "buy_time": "2026-03-28T02:00:00+00:00",
+        "sell_time": "2026-03-31T14:00:00+00:00"
+      },
+      {
+        "futbin_id": 84133758,
+        "ea_id": 84133758,
+        "qty": 13,
+        "buy_price": 15000,
+        "sell_price": 20000,
+        "net_profit": 52000,
+        "buy_time": "2026-03-28T02:00:00+00:00",
+        "sell_time": "2026-03-31T17:00:00+00:00"
+      },
+      {
+        "futbin_id": 67351282,
+        "ea_id": 67351282,
+        "qty": 1,
+        "buy_price": 18250,
+        "sell_price": 19500,
+        "net_profit": 275,
+        "buy_time": "2026-03-29T13:00:00+00:00",
+        "sell_time": "2026-04-01T08:00:00+00:00"
+      },
+      {
+        "futbin_id": 67312127,
+        "ea_id": 67312127,
+        "qty": 1,
+        "buy_price": 200000,
+        "sell_price": 262000,
+        "net_profit": 48900,
+        "buy_time": "2026-03-28T04:00:00+00:00",
+        "sell_time": "2026-04-02T13:00:00+00:00"
+      },
+      {
+        "futbin_id": 50545532,
+        "ea_id": 50545532,
+        "qty": 6,
+        "buy_price": 16250,
+        "sell_price": 28000,
+        "net_profit": 62100,
+        "buy_time": "2026-03-28T03:00:00+00:00",
+        "sell_time": "2026-04-02T16:00:00+00:00"
+      },
+      {
+        "futbin_id": 50579813,
+        "ea_id": 50579813,
+        "qty": 12,
+        "buy_price": 21500,
+        "sell_price": 26750,
+        "net_profit": 46950,
+        "buy_time": "2026-04-04T02:00:00+00:00",
+        "sell_time": "2026-04-06T04:00:00+00:00"
+      },
+      {
+        "futbin_id": 67375118,
+        "ea_id": 67375118,
+        "qty": 16,
+        "buy_price": 16750,
+        "sell_price": 18500,
+        "net_profit": 13200,
+        "buy_time": "2026-04-04T02:00:00+00:00",
+        "sell_time": "2026-04-06T04:00:00+00:00"
+      },
+      {
+        "futbin_id": 67354461,
+        "ea_id": 67354461,
+        "qty": 16,
+        "buy_price": 16500,
+        "sell_price": 19500,
+        "net_profit": 32400,
+        "buy_time": "2026-04-04T02:00:00+00:00",
+        "sell_time": "2026-04-06T11:00:00+00:00"
+      },
+      {
+        "futbin_id": 50588993,
+        "ea_id": 50588993,
+        "qty": 17,
+        "buy_price": 15500,
+        "sell_price": 24500,
+        "net_profit": 132175,
+        "buy_time": "2026-04-04T19:00:00+00:00",
+        "sell_time": "2026-04-08T05:00:00+00:00"
+      },
+      {
+        "futbin_id": 50575852,
+        "ea_id": 50575852,
+        "qty": 11,
+        "buy_price": 25000,
+        "sell_price": 45500,
+        "net_profit": 200475,
+        "buy_time": "2026-04-04T18:00:00+00:00",
+        "sell_time": "2026-04-08T23:00:00+00:00"
+      },
+      {
+        "futbin_id": 50601471,
+        "ea_id": 50601471,
+        "qty": 2,
+        "buy_price": 199000,
+        "sell_price": 216000,
+        "net_profit": 12400,
+        "buy_time": "2026-04-06T04:00:00+00:00",
+        "sell_time": "2026-04-09T07:00:00+00:00"
+      }
+    ]
+  }
+]

@@ -29,8 +29,6 @@ from src.server.db import Base
 logger = logging.getLogger(__name__)
 
 _FUTBIN_BASE = "https://www.futbin.com"
-_PLAYERS_LIST_URL = _FUTBIN_BASE + "/players?player_rating=75-99&page={page}"
-_PLAYER_MARKET_URL = _FUTBIN_BASE + "/26/player/{futbin_id}/{slug}/market"
 
 # Delay between page loads to avoid detection (seconds)
 _PAGE_DELAY = 1.0
@@ -41,8 +39,17 @@ _PAGE_POOL_SIZE = 3
 # Regex to extract EA base ID from player image URL
 _EA_ID_RE = re.compile(r"players/p?(\d{4,})")
 
-# Regex to extract futbin_id and slug from player links
-_PLAYER_LINK_RE = re.compile(r'/26/player/(\d+)/([a-z0-9-]+)')
+
+def _players_list_url(game: int, page: int, min_rating: int = 75) -> str:
+    return f"{_FUTBIN_BASE}/{game}/players?player_rating={min_rating}-99&page={page}"
+
+
+def _player_market_url(game: int, futbin_id: int, slug: str) -> str:
+    return f"{_FUTBIN_BASE}/{game}/player/{futbin_id}/{slug}/market"
+
+
+def _player_link_re(game: int) -> re.Pattern:
+    return re.compile(rf'/{game}/player/(\d+)/([a-z0-9-]+)')
 
 
 def parse_futbin_price_data(data_attr: str) -> list[tuple[int, int]]:
@@ -89,11 +96,13 @@ async def _create_browser(pool_size: int = _PAGE_POOL_SIZE):
     return pw, browser, context, pages, page_pool
 
 
-async def scrape_player_list(page, max_pages: int = 999, max_players: int = 0) -> list[dict]:
-    """Scrape FUTBIN player list to get all 75+ rated player URLs.
+async def scrape_player_list(page, game: int = 26, min_rating: int = 75, max_pages: int = 999, max_players: int = 0) -> list[dict]:
+    """Scrape FUTBIN player list to get all players above min_rating.
 
     Args:
         page: Playwright page instance.
+        game: Game version (25 or 26).
+        min_rating: Minimum player rating to include.
         max_pages: Max list pages to crawl.
         max_players: Stop after collecting this many players (0 = no limit).
 
@@ -101,9 +110,10 @@ async def scrape_player_list(page, max_pages: int = 999, max_players: int = 0) -
     """
     players = []
     seen_ids = set()
+    link_re = _player_link_re(game)
 
     for page_num in range(1, max_pages + 1):
-        url = _PLAYERS_LIST_URL.format(page=page_num)
+        url = _players_list_url(game, page_num, min_rating)
         logger.info(f"Fetching player list page {page_num}...")
 
         await page.goto(url, timeout=30000)
@@ -121,7 +131,7 @@ async def scrape_player_list(page, max_pages: int = 999, max_players: int = 0) -
                 break
 
         # Extract player links
-        links = _PLAYER_LINK_RE.findall(content)
+        links = link_re.findall(content)
         if not links:
             logger.info(f"No player links found on page {page_num}, done")
             break
@@ -150,12 +160,12 @@ async def scrape_player_list(page, max_pages: int = 999, max_players: int = 0) -
     return players
 
 
-async def scrape_player_prices(page, futbin_id: int, slug: str) -> dict | None:
+async def scrape_player_prices(page, futbin_id: int, slug: str, game: int = 26) -> dict | None:
     """Scrape a single player's market page for price history.
 
     Returns dict with ea_id, futbin_id, name, prices or None on failure.
     """
-    url = f"{_FUTBIN_BASE}/26/player/{futbin_id}/{slug}/market"
+    url = _player_market_url(game, futbin_id, slug)
 
     try:
         await page.goto(url, timeout=30000)
@@ -243,6 +253,8 @@ async def scrape_all(
     db_url: str = DATABASE_URL,
     limit: int = 0,
     concurrency: int = _PAGE_POOL_SIZE,
+    game: int = 26,
+    min_rating: int = 75,
 ):
     """Full scrape pipeline: list players → visit each market page → store prices.
 
@@ -250,6 +262,8 @@ async def scrape_all(
         db_url: Database connection URL.
         limit: Max players to scrape (0 = all). Use 10 for POC.
         concurrency: Number of browser pages for parallel scraping.
+        game: Game version (25 or 26).
+        min_rating: Minimum player rating to include.
     """
     engine = create_async_engine(db_url)
 
@@ -260,59 +274,134 @@ async def scrape_all(
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    pw, browser, context, pages, page_pool = await _create_browser(pool_size=concurrency)
+    # Load already-scraped futbin_ids to skip on re-runs
+    already_scraped: set[int] = set()
+    async with session_factory() as session:
+        result = await session.execute(text("SELECT DISTINCT futbin_id FROM price_history WHERE futbin_id IS NOT NULL"))
+        already_scraped = {row[0] for row in result.fetchall()}
+    if already_scraped:
+        logger.info(f"Skipping {len(already_scraped)} already-scraped players")
+
+    # Use concurrency+1 pages: 1 dedicated to listing, rest for market scraping
+    pw, browser, context, pages, page_pool = await _create_browser(pool_size=concurrency + 1)
 
     try:
-        # Phase 1: Get player list (use first page from pool)
+        # Dedicated list page (not in the pool used by workers)
         list_page = await page_pool.get()
-        logger.info("Phase 1: Scraping player list from FUTBIN...")
-        players = await scrape_player_list(list_page, max_pages=999, max_players=limit)
-        logger.info(f"Found {len(players)} players")
-        page_pool.put_nowait(list_page)
 
-        if limit > 0 and len(players) > limit:
-            players = players[:limit]
-
-        if limit > 0:
-            logger.info(f"POC mode: scraping {len(players)} players")
-
-        # Phase 2: Scrape each player's market page using page pool
-        logger.info(
-            f"Phase 2: Scraping price history for {len(players)} players "
-            f"({concurrency} concurrent pages)..."
-        )
+        # Player queue: list producer feeds this, workers consume it
+        player_queue: asyncio.Queue = asyncio.Queue()
         total_inserted = 0
         success = 0
         failed = 0
+        skipped = 0
         counter = 0
+        total_expected = 0
+        listing_done = asyncio.Event()
 
-        async def scrape_worker(player: dict):
-            """Checkout a page from pool, scrape, return page."""
+        async def list_producer():
+            """Scrape player list pages and feed players into the queue."""
+            nonlocal total_expected, skipped
+            logger.info(f"Listing players from FUTBIN (FC{game}, {min_rating}+ rated)...")
+            seen_ids = set()
+            link_re = _player_link_re(game)
+            collected = 0
+
+            for page_num in range(1, 1000):
+                url = _players_list_url(game, page_num, min_rating)
+                logger.info(f"Fetching player list page {page_num}...")
+
+                await list_page.goto(url, timeout=30000)
+                await asyncio.sleep(_PAGE_DELAY)
+
+                content = await list_page.content()
+
+                if "Just a moment" in content:
+                    for wait in [10, 20, 30]:
+                        logger.warning(f"Cloudflare challenge — waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                        content = await list_page.content()
+                        if "Just a moment" not in content:
+                            break
+                    else:
+                        # All retries exhausted, try reloading the page
+                        logger.warning("Cloudflare still blocking, reloading page...")
+                        await list_page.goto(url, timeout=30000)
+                        await asyncio.sleep(15)
+                        content = await list_page.content()
+                        if "Just a moment" in content:
+                            logger.error("Cloudflare challenge not resolved, stopping listing")
+                            break
+
+                links = link_re.findall(content)
+                if not links:
+                    logger.info(f"No player links found on page {page_num}, done")
+                    break
+
+                new_count = 0
+                skip_count = 0
+                for futbin_id, slug in links:
+                    futbin_id = int(futbin_id)
+                    if futbin_id not in seen_ids:
+                        seen_ids.add(futbin_id)
+                        if futbin_id in already_scraped:
+                            skip_count += 1
+                            skipped += 1
+                            continue
+                        await player_queue.put({"futbin_id": futbin_id, "slug": slug})
+                        collected += 1
+                        new_count += 1
+
+                logger.info(f"Page {page_num}: {new_count} new, {skip_count} skipped, {collected} total queued")
+
+                if new_count == 0:
+                    break
+
+                if limit > 0 and collected >= limit:
+                    logger.info(f"Reached {limit} player limit, stopping list scrape")
+                    break
+
+            total_expected = collected
+            listing_done.set()
+            logger.info(f"Listing complete: {collected} players queued for scraping")
+
+        async def scrape_worker_loop(worker_id: int):
+            """Pull players from queue and scrape their market pages."""
             nonlocal total_inserted, success, failed, counter
             page = await page_pool.get()
             try:
-                counter += 1
-                idx = counter
-                logger.info(
-                    f"[{idx}/{len(players)}] Scraping {player['slug']}..."
-                )
-                data = await scrape_player_prices(
-                    page, player["futbin_id"], player["slug"],
-                )
+                while True:
+                    try:
+                        player = player_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        if listing_done.is_set():
+                            break
+                        await asyncio.sleep(0.5)
+                        continue
 
-                if data:
-                    inserted = await save_prices(session_factory, data)
-                    total_inserted += inserted
-                    success += 1
-                else:
-                    failed += 1
+                    counter += 1
+                    idx = counter
+                    total_label = f"/{total_expected}" if listing_done.is_set() else "+?"
+                    logger.info(f"[{idx}{total_label}] Scraping {player['slug']}...")
+
+                    data = await scrape_player_prices(
+                        page, player["futbin_id"], player["slug"], game=game,
+                    )
+
+                    if data:
+                        inserted = await save_prices(session_factory, data)
+                        total_inserted += inserted
+                        success += 1
+                    else:
+                        failed += 1
             finally:
                 page_pool.put_nowait(page)
 
-        # Process players in batches of concurrency size
-        for i in range(0, len(players), concurrency):
-            batch = players[i : i + concurrency]
-            await asyncio.gather(*[scrape_worker(p) for p in batch])
+        # Run listing + workers concurrently
+        await asyncio.gather(
+            list_producer(),
+            *[scrape_worker_loop(i) for i in range(concurrency)],
+        )
 
         logger.info(
             f"Scrape complete: {success} players, {failed} failed, "
@@ -329,16 +418,18 @@ async def scrape_all(
 
 
 @click.command()
+@click.option("--game", default=26, help="Game version (25 or 26)")
+@click.option("--min-rating", default=75, help="Minimum player rating (default 75)")
 @click.option("--limit", default=0, help="Max players to scrape (0 = all, 10 = POC)")
 @click.option("--concurrency", default=_PAGE_POOL_SIZE, help="Number of browser pages for parallel scraping")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
-def main(limit: int, concurrency: int, db_url: str):
-    """Scrape full price history from FUTBIN for all 75+ rated players."""
+def main(game: int, min_rating: int, limit: int, concurrency: int, db_url: str):
+    """Scrape full price history from FUTBIN for all players above min rating."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    asyncio.run(scrape_all(db_url=db_url, limit=limit, concurrency=concurrency))
+    asyncio.run(scrape_all(db_url=db_url, limit=limit, concurrency=concurrency, game=game, min_rating=min_rating))
 
 
 if __name__ == "__main__":

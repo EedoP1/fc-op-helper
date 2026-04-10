@@ -376,18 +376,70 @@ async function attemptLogin(tabId: number): Promise<void> {
   }
 
   if (url.includes('signin.ea.com')) {
-    // The ea-signin.content.ts content script handles form filling on signin.ea.com.
-    // It auto-injects on page load, reads credentials from storage, and fills the form
-    // via <script> tag injection (jQuery in MAIN world).
-    // Master just waits for the content script to complete login, then checks again.
-    console.log('[algo-master] On signin.ea.com — content script will handle login');
-    chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 8 / 60 });
+    // Wait for page to fully load before interacting
+    const loaded = await waitForPageLoad(tabId);
+    if (!loaded) {
+      console.log('[algo-master] Signin page still loading — retrying');
+      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
+      return;
+    }
+
+    // Detect which step by checking if password input is VISIBLE
+    // (EA has both inputs on every step but hides the inactive one with display:none)
+    console.log('[algo-master] On signin.ea.com — filling form via executeScript');
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: fillSigninForm,
+        args: [credentials.email, credentials.password],
+      });
+    } catch (err) {
+      console.error('[algo-master] Signin form fill failed:', err);
+    }
+    // Schedule alarm to continue after page advances
+    chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
     return;
   }
 
   // Unknown page — wait and retry
   console.log(`[algo-master] Unknown page during login: ${url}`);
   chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
+}
+
+/**
+ * Injected into signin.ea.com — fills email or password based on which is visible,
+ * then clicks #logInBtn. Handles both login steps in one function.
+ *
+ * EA's signin page has BOTH email and password inputs on every step but hides
+ * the inactive one with display:none. Must check visibility (offsetWidth/Height)
+ * to determine which step we're on.
+ *
+ * Uses jQuery $.val() + $.trigger() because the form framework requires it.
+ *
+ * IMPORTANT: This function is serialized by chrome.scripting.executeScript.
+ * All logic must be inline — no external function references.
+ */
+function fillSigninForm(email: string, password: string): void {
+  const jq = (window as any).$ || (window as any).jQuery;
+  if (!jq) return;
+
+  const pwInput = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+  const pwVisible = pwInput && pwInput.offsetWidth > 0 && pwInput.offsetHeight > 0;
+
+  if (pwVisible) {
+    // Step 2: Password page
+    jq('input[type="password"]').val(password).trigger('input').trigger('change');
+    setTimeout(() => {
+      jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
+    }, 500);
+  } else {
+    // Step 1: Email page
+    jq('#email').val(email).trigger('input').trigger('change');
+    setTimeout(() => {
+      jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
+    }, 500);
+  }
 }
 
 /** Injected into web app — clicks the "Login" button via mousedown+mouseup+click. */

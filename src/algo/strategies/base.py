@@ -21,6 +21,14 @@ class Strategy(ABC):
         """
         pass
 
+    def set_created_at_map(self, created_at_map: dict):
+        """Called by the engine with {ea_id: created_at} for real card age.
+
+        When available, strategies should use this instead of counting ticks.
+        Default implementation does nothing.
+        """
+        pass
+
     def on_tick(
         self, ea_id: int, price: int, timestamp: datetime, portfolio: Portfolio,
     ) -> list[Signal]:

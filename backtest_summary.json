@@ -1,0 +1,13 @@
+[
+  {
+    "strategy_name": "promo_dip_buy",
+    "params": "{\"trend_pct\": 0.21, \"trend_lookback\": 12, \"snapshot_hour\": 176, \"snapshot_top_n\": 3, \"snapshot_floor\": 0.0, \"sell_lookback\": 24, \"sell_trend_pct\": 0.05, \"sell_confirm_hours\": 3, \"stop_delay_hours\": 48, \"max_hold_hours\": 336, \"max_age_days\": 10, \"min_price\": 12000, \"max_price\": 1500000, \"snapshot_max_pct\": 0.2, \"tick_max_pct\": 0.2}",
+    "started_budget": 1000000,
+    "final_budget": 1780975,
+    "total_pnl": 780975,
+    "total_trades": 13,
+    "win_rate": 1.0,
+    "max_drawdown": 0.99375,
+    "sharpe_ratio": 1.2329401037210126
+  }
+]
