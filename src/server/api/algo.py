@@ -434,3 +434,32 @@ async def position_sold(ea_id: int, payload: PositionSoldPayload, request: Reque
         ea_id, payload.quantity, payload.sell_price, pnl,
     )
     return {"status": "ok", "pnl": pnl}
+
+
+class PositionRelistPayload(BaseModel):
+    """Payload for POST /api/v1/algo/positions/{ea_id}/relist."""
+
+    price: int
+    quantity: int
+
+
+@router.post("/algo/positions/{ea_id}/relist", status_code=200)
+async def position_relist(ea_id: int, payload: PositionRelistPayload, request: Request):
+    """Record that an expired algo card was relisted at a new price."""
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        result = await session.execute(
+            select(AlgoPosition).where(AlgoPosition.ea_id == ea_id)
+        )
+        pos = result.scalar_one_or_none()
+
+        if pos is None:
+            raise HTTPException(status_code=404, detail=f"No position for ea_id={ea_id}")
+
+        now = datetime.utcnow()
+        pos.listed_price = payload.price
+        pos.listed_at = now
+        await session.commit()
+
+    logger.info("Algo position relisted: ea_id=%d price=%d", ea_id, payload.price)
+    return {"status": "ok"}

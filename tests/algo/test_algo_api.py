@@ -351,3 +351,40 @@ async def test_position_sold_not_found(client, db):
         json={"sell_price": 45000, "quantity": 1},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_position_relist(client, db):
+    """POST /algo/positions/{ea_id}/relist updates listed_price and listed_at."""
+    async with db() as session:
+        now = datetime.utcnow()
+        session.add(AlgoPosition(
+            ea_id=11001, quantity=5, buy_price=25000,
+            buy_time=now, peak_price=30000,
+            listed_at=now, listed_price=45000,
+        ))
+        await session.commit()
+
+    resp = await client.post(
+        "/api/v1/algo/positions/11001/relist",
+        json={"price": 42000, "quantity": 5},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    async with db() as session:
+        pos = (await session.execute(select(AlgoPosition))).scalar_one()
+
+    assert pos.listed_price == 42000
+    assert pos.listed_at is not None
+    assert pos.quantity == 5
+
+
+@pytest.mark.asyncio
+async def test_position_relist_not_found(client, db):
+    """POST /algo/positions/{ea_id}/relist returns 404 if no position."""
+    resp = await client.post(
+        "/api/v1/algo/positions/99999/relist",
+        json={"price": 42000, "quantity": 5},
+    )
+    assert resp.status_code == 404
