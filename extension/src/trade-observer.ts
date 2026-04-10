@@ -5,20 +5,17 @@
  * trade status (listed, sold, expired, bought) and price. Designed to be
  * called from the content script when the user is on the Transfer List page.
  *
- * All CSS selectors are imported from selectors.ts (AUTO-08 requirement).
- * No hardcoded selector strings in this module.
- *
  * Pure function — no side effects. Designed for unit testing with jsdom.
  */
-import {
-  TRANSFER_LIST_CONTAINER,
-  TRANSFER_LIST_ITEM,
-  ITEM_STATUS_LABEL,
-  ITEM_PLAYER_NAME,
-  ITEM_BIN_PRICE,
-  ITEM_RATING,
-  ITEM_POSITION,
-} from './selectors';
+
+// Inlined selectors — trade-observer is a passive DOM reader for the overlay panel.
+const TRANSFER_LIST_CONTAINER = '.ut-transfer-list-view';
+const TRANSFER_LIST_ITEM = '.listFUTItem';
+const ITEM_STATUS_LABEL = '.auction-state .time';
+const ITEM_PLAYER_NAME = '.name';
+const ITEM_BIN_PRICE = '.auction .auctionValue:nth-child(3) .value';
+const ITEM_RATING = '.rating';
+const ITEM_POSITION = '.position';
 
 /**
  * A single detected item from the Transfer List DOM.
