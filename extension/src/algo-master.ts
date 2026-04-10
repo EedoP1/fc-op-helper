@@ -366,6 +366,14 @@ async function attemptLogin(tabId: number): Promise<void> {
   }
 
   if (url.includes('signin.ea.com')) {
+    // Wait for page to fully load before interacting with the form
+    const loaded = await waitForPageLoad(tabId);
+    if (!loaded) {
+      console.log('[algo-master] Signin page still loading — retrying');
+      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
+      return;
+    }
+
     // On EA sign-in page — detect which step we're on
     const hasPasswordField = await checkForPasswordField(tabId);
 
@@ -441,8 +449,8 @@ function clickWebAppLoginButton(): void {
 
 /** Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn). */
 function fillEmailAndClickNext(email: string): void {
-  const input = document.querySelector<HTMLInputElement>('input[placeholder*="email"]');
-  if (!input) return;
+  const input = document.querySelector('input[placeholder*="email"]') as HTMLInputElement | null;
+  if (!input) { console.error('[algo-master] Email input not found'); return; }
 
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   if (setter) {
@@ -450,6 +458,9 @@ function fillEmailAndClickNext(email: string): void {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
+
+  // Verify the value was set before clicking
+  if (!input.value) { console.error('[algo-master] Email value not set'); return; }
 
   const nextBtn = document.getElementById('logInBtn');
   if (nextBtn) {
@@ -461,8 +472,8 @@ function fillEmailAndClickNext(email: string): void {
 
 /** Injected into signin.ea.com step 2 — fills password, clicks SIGN IN (#logInBtn). */
 function fillPasswordAndClickSignIn(password: string): void {
-  const input = document.querySelector<HTMLInputElement>('input[type="password"]');
-  if (!input) return;
+  const input = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+  if (!input) { console.error('[algo-master] Password input not found'); return; }
 
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   if (setter) {
@@ -470,6 +481,9 @@ function fillPasswordAndClickSignIn(password: string): void {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
+
+  // Verify the value was set before clicking
+  if (!input.value) { console.error('[algo-master] Password value not set'); return; }
 
   const signInBtn = document.getElementById('logInBtn');
   if (signInBtn) {
