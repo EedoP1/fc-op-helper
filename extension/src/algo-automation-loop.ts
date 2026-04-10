@@ -5,17 +5,19 @@
  * Runs continuously until stopped via the AutomationEngine abort signal.
  *
  * Loop:
- *   1. Poll for signal via ALGO_SIGNAL_REQUEST
- *   2. If null: wait 30-60s, continue
- *   3. If BUY: loop signal.quantity times calling executeAlgoBuyCycle, report completion
- *   4. If SELL: loop signal.quantity times calling executeAlgoSellCycle, report completion
- *   5. Jitter 3-5s between signals
- *   6. Respect stopped() checks between every step
+ *   Phase A: If positions are listed, sweep TL for sold/expired
+ *   Phase B: Poll for signal via ALGO_SIGNAL_REQUEST
+ *     - If null: wait 30-60s, continue
+ *   Phase C: Execute signal
+ *     - BUY: executeAlgoBuyCycle, report 'bought'
+ *     - SELL: executeAlgoSellCycle, report 'listed' (position stays alive)
+ *   Jitter 3-5s between signals
  */
 import { AutomationEngine, AutomationError, jitter } from './automation';
 import { executeAlgoBuyCycle, type AlgoBuyCycleResult } from './algo-buy-cycle';
 import { executeAlgoSellCycle, type AlgoSellCycleResult } from './algo-sell-cycle';
-import type { ExtensionMessage, AlgoSignal } from './messages';
+import { runAlgoTransferListSweep } from './algo-transfer-list-sweep';
+import type { ExtensionMessage, AlgoSignal, AlgoStatusData } from './messages';
 
 /**
  * Run the algo trading automation loop until stopped or error.
@@ -32,7 +34,39 @@ export async function runAlgoAutomationLoop(
 
   try {
     while (!stopped()) {
-      // ── Poll for next signal ───────────────────────────────────────────
+      // ── Phase A: Transfer List Sweep ────────────────────────────────────
+      // Check if any positions are listed (have listed_price set).
+      // If so, sweep the TL for sold/expired cards.
+      try {
+        const statusRes = await sendMessage({ type: 'ALGO_STATUS_REQUEST' } satisfies ExtensionMessage);
+        if (statusRes?.type === 'ALGO_STATUS_RESULT' && statusRes.data) {
+          const statusData: AlgoStatusData = statusRes.data;
+          // Positions with listed_price set are on the transfer list
+          const listedPositions = statusData.positions.filter(p => p.listed_price != null);
+          if (listedPositions.length > 0 && !stopped()) {
+            await engine.setState('SCANNING', 'Sweeping transfer list');
+            const positions = listedPositions.map(p => ({
+              ea_id: p.ea_id,
+              player_name: p.player_name,
+              quantity: p.quantity,
+              buy_price: p.buy_price,
+              listed_price: p.listed_price,
+            }));
+            const sweepResult = await runAlgoTransferListSweep(sendMessage, positions, stopped);
+            if (sweepResult.soldCount > 0 || sweepResult.relistedCount > 0) {
+              await engine.setLastEvent(
+                `TL sweep: ${sweepResult.soldCount} sold, ${sweepResult.relistedCount} relisted`,
+              );
+            }
+          }
+        }
+      } catch (err) {
+        await engine.log(`TL sweep error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      if (stopped()) return;
+
+      // ── Phase B: Poll for next signal ───────────────────────────────────
       await engine.setState('SCANNING', 'Polling for algo signal');
 
       let algoSignal: AlgoSignal | null = null;
@@ -53,7 +87,6 @@ export async function runAlgoAutomationLoop(
       // No signal available — wait 30-60s before next poll
       if (!algoSignal) {
         await engine.setState('IDLE', 'No pending signals — waiting');
-        // Sleep in 5s chunks so we can respond to stop requests
         const waitMs = 30_000 + Math.floor(Math.random() * 30_000);
         let remaining = waitMs;
         while (remaining > 0 && !stopped()) {
@@ -64,7 +97,7 @@ export async function runAlgoAutomationLoop(
         continue;
       }
 
-      // ── Execute signal ─────────────────────────────────────────────────
+      // ── Phase C: Execute signal ─────────────────────────────────────────
       if (algoSignal.action === 'BUY') {
         await engine.setState('BUYING', `Buying: ${algoSignal.player_name} x${algoSignal.quantity}`);
 
@@ -87,7 +120,7 @@ export async function runAlgoAutomationLoop(
             await engine.setLastEvent(
               `Skipped ${algoSignal.player_name}: ${result.reason}`,
             );
-            break; // Stop trying to buy more of this player
+            break;
           } else {
             await engine.setLastEvent(
               `Error buying ${algoSignal.player_name}: ${result.reason}`,
@@ -95,7 +128,6 @@ export async function runAlgoAutomationLoop(
             break;
           }
 
-          // Jitter between multiple buys of same player
           if (i < algoSignal.quantity - 1 && !stopped()) {
             await jitter(3000, 5000);
           }
@@ -118,7 +150,7 @@ export async function runAlgoAutomationLoop(
         }
 
       } else if (algoSignal.action === 'SELL') {
-        await engine.setState('LISTING', `Selling: ${algoSignal.player_name} x${algoSignal.quantity}`);
+        await engine.setState('LISTING', `Listing: ${algoSignal.player_name} x${algoSignal.quantity}`);
 
         let totalListed = 0;
         let lastPrice = 0;
@@ -126,7 +158,7 @@ export async function runAlgoAutomationLoop(
         for (let i = 0; i < algoSignal.quantity; i++) {
           if (stopped()) return;
 
-          await engine.setState('LISTING', `Selling: ${algoSignal.player_name} (${i + 1}/${algoSignal.quantity})`);
+          await engine.setState('LISTING', `Listing: ${algoSignal.player_name} (${i + 1}/${algoSignal.quantity})`);
           const result: AlgoSellCycleResult = await executeAlgoSellCycle(algoSignal, sendMessage);
 
           if (result.outcome === 'listed') {
@@ -147,13 +179,13 @@ export async function runAlgoAutomationLoop(
             break;
           }
 
-          // Jitter between multiple sells of same player
           if (i < algoSignal.quantity - 1 && !stopped()) {
             await jitter(3000, 5000);
           }
         }
 
-        // Report completion to backend
+        // Report listing to backend — outcome is 'listed', NOT 'sold'
+        // Position stays alive until the TL sweep detects actual sale
         if (!stopped()) {
           const outcome = totalListed > 0 ? 'listed' : 'skipped';
           try {
