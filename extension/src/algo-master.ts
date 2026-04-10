@@ -447,19 +447,31 @@ function clickWebAppLoginButton(): void {
   }
 }
 
+/**
+ * Simulate typing into an input by dispatching keydown/input/keyup per character.
+ * This triggers framework event handlers that native setter + input event may miss.
+ */
+function simulateTyping(input: HTMLInputElement, text: string): void {
+  input.focus();
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  for (const char of text) {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+    input.value += char;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+  }
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 /** Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn). */
 function fillEmailAndClickNext(email: string): void {
   const input = document.querySelector('input[placeholder*="email"]') as HTMLInputElement | null;
   if (!input) { console.error('[algo-master] Email input not found'); return; }
 
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-  if (setter) {
-    setter.call(input, email);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  simulateTyping(input, email);
 
-  // Verify the value was set before clicking
   if (!input.value) { console.error('[algo-master] Email value not set'); return; }
 
   const nextBtn = document.getElementById('logInBtn');
@@ -475,14 +487,8 @@ function fillPasswordAndClickSignIn(password: string): void {
   const input = document.querySelector('input[type="password"]') as HTMLInputElement | null;
   if (!input) { console.error('[algo-master] Password input not found'); return; }
 
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-  if (setter) {
-    setter.call(input, password);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  simulateTyping(input, password);
 
-  // Verify the value was set before clicking
   if (!input.value) { console.error('[algo-master] Password value not set'); return; }
 
   const signInBtn = document.getElementById('logInBtn');
