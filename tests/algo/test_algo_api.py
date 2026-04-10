@@ -388,3 +388,28 @@ async def test_position_relist_not_found(client, db):
         json={"price": 42000, "quantity": 5},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_status_includes_realized_pnl(client, db):
+    """GET /algo/status includes realized_pnl from algo_trades."""
+    async with db() as session:
+        now = datetime.utcnow()
+        session.add(AlgoConfig(
+            budget=500000, is_active=True, strategy_params=None,
+            created_at=now, updated_at=now,
+        ))
+        session.add(AlgoTrade(
+            ea_id=12001, quantity=3, buy_price=25000,
+            sell_price=45000, pnl=53250, sold_at=now,
+        ))
+        session.add(AlgoTrade(
+            ea_id=12002, quantity=2, buy_price=15000,
+            sell_price=20000, pnl=8000, sold_at=now,
+        ))
+        await session.commit()
+
+    resp = await client.get("/api/v1/algo/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["realized_pnl"] == 53250 + 8000

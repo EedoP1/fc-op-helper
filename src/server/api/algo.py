@@ -168,6 +168,7 @@ async def algo_status(request: Request):
                 "cash": 0,
                 "positions": [],
                 "pending_signals": 0,
+                "realized_pnl": 0,
             }
 
         # Load all positions with player metadata
@@ -223,6 +224,8 @@ async def algo_status(request: Request):
                 "buy_price": pos.buy_price,
                 "current_price": current_price,
                 "unrealized_pnl": unrealized_pnl,
+                "listed_price": pos.listed_price,
+                "listed_at": pos.listed_at.isoformat() if pos.listed_at else None,
             })
 
         # Count pending signals
@@ -230,6 +233,12 @@ async def algo_status(request: Request):
             select(func.count()).where(AlgoSignal.status == "PENDING")
         )
         pending_count = pending_count_result.scalar_one()
+
+        from sqlalchemy import func as sa_func
+        pnl_result = await session.execute(
+            select(sa_func.coalesce(sa_func.sum(AlgoTrade.pnl), 0))
+        )
+        realized_pnl = pnl_result.scalar_one()
 
         cash = config.budget - held_cost
 
@@ -239,6 +248,7 @@ async def algo_status(request: Request):
         "cash": cash,
         "positions": position_rows,
         "pending_signals": pending_count,
+        "realized_pnl": realized_pnl,
     }
 
 
