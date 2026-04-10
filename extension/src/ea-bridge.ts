@@ -46,7 +46,7 @@ export interface AutomationCommand {
   direction: 'to-main';
   type: 'automation-command';
   id: string;
-  command: 'start' | 'stop' | 'getStatus' | 'algo-start' | 'algo-stop' | 'algo-getStatus';
+  command: 'start' | 'stop' | 'getStatus' | 'algo-start' | 'algo-stop' | 'algo-getStatus' | 'algo-health-check';
 }
 
 /** Result from main world back to isolated world. */
@@ -262,7 +262,7 @@ export function initAutomationCommandClient(): void {
  * Send an automation command from the isolated world to the main world.
  */
 export function sendAutomationCommand(
-  command: 'start' | 'stop' | 'getStatus' | 'algo-start' | 'algo-stop' | 'algo-getStatus',
+  command: 'start' | 'stop' | 'getStatus' | 'algo-start' | 'algo-stop' | 'algo-getStatus' | 'algo-health-check',
 ): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = generateId();
