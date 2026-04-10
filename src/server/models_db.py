@@ -241,3 +241,19 @@ class AlgoPosition(Base):
     buy_price: Mapped[int] = mapped_column(Integer)
     buy_time: Mapped[datetime] = mapped_column(DateTime)
     peak_price: Mapped[int] = mapped_column(Integer)
+    listed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    listed_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AlgoTrade(Base):
+    """Realized algo trade — one row per partial or full sale."""
+
+    __tablename__ = "algo_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ea_id: Mapped[int] = mapped_column(Integer, index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    buy_price: Mapped[int] = mapped_column(Integer)
+    sell_price: Mapped[int] = mapped_column(Integer)
+    pnl: Mapped[int] = mapped_column(Integer)
+    sold_at: Mapped[datetime] = mapped_column(DateTime)
