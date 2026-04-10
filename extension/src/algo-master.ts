@@ -149,7 +149,24 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
     if (currentState.status === 'SPAWNING' || currentState.status === 'RECOVERING') {
       console.log('[algo-master] Spawn retry alarm fired — retrying');
       if (currentState.tabId != null) {
-        await waitForWorkerAndStart(currentState.tabId);
+        // Check what page the tab is on to decide next action
+        try {
+          const tab = await chrome.tabs.get(currentState.tabId);
+          const url = tab.url ?? '';
+          if (url.includes('signin.ea.com') || url.includes('accounts.ea.com')) {
+            // On login page — continue login flow
+            await attemptLogin(currentState.tabId);
+          } else if (url.includes('/ultimate-team/web-app/')) {
+            // On web app — check session and start worker
+            await waitForWorkerAndStart(currentState.tabId);
+          } else {
+            // Unknown page — try spawning fresh
+            await spawnWorker();
+          }
+        } catch {
+          // Tab gone — respawn
+          await spawnWorker();
+        }
       } else {
         await spawnWorker();
       }
