@@ -12,6 +12,7 @@
  */
 import { enabledItem, lastActionItem, portfolioItem, PortfolioPlayer, ConfirmedPortfolio } from '../src/storage';
 import { ExtensionMessage } from '../src/messages';
+import { initAlgoMaster, startAlgoMaster, stopAlgoMaster, onSessionDead } from '../src/algo-master';
 
 const BACKEND_URL = 'http://localhost:8000';
 const POLL_ALARM = 'poll';
@@ -38,6 +39,9 @@ export default defineBackground({
 
     // D-02: Poll immediately on wake — worker may have been terminated during a cycle.
     maybePoll();
+
+    // Initialize algo master state machine (re-registers listeners, resumes if active)
+    initAlgoMaster();
 
     // Portfolio message handlers — proxy requests from content script to backend.
     // All handlers return true to signal async response (Chrome MV3 requirement).
@@ -97,6 +101,12 @@ export default defineBackground({
         case 'ALGO_POSITION_RELIST':
           handleAlgoPositionRelist(msg.ea_id, msg.price, msg.quantity).then(sendResponse);
           return true;
+        case 'ALGO_SESSION_DEAD':
+          onSessionDead().then(() => sendResponse({ type: 'ALGO_SESSION_DEAD' }));
+          return true;
+        case 'ALGO_HEALTH_CHECK':
+        case 'ALGO_HEALTH_CHECK_RESULT':
+          return false; // These go directly to content script via chrome.tabs.sendMessage
         case 'ALGO_START_RESULT':
         case 'ALGO_STOP_RESULT':
         case 'ALGO_STATUS_RESULT':
@@ -441,6 +451,8 @@ async function handleAlgoStart(budget: number): Promise<ExtensionMessage> {
       return { type: 'ALGO_START_RESULT', success: false, error: `Backend ${res.status}` };
     }
     const data = await res.json();
+    // Start the master to monitor the worker tab
+    startAlgoMaster().catch(err => console.error('[background] Master start failed:', err));
     return { type: 'ALGO_START_RESULT', success: true, budget: data.budget, cash: data.cash };
   } catch (e) {
     return { type: 'ALGO_START_RESULT', success: false, error: String(e) };
@@ -453,6 +465,8 @@ async function handleAlgoStop(): Promise<ExtensionMessage> {
     if (!res.ok) {
       return { type: 'ALGO_STOP_RESULT', success: false, error: `Backend ${res.status}` };
     }
+    // Stop the master (clears alarms, resets state)
+    await stopAlgoMaster();
     return { type: 'ALGO_STOP_RESULT', success: true };
   } catch (e) {
     return { type: 'ALGO_STOP_RESULT', success: false, error: String(e) };
