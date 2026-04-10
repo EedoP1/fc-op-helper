@@ -16,6 +16,7 @@
 import {
   initMainWorldBridge,
   bridgedSendMessage,
+  bridgedStorageGet,
   type AutomationCommand,
   type AutomationResult,
 } from '../src/ea-bridge';
@@ -278,5 +279,24 @@ export default defineContentScript({
     });
 
     console.log('[OP Seller Main] Main world script loaded — EA globals accessible');
+
+    // Auto-start algo if master is in MONITORING state (handles page refresh).
+    // After a refresh, the content script re-injects but the algo engine is fresh/stopped.
+    // The master still thinks it's MONITORING. Check master state and restart if needed.
+    bridgedStorageGet<{ status: string }>('algoMasterState').then(state => {
+      if (state && (state.status === 'MONITORING' || state.status === 'SPAWNING')) {
+        console.log('[OP Seller Main] Master is active, auto-starting algo engine');
+        algoEngine.start().then(result => {
+          if (result.success) {
+            runAlgoAutomationLoop(algoEngine, bridgedSendMessage)
+              .catch(err => algoEngine.setError(
+                err instanceof Error ? err.message : String(err),
+              ));
+          }
+        });
+      }
+    }).catch(() => {
+      // Bridge not ready yet — master health check will catch it
+    });
   },
 });

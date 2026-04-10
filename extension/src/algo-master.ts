@@ -17,9 +17,8 @@ import { algoMasterStateItem, algoCredentialsItem, type AlgoMasterState, type Al
 const EA_WEBAPP_URL = 'https://www.ea.com/ea-sports-fc/ultimate-team/web-app/';
 const EA_DOMAIN_PATTERN = 'https://www.ea.com/*';
 const HEALTH_CHECK_ALARM = 'algo-health-check';
+const SPAWN_RETRY_ALARM = 'algo-spawn-retry';
 const HEALTH_CHECK_INTERVAL_MINUTES = 5;
-const PING_INTERVAL_MS = 2_000;
-const PING_TIMEOUT_MS = 30_000;
 const PAGE_LOAD_TIMEOUT_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 15_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
@@ -93,6 +92,7 @@ export async function startAlgoMaster(): Promise<void> {
  */
 export async function stopAlgoMaster(): Promise<void> {
   await chrome.alarms.clear(HEALTH_CHECK_ALARM);
+  await chrome.alarms.clear(SPAWN_RETRY_ALARM);
   await transition('IDLE', { tabId: null, recoveryAttempts: 0, errorMessage: null });
 }
 
@@ -144,6 +144,18 @@ function ensureHealthCheckAlarm(): void {
 }
 
 async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
+  if (alarm.name === SPAWN_RETRY_ALARM) {
+    await loadState();
+    if (currentState.status === 'SPAWNING' || currentState.status === 'RECOVERING') {
+      console.log('[algo-master] Spawn retry alarm fired — retrying');
+      if (currentState.tabId != null) {
+        await waitForWorkerAndStart(currentState.tabId);
+      } else {
+        await spawnWorker();
+      }
+    }
+    return;
+  }
   if (alarm.name !== HEALTH_CHECK_ALARM) return;
   if (currentState.status !== 'MONITORING') return;
   if (currentState.tabId == null) return;
@@ -291,11 +303,21 @@ function waitForPageLoad(tabId: number): Promise<boolean> {
   });
 }
 
+/**
+ * EA login flow — two-step process on signin.ea.com:
+ *   Step 1: Fill email into input[placeholder*="email"], click #logInBtn (NEXT)
+ *   Step 2: Fill password into input[type="password"], click #logInBtn (SIGN IN)
+ *   Redirect: EA redirects back to /web-app/
+ *
+ * All interactions use chrome.scripting.executeScript with native value setter
+ * + mousedown/mouseup/click sequence (proven to work with EA's form framework).
+ *
+ * Uses alarm-based retries to survive MV3 service worker termination.
+ */
 async function attemptLogin(tabId: number): Promise<void> {
   const credentials = await algoCredentialsItem.getValue();
 
   if (!credentials) {
-    // No credentials configured — wait for manual login
     await transition('WAITING_FOR_LOGIN', {
       errorMessage: 'Session expired — please log in manually',
     });
@@ -303,92 +325,136 @@ async function attemptLogin(tabId: number): Promise<void> {
     return;
   }
 
-  // Inject login script via chrome.scripting.executeScript
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: fillLoginForm,
-      args: [credentials.email, credentials.password],
-    });
-  } catch (err) {
-    console.error('[algo-master] Login script injection failed:', err);
-    await transition('WAITING_FOR_LOGIN', {
-      errorMessage: 'Login injection failed — please log in manually',
-    });
-    pollForWebApp(tabId);
-    return;
-  }
+  // Check current page state and handle accordingly
+  const tab = await chrome.tabs.get(tabId);
+  const url = tab.url ?? '';
 
-  // Wait for navigation back to web app
-  const navigatedToWebApp = await waitForUrlMatch(tabId, '/ultimate-team/web-app/', LOGIN_TIMEOUT_MS);
-
-  if (!navigatedToWebApp) {
-    console.warn('[algo-master] Login did not redirect to web app — may have failed');
-    // Check if we're still on login page
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.url?.includes('/ultimate-team/web-app/')) {
-      // Actually made it
-      await waitForWorkerAndStart(tabId);
+  if (url.includes('/ultimate-team/web-app/')) {
+    // On web app login screen — click the Login button to navigate to signin.ea.com
+    console.log('[algo-master] On web app login screen — clicking Login button');
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: clickWebAppLoginButton,
+      });
+    } catch (err) {
+      console.error('[algo-master] Failed to click Login button:', err);
+      await startRecovery();
       return;
     }
-    // Login failed — retry recovery
-    await startRecovery();
+    // Schedule alarm to continue after navigation
+    chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
     return;
   }
 
-  // Wait for page to fully load after login redirect
-  await waitForPageLoad(tabId);
-  await waitForWorkerAndStart(tabId);
+  if (url.includes('signin.ea.com')) {
+    // On EA sign-in page — detect which step we're on
+    const hasPasswordField = await checkForPasswordField(tabId);
+
+    if (!hasPasswordField) {
+      // Step 1: Email page
+      console.log('[algo-master] On email page — filling email');
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: fillEmailAndClickNext,
+          args: [credentials.email],
+        });
+      } catch (err) {
+        console.error('[algo-master] Email fill failed:', err);
+        await startRecovery();
+        return;
+      }
+      // Schedule alarm to continue after page advances to step 2
+      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
+      return;
+    } else {
+      // Step 2: Password page
+      console.log('[algo-master] On password page — filling password');
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: fillPasswordAndClickSignIn,
+          args: [credentials.password],
+        });
+      } catch (err) {
+        console.error('[algo-master] Password fill failed:', err);
+        await startRecovery();
+        return;
+      }
+      // Schedule alarm to continue after redirect back to web app
+      chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 8 / 60 });
+      return;
+    }
+  }
+
+  // Unknown page — wait and retry
+  console.log(`[algo-master] Unknown page during login: ${url}`);
+  chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
 }
 
-/**
- * Login form filler — injected into the login page via chrome.scripting.executeScript.
- * Finds email/password fields and submits. Runs in the target page's context.
- */
-function fillLoginForm(email: string, password: string): void {
-  // Try common selectors for EA's login form
-  const emailInput = document.querySelector<HTMLInputElement>(
-    'input[type="email"], input[name="email"], input[id="email"], input[autocomplete="email"]'
-  );
-  const passwordInput = document.querySelector<HTMLInputElement>(
-    'input[type="password"], input[name="password"], input[id="password"]'
-  );
-
-  if (!emailInput || !passwordInput) {
-    console.error('[algo-master] Login form inputs not found');
-    return;
+async function checkForPasswordField(tabId: number): Promise<boolean> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!document.querySelector('input[type="password"]'),
+    });
+    return results?.[0]?.result ?? false;
+  } catch {
+    return false;
   }
+}
 
-  // Set values using native input setter to trigger React/framework change handlers
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype, 'value'
-  )?.set;
-
-  if (nativeInputValueSetter) {
-    nativeInputValueSetter.call(emailInput, email);
-    emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-    emailInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-    nativeInputValueSetter.call(passwordInput, password);
-    passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
-    passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
-  } else {
-    emailInput.value = email;
-    passwordInput.value = password;
-  }
-
-  // Find and click the submit button
-  const submitBtn = document.querySelector<HTMLButtonElement>(
-    'button[type="submit"], input[type="submit"], button[class*="login"], button[class*="submit"]'
-  );
-  if (submitBtn) {
-    setTimeout(() => submitBtn.click(), 500);
-  } else {
-    // Try submitting the form directly
-    const form = emailInput.closest('form');
-    if (form) {
-      setTimeout(() => form.submit(), 500);
+/** Injected into web app — clicks the "Login" button via mousedown+mouseup+click. */
+function clickWebAppLoginButton(): void {
+  const buttons = document.querySelectorAll('button');
+  for (const btn of buttons) {
+    if (btn.textContent?.trim() === 'Login') {
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return;
     }
+  }
+}
+
+/** Injected into signin.ea.com step 1 — fills email, clicks NEXT (#logInBtn). */
+function fillEmailAndClickNext(email: string): void {
+  const input = document.querySelector<HTMLInputElement>('input[placeholder*="email"]');
+  if (!input) return;
+
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter) {
+    setter.call(input, email);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  const nextBtn = document.getElementById('logInBtn');
+  if (nextBtn) {
+    nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }
+}
+
+/** Injected into signin.ea.com step 2 — fills password, clicks SIGN IN (#logInBtn). */
+function fillPasswordAndClickSignIn(password: string): void {
+  const input = document.querySelector<HTMLInputElement>('input[type="password"]');
+  if (!input) return;
+
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter) {
+    setter.call(input, password);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  const signInBtn = document.getElementById('logInBtn');
+  if (signInBtn) {
+    signInBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    signInBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    signInBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   }
 }
 
@@ -443,42 +509,93 @@ function pollForWebApp(tabId: number): void {
 }
 
 /**
- * Wait for the content script to respond to PING, then start the algo loop.
+ * Wait for the content script to respond to PING, then verify the session
+ * is alive before starting the algo loop.
+ *
+ * If PONG but session is dead (in-app login screen at same URL), click
+ * the Login button and go through the login flow.
+ */
+/**
+ * Non-blocking worker readiness check.
+ *
+ * MV3 service workers terminate during long async loops (setTimeout doesn't
+ * keep them alive). Instead of a PING loop, we:
+ *   1. Try a single PING
+ *   2. If PONG: check session, handle login or start algo
+ *   3. If no PONG: schedule a retry alarm in 5 seconds
+ *
+ * The alarm fires onAlarm → onSpawnRetryAlarm → retries this function.
  */
 async function waitForWorkerAndStart(tabId: number): Promise<void> {
-  const startTime = Date.now();
-
-  while (Date.now() - startTime < PING_TIMEOUT_MS) {
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-      if (response?.type === 'PONG') {
-        console.log('[algo-master] Worker is alive — starting algo');
-
-        // Small delay for main world script to fully initialize
-        await new Promise(r => setTimeout(r, 2_000));
-
-        // Dispatch the algo-start custom event that ea-webapp.content.ts listens for.
-        // The isolated world content script hears this and relays to main world via bridge.
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: () => document.dispatchEvent(new CustomEvent('op-seller-algo-start')),
-        });
-
-        await transition('MONITORING', {
-          tabId,
-          recoveryAttempts: 0,
-          errorMessage: null,
-          lastHealthCheck: new Date().toISOString(),
-        });
-        ensureHealthCheckAlarm();
-        return;
-      }
-    } catch {
-      // Content script not ready yet
-    }
-    await new Promise(r => setTimeout(r, PING_INTERVAL_MS));
+  // Single PING attempt
+  let gotPong = false;
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    gotPong = response?.type === 'PONG';
+  } catch {
+    // Content script not ready
   }
 
-  console.warn('[algo-master] Worker did not respond to PING in time');
-  await startRecovery();
+  if (!gotPong) {
+    // Check if we've been trying too long (use recoveryAttempts as proxy)
+    if (currentState.recoveryAttempts > MAX_RECOVERY_ATTEMPTS) {
+      await transition('ERROR', { errorMessage: 'Worker never responded — please reload the page' });
+      return;
+    }
+    console.log('[algo-master] Worker not ready — scheduling retry in 5s');
+    chrome.alarms.create(SPAWN_RETRY_ALARM, { delayInMinutes: 5 / 60 });
+    return;
+  }
+
+  console.log('[algo-master] Worker is alive — verifying session');
+
+  // Check for in-app login screen
+  const sessionAlive = await checkSessionViaTab(tabId);
+  if (!sessionAlive) {
+    console.log('[algo-master] Content script alive but session dead — starting login flow');
+    await attemptLogin(tabId);
+    return;
+  }
+
+  // Session confirmed alive — start the algo loop
+  console.log('[algo-master] Session alive — starting algo');
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => document.dispatchEvent(new CustomEvent('op-seller-algo-start')),
+  });
+
+  await transition('MONITORING', {
+    tabId,
+    recoveryAttempts: 0,
+    errorMessage: null,
+    lastHealthCheck: new Date().toISOString(),
+  });
+  ensureHealthCheckAlarm();
 }
+
+/**
+ * Check if the EA session is alive by looking for the in-app login button.
+ * If a "Login" button exists on the page, the session is dead.
+ */
+async function checkSessionViaTab(tabId: number): Promise<boolean> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Check ALL buttons for EA's in-app login screen.
+        // Can't just check the first button — our overlay toggle ("OP") may be first.
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          if (btn.textContent?.trim() === 'Login') {
+            return false; // Session dead — login screen showing
+          }
+        }
+        return true; // No login button — session alive
+      },
+    });
+    return results?.[0]?.result ?? true;
+  } catch {
+    return true; // Can't check — assume alive, health check will catch it later
+  }
+}
+

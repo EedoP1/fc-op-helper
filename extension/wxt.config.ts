@@ -9,6 +9,8 @@ export default defineConfig({
     host_permissions: [
       'http://localhost:8000/*',
       'https://www.ea.com/*',
+      'https://signin.ea.com/*',
+      'https://accounts.ea.com/*',
     ],
   },
 });
