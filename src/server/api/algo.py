@@ -384,3 +384,53 @@ async def complete_signal(signal_id: int, payload: CompletePayload, request: Req
         signal_id, payload.outcome, signal.ea_id, payload.price, payload.quantity,
     )
     return {"status": "ok"}
+
+
+class PositionSoldPayload(BaseModel):
+    """Payload for POST /api/v1/algo/positions/{ea_id}/sold."""
+
+    sell_price: int
+    quantity: int
+
+
+@router.post("/algo/positions/{ea_id}/sold", status_code=200)
+async def position_sold(ea_id: int, payload: PositionSoldPayload, request: Request):
+    """Record that algo cards actually sold on the transfer market.
+
+    Decrements position quantity, writes an AlgoTrade row for PnL tracking.
+    Deletes the position entirely when quantity reaches 0.
+    """
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        result = await session.execute(
+            select(AlgoPosition).where(AlgoPosition.ea_id == ea_id)
+        )
+        pos = result.scalar_one_or_none()
+
+        if pos is None:
+            raise HTTPException(status_code=404, detail=f"No position for ea_id={ea_id}")
+
+        now = datetime.utcnow()
+        per_unit_net = int(payload.sell_price * (1 - EA_TAX_RATE)) - pos.buy_price
+        pnl = per_unit_net * payload.quantity
+
+        session.add(AlgoTrade(
+            ea_id=ea_id,
+            quantity=payload.quantity,
+            buy_price=pos.buy_price,
+            sell_price=payload.sell_price,
+            pnl=pnl,
+            sold_at=now,
+        ))
+
+        pos.quantity -= payload.quantity
+        if pos.quantity <= 0:
+            await session.delete(pos)
+
+        await session.commit()
+
+    logger.info(
+        "Algo position sold: ea_id=%d qty=%d sell_price=%d pnl=%d",
+        ea_id, payload.quantity, payload.sell_price, pnl,
+    )
+    return {"status": "ok", "pnl": pnl}

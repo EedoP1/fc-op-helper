@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from src.server.db import Base
 from src.server.main import app
 from src.server.models_db import (
-    AlgoConfig, AlgoSignal, AlgoPosition, PlayerRecord,
+    AlgoConfig, AlgoSignal, AlgoPosition, AlgoTrade, PlayerRecord,
 )
 
 
@@ -279,3 +279,75 @@ async def test_signal_complete_listed(client, db):
     assert pos.quantity == 5
     assert pos.listed_price == 45000
     assert pos.listed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_position_sold_full(client, db):
+    """POST /algo/positions/{ea_id}/sold with full quantity deletes position and writes trade."""
+    async with db() as session:
+        now = datetime.utcnow()
+        session.add(AlgoPosition(
+            ea_id=10001, quantity=5, buy_price=25000,
+            buy_time=now, peak_price=30000,
+            listed_at=now, listed_price=45000,
+        ))
+        await session.commit()
+
+    resp = await client.post(
+        "/api/v1/algo/positions/10001/sold",
+        json={"sell_price": 45000, "quantity": 5},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["pnl"] == 5 * (int(45000 * 0.95) - 25000)
+
+    async with db() as session:
+        positions = (await session.execute(select(AlgoPosition))).scalars().all()
+        trades = (await session.execute(select(AlgoTrade))).scalars().all()
+
+    assert len(positions) == 0
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.ea_id == 10001
+    assert trade.quantity == 5
+    assert trade.buy_price == 25000
+    assert trade.sell_price == 45000
+    assert trade.pnl == 5 * (int(45000 * 0.95) - 25000)
+
+
+@pytest.mark.asyncio
+async def test_position_sold_partial(client, db):
+    """POST /algo/positions/{ea_id}/sold with partial quantity decrements position."""
+    async with db() as session:
+        now = datetime.utcnow()
+        session.add(AlgoPosition(
+            ea_id=10002, quantity=8, buy_price=25000,
+            buy_time=now, peak_price=30000,
+            listed_at=now, listed_price=45000,
+        ))
+        await session.commit()
+
+    resp = await client.post(
+        "/api/v1/algo/positions/10002/sold",
+        json={"sell_price": 45000, "quantity": 3},
+    )
+    assert resp.status_code == 200
+
+    async with db() as session:
+        pos = (await session.execute(select(AlgoPosition))).scalar_one()
+        trades = (await session.execute(select(AlgoTrade))).scalars().all()
+
+    assert pos.quantity == 5
+    assert len(trades) == 1
+    assert trades[0].quantity == 3
+
+
+@pytest.mark.asyncio
+async def test_position_sold_not_found(client, db):
+    """POST /algo/positions/{ea_id}/sold returns 404 if no position."""
+    resp = await client.post(
+        "/api/v1/algo/positions/99999/sold",
+        json={"sell_price": 45000, "quantity": 1},
+    )
+    assert resp.status_code == 404
