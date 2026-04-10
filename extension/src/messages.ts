@@ -82,13 +82,15 @@ export type AlgoSignal = {
 /** Algo position from GET /algo/status. */
 export type AlgoPosition = {
   ea_id: number;
-  name: string;
+  player_name: string;
   quantity: number;
   buy_price: number;
   buy_time: string;
   current_price: number;
   peak_price: number;
   unrealized_pnl: number;
+  listed_price: number | null;
+  listed_at: string | null;
 };
 
 /** Full response shape from GET /algo/status. */
@@ -98,7 +100,7 @@ export type AlgoStatusData = {
   cash: number;
   positions: AlgoPosition[];
   pending_signals: number;
-  total_pnl: number;
+  realized_pnl: number;
 };
 
 export type ExtensionMessage =
@@ -149,7 +151,12 @@ export type ExtensionMessage =
   | { type: 'ALGO_SIGNAL_REQUEST' }
   | { type: 'ALGO_SIGNAL_RESULT'; signal: AlgoSignal | null; error?: string }
   | { type: 'ALGO_SIGNAL_COMPLETE'; signal_id: number; outcome: string; price: number; quantity: number }
-  | { type: 'ALGO_SIGNAL_COMPLETE_RESULT'; success: boolean; error?: string };
+  | { type: 'ALGO_SIGNAL_COMPLETE_RESULT'; success: boolean; error?: string }
+  // Algo position lifecycle (TL sweep → backend)
+  | { type: 'ALGO_POSITION_SOLD'; ea_id: number; sell_price: number; quantity: number }
+  | { type: 'ALGO_POSITION_SOLD_RESULT'; success: boolean; pnl?: number; error?: string }
+  | { type: 'ALGO_POSITION_RELIST'; ea_id: number; price: number; quantity: number }
+  | { type: 'ALGO_POSITION_RELIST_RESULT'; success: boolean; error?: string };
 
 /**
  * Compile-time exhaustiveness helper for switch statements over ExtensionMessage.

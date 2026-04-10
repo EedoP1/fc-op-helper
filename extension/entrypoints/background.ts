@@ -91,11 +91,19 @@ export default defineBackground({
         case 'ALGO_SIGNAL_COMPLETE':
           handleAlgoSignalComplete(msg.signal_id, msg.outcome, msg.price, msg.quantity).then(sendResponse);
           return true;
+        case 'ALGO_POSITION_SOLD':
+          handleAlgoPositionSold(msg.ea_id, msg.sell_price, msg.quantity).then(sendResponse);
+          return true;
+        case 'ALGO_POSITION_RELIST':
+          handleAlgoPositionRelist(msg.ea_id, msg.price, msg.quantity).then(sendResponse);
+          return true;
         case 'ALGO_START_RESULT':
         case 'ALGO_STOP_RESULT':
         case 'ALGO_STATUS_RESULT':
         case 'ALGO_SIGNAL_RESULT':
         case 'ALGO_SIGNAL_COMPLETE_RESULT':
+        case 'ALGO_POSITION_SOLD_RESULT':
+        case 'ALGO_POSITION_RELIST_RESULT':
           return false;
         case 'AUTOMATION_STATUS_REQUEST':
         case 'AUTOMATION_START':
@@ -492,6 +500,43 @@ async function handleAlgoSignalComplete(
     return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: true };
   } catch (e) {
     return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAlgoPositionSold(
+  ea_id: number, sell_price: number, quantity: number,
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/positions/${ea_id}/sold`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sell_price, quantity }),
+    });
+    if (!res.ok) {
+      return { type: 'ALGO_POSITION_SOLD_RESULT', success: false, error: `Backend ${res.status}` };
+    }
+    const data = await res.json();
+    return { type: 'ALGO_POSITION_SOLD_RESULT', success: true, pnl: data.pnl };
+  } catch (e) {
+    return { type: 'ALGO_POSITION_SOLD_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAlgoPositionRelist(
+  ea_id: number, price: number, quantity: number,
+): Promise<ExtensionMessage> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v1/algo/positions/${ea_id}/relist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ price, quantity }),
+    });
+    if (!res.ok) {
+      return { type: 'ALGO_POSITION_RELIST_RESULT', success: false, error: `Backend ${res.status}` };
+    }
+    return { type: 'ALGO_POSITION_RELIST_RESULT', success: true };
+  } catch (e) {
+    return { type: 'ALGO_POSITION_RELIST_RESULT', success: false, error: String(e) };
   }
 }
 
