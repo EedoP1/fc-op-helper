@@ -6,10 +6,11 @@
  */
 
 // ── Storage Keys ────────────────────────────────────────────────────────────
-// Must match the keys in src/storage.ts (WXT storage items use these under the hood)
+// WXT strips the 'local:' prefix when writing to chrome.storage.local.
+// storage.defineItem('local:algoCredentials') stores under key 'algoCredentials'.
 
-const CREDS_KEY = 'local:algoCredentials';
-const MASTER_KEY = 'local:algoMasterState';
+const CREDS_KEY = 'algoCredentials';
+const MASTER_KEY = 'algoMasterState';
 
 type AlgoCredentials = { email: string; password: string };
 type AlgoMasterState = {
