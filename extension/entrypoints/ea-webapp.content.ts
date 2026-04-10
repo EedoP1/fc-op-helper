@@ -136,6 +136,10 @@ export default defineContentScript({
         case 'ALGO_STATUS_RESULT':
         case 'ALGO_SIGNAL_RESULT':
         case 'ALGO_SIGNAL_COMPLETE_RESULT':
+        case 'ALGO_POSITION_SOLD':
+        case 'ALGO_POSITION_SOLD_RESULT':
+        case 'ALGO_POSITION_RELIST':
+        case 'ALGO_POSITION_RELIST_RESULT':
           return false;
         default:
           assertNever(msg);
@@ -185,26 +189,25 @@ export default defineContentScript({
       }
     });
 
-    // ── Algo trading engine (separate from OP sell automation) ────────────
-    const algoEngine = new AutomationEngine(
-      (msg) => chrome.runtime.sendMessage(msg),
-    );
-
+    // ── Algo trading engine (runs in main world, relayed via bridge) ───────
     document.addEventListener('op-seller-algo-start', async () => {
-      const result = await algoEngine.start();
-      if (result.success) {
-        const { runAlgoAutomationLoop } = await import('../src/algo-automation-loop');
-        runAlgoAutomationLoop(algoEngine, (msg) => chrome.runtime.sendMessage(msg))
-          .catch(err => algoEngine.setError(err instanceof Error ? err.message : String(err)));
+      try {
+        await sendAutomationCommand('algo-start');
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to start algo via bridge:', err);
       }
     });
 
     document.addEventListener('op-seller-algo-stop', async () => {
-      await algoEngine.stop();
+      try {
+        await sendAutomationCommand('algo-stop');
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to stop algo via bridge:', err);
+      }
     });
 
     ctx.onInvalidated(() => {
-      algoEngine.stop();
+      sendAutomationCommand('algo-stop').catch(() => {});
     });
 
     // ── Trade Observer (Phase 07.1: passive DOM reading per D-01) ──────────

@@ -22,6 +22,7 @@ import {
 import { AutomationEngine } from '../src/automation';
 import { MainWorldStorageAdapter } from '../src/automation-storage-main';
 import { runAutomationLoop } from '../src/automation-loop';
+import { runAlgoAutomationLoop } from '../src/algo-automation-loop';
 
 const MSG_SOURCE = 'op-seller';
 
@@ -33,9 +34,13 @@ export default defineContentScript({
     // Initialize the bridge client (for calling chrome APIs via isolated world)
     initMainWorldBridge();
 
-    // Create automation engine with bridged sendMessage and storage
+    // Create automation engines with bridged sendMessage and storage
     const storageAdapter = new MainWorldStorageAdapter();
     const automationEngine = new AutomationEngine(bridgedSendMessage, storageAdapter);
+
+    // Algo trading engine — separate from OP sell automation, same main world context
+    const algoStorageAdapter = new MainWorldStorageAdapter();
+    const algoEngine = new AutomationEngine(bridgedSendMessage, algoStorageAdapter);
 
     // Listen for automation commands from the isolated world content script
     window.addEventListener('message', async (event: MessageEvent) => {
@@ -72,6 +77,26 @@ export default defineContentScript({
           }
           case 'getStatus': {
             response.result = automationEngine.getStatus();
+            break;
+          }
+          case 'algo-start': {
+            const result = await algoEngine.start();
+            if (result.success) {
+              runAlgoAutomationLoop(algoEngine, bridgedSendMessage)
+                .catch(err => algoEngine.setError(
+                  err instanceof Error ? err.message : String(err),
+                ));
+            }
+            response.result = result;
+            break;
+          }
+          case 'algo-stop': {
+            const result = await algoEngine.stop();
+            response.result = result;
+            break;
+          }
+          case 'algo-getStatus': {
+            response.result = algoEngine.getStatus();
             break;
           }
         }

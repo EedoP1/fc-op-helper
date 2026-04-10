@@ -13,7 +13,7 @@
  *     - SELL: executeAlgoSellCycle, report 'listed' (position stays alive)
  *   Jitter 3-5s between signals
  */
-import { AutomationEngine, AutomationError, jitter } from './automation';
+import { AutomationEngine, jitter } from './automation';
 import { executeAlgoBuyCycle, type AlgoBuyCycleResult } from './algo-buy-cycle';
 import { executeAlgoSellCycle, type AlgoSellCycleResult } from './algo-sell-cycle';
 import { runAlgoTransferListSweep } from './algo-transfer-list-sweep';
@@ -208,10 +208,6 @@ export async function runAlgoAutomationLoop(
       await jitter(3000, 5000);
     }
   } catch (err) {
-    if (err instanceof AutomationError) {
-      await engine.setError(err.message);
-      return;
-    }
     const msg = err instanceof Error ? err.message : String(err);
     await engine.setError(`Unexpected error: ${msg}`);
   }
