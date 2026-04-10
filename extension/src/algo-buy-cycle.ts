@@ -16,8 +16,8 @@ import {
   searchMarket,
   buyItem,
   getBeforeStepValue,
-  canPerformUnassignedGlitch,
-  performUnassignedGlitch,
+  getUnassigned,
+  freeUnassignedSlots,
   DESTINATION_FULL_ERROR_CODE,
   type EAItem,
 } from './ea-services';
@@ -27,7 +27,7 @@ import type { AlgoSignal } from './messages';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type AlgoBuyCycleResult =
-  | { outcome: 'bought'; buyPrice: number; quantity: number }
+  | { outcome: 'bought'; buyPrice: number; quantity: number; itemId: number }
   | { outcome: 'skipped'; reason: string }
   | { outcome: 'error'; reason: string };
 
@@ -127,6 +127,20 @@ export async function executeAlgoBuyCycle(
 ): Promise<AlgoBuyCycleResult> {
   const priceGuard = Math.floor(signal.reference_price * PRICE_GUARD_MULTIPLIER);
 
+  // Step 0: If unassigned pile has >= 50 items, free slots by moving
+  // duplicates to club BEFORE buying. Must happen pre-buy because
+  // FUT Enhancer intercepts error 473 with a blocking dialog.
+  const { items: currentUnassigned } = await getUnassigned();
+  if (currentUnassigned.length >= 50) {
+    console.log(`[algo-buy] Unassigned has ${currentUnassigned.length} items (>= 50), freeing slots...`);
+    const freed = await freeUnassignedSlots();
+    console.log(`[algo-buy] Freed ${freed} slots by moving duplicates to club`);
+    if (freed === 0) {
+      return { outcome: 'error', reason: 'Unassigned pile full (no duplicates to swap)' };
+    }
+    await jitter(1000, 2000);
+  }
+
   // Step 1: Narrow to the cheapest price tier
   const { items: floorItems, error: searchError } = await narrowToFloor(
     signal.ea_id,
@@ -174,31 +188,36 @@ export async function executeAlgoBuyCycle(
 
     // Buy
     const buyResult = await buyItem(cheapest, cheapestBin);
+    console.log(`[algo-buy] buyItem result: success=${buyResult.success} error=${buyResult.error} attempt=${attempt} defId=${signal.ea_id} price=${cheapestBin}`);
     if (!buyResult.success) {
-      if (buyResult.error === SNIPE_ERROR_CODE) continue;
+      // EA returns 461 (snipe) or 473 (full) when unassigned is full.
+      // On either error, try clearing the unassigned pile first.
+      if (buyResult.error === SNIPE_ERROR_CODE || buyResult.error === DESTINATION_FULL_ERROR_CODE) {
+        if (buyResult.error === DESTINATION_FULL_ERROR_CODE) {
+          console.log(`[algo-buy] Buy failed (error 473), freeing unassigned slots...`);
+          const freed = await freeUnassignedSlots();
+          console.log(`[algo-buy] Freed ${freed} slots`);
+          if (freed > 0) {
+            attempt--;
+            continue;
+          }
+        }
+        // Nothing to clear — if it was a snipe, keep retrying
+        if (buyResult.error === SNIPE_ERROR_CODE) continue;
+        return { outcome: 'error', reason: 'Unassigned pile full (could not clear)' };
+      }
       if (buyResult.error === RATE_LIMIT_ERROR_CODE) {
         await jitter(4000, 8000);
         attempt--; // don't count rate limit as a retry
         continue;
       }
-      if (buyResult.error === DESTINATION_FULL_ERROR_CODE) {
-        // Unassigned pile full — attempt glitch to free slots
-        if (canPerformUnassignedGlitch()) {
-          console.log('[algo-buy] Unassigned pile full, performing glitch...');
-          const freed = await performUnassignedGlitch();
-          console.log(`[algo-buy] Glitch freed ${freed} slots`);
-          if (freed > 0) {
-            attempt--; // don't count as a retry, we freed space
-            continue;
-          }
-        }
-        return { outcome: 'error', reason: 'Unassigned pile full (no duplicates to swap)' };
-      }
       return { outcome: 'error', reason: `Buy failed (error ${buyResult.error})` };
     }
 
     // Card stays in unassigned — no listing for algo buys
-    return { outcome: 'bought', buyPrice: cheapestBin, quantity: 1 };
+    const actualPrice = cheapest.getAuctionData().buyNowPrice;
+    console.log(`[algo-buy] Bought defId=${signal.ea_id} searchPrice=${cheapestBin} actualPrice=${actualPrice} itemId=${cheapest.id}`);
+    return { outcome: 'bought', buyPrice: actualPrice, quantity: 1, itemId: cheapest.id };
   }
 
   return { outcome: 'skipped', reason: `Sniped ${MAX_RETRIES} times` };

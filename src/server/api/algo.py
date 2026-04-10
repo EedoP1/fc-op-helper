@@ -37,6 +37,7 @@ class CompletePayload(BaseModel):
     outcome: str   # "bought" | "sold" | "failed" | "skipped"
     price: int
     quantity: int
+    ea_item_id: int | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -224,6 +225,7 @@ async def algo_status(request: Request):
                 "buy_price": pos.buy_price,
                 "current_price": current_price,
                 "unrealized_pnl": unrealized_pnl,
+                "ea_item_id": pos.ea_item_id,
                 "listed_price": pos.listed_price,
                 "listed_at": pos.listed_at.isoformat() if pos.listed_at else None,
             })
@@ -372,6 +374,7 @@ async def complete_signal(signal_id: int, payload: CompletePayload, request: Req
                 buy_price=payload.price,
                 buy_time=now,
                 peak_price=payload.price,
+                ea_item_id=payload.ea_item_id,
             )
             session.add(pos)
             signal.status = "DONE"
@@ -427,8 +430,9 @@ async def position_sold(ea_id: int, payload: PositionSoldPayload, request: Reque
     """
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        # Find ONE position record for this ea_id (each card has its own row with quantity=1)
         result = await session.execute(
-            select(AlgoPosition).where(AlgoPosition.ea_id == ea_id)
+            select(AlgoPosition).where(AlgoPosition.ea_id == ea_id).limit(1)
         )
         pos = result.scalar_one_or_none()
 
@@ -448,9 +452,8 @@ async def position_sold(ea_id: int, payload: PositionSoldPayload, request: Reque
             sold_at=now,
         ))
 
-        pos.quantity -= payload.quantity
-        if pos.quantity <= 0:
-            await session.delete(pos)
+        # Delete this single position record
+        await session.delete(pos)
 
         await session.commit()
 

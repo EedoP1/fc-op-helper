@@ -89,6 +89,7 @@ export type AlgoPosition = {
   current_price: number;
   peak_price: number;
   unrealized_pnl: number;
+  ea_item_id?: number;
   listed_price: number | null;
   listed_at: string | null;
 };
@@ -150,7 +151,7 @@ export type ExtensionMessage =
   | { type: 'ALGO_STATUS_RESULT'; data: AlgoStatusData | null; error?: string }
   | { type: 'ALGO_SIGNAL_REQUEST' }
   | { type: 'ALGO_SIGNAL_RESULT'; signal: AlgoSignal | null; error?: string }
-  | { type: 'ALGO_SIGNAL_COMPLETE'; signal_id: number; outcome: string; price: number; quantity: number }
+  | { type: 'ALGO_SIGNAL_COMPLETE'; signal_id: number; outcome: string; price: number; quantity: number; ea_item_id?: number }
   | { type: 'ALGO_SIGNAL_COMPLETE_RESULT'; success: boolean; error?: string }
   // Algo position lifecycle (TL sweep → backend)
   | { type: 'ALGO_POSITION_SOLD'; ea_id: number; sell_price: number; quantity: number }

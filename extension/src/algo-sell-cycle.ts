@@ -15,7 +15,9 @@ import {
   searchMarket,
   listItem,
   getUnassigned,
+  freeUnassignedSlots,
   moveItem,
+  requestItemsById,
   roundToNearestStep,
   getBeforeStepValue,
   MAX_PRICE,
@@ -123,22 +125,61 @@ async function discoverLowestBin(
  *
  * @param signal       AlgoSignal with action='SELL' from the backend
  * @param sendMessage  Callback to send messages to the service worker
+ * @param ea_item_id   Optional EA instance ID — when provided, fetches the card
+ *                     directly via requestItemsById instead of searching the
+ *                     unassigned pile (which caps at 50 items).
  */
 export async function executeAlgoSellCycle(
   signal: AlgoSignal,
   sendMessage: (msg: any) => Promise<any>,
+  ea_item_id?: number,
 ): Promise<AlgoSellCycleResult> {
-  // Step 1: Fetch unassigned pile
-  const { items, success: unassignedSuccess } = await getUnassigned();
-  if (!unassignedSuccess) {
-    return { outcome: 'error', reason: 'Failed to fetch unassigned pile' };
-  }
-  if (items.length === 0) {
-    return { outcome: 'skipped', reason: 'No items in unassigned pile' };
+  // Step 1: Find matching card
+  let card: EAItem | null = null;
+
+  // Fast path: fetch by EA instance ID (skips unassigned pile entirely)
+  if (ea_item_id) {
+    console.log(`[algo-sell] Fetching card by ea_item_id=${ea_item_id}`);
+    const { items, success } = await requestItemsById([ea_item_id]);
+    if (success && items.length > 0) {
+      card = items[0];
+      console.log(`[algo-sell] Found card by ea_item_id, defId=${card.definitionId}`);
+    } else {
+      console.log(`[algo-sell] requestItemsById failed or empty, falling back to unassigned search`);
+    }
   }
 
-  // Step 2: Find matching card
-  const card = findMatchingItem(items, signal);
+  // Slow path: search unassigned pile
+  if (!card) {
+    const { items, success } = await getUnassigned();
+    if (!success) {
+      return { outcome: 'error', reason: 'Failed to fetch unassigned pile' };
+    }
+    card = findMatchingItem(items, signal);
+  }
+
+  // Slowest path: if pile > 50 and card not found, clear dupes in batches
+  // to shrink the pile and reveal the card (EA caps unassigned at 50 per fetch)
+  if (!card) {
+    const MAX_CLEAR_ROUNDS = 5;
+    for (let round = 0; round < MAX_CLEAR_ROUNDS; round++) {
+      console.log(`[algo-sell] Card not in first 50, clearing dupes round ${round + 1}...`);
+      const freed = await freeUnassignedSlots();
+      if (freed === 0) {
+        console.log(`[algo-sell] No more dupes to clear`);
+        break;
+      }
+      console.log(`[algo-sell] Freed ${freed} slots, refetching...`);
+      await jitter(500, 1000);
+      const { items: refreshed } = await getUnassigned();
+      card = findMatchingItem(refreshed, signal);
+      if (card) {
+        console.log(`[algo-sell] Found card after ${round + 1} clearing rounds`);
+        break;
+      }
+    }
+  }
+
   if (!card) {
     return {
       outcome: 'skipped',

@@ -17,7 +17,7 @@ import { AutomationEngine, jitter } from './automation';
 import { executeAlgoBuyCycle, type AlgoBuyCycleResult } from './algo-buy-cycle';
 import { executeAlgoSellCycle, type AlgoSellCycleResult } from './algo-sell-cycle';
 import { runAlgoTransferListSweep } from './algo-transfer-list-sweep';
-import type { ExtensionMessage, AlgoSignal, AlgoStatusData } from './messages';
+import type { ExtensionMessage, AlgoSignal, AlgoPosition, AlgoStatusData } from './messages';
 
 /**
  * Run the algo trading automation loop until stopped or error.
@@ -103,6 +103,7 @@ export async function runAlgoAutomationLoop(
 
         let totalBought = 0;
         let lastPrice = 0;
+        let lastItemId: number | undefined;
 
         for (let i = 0; i < algoSignal.quantity; i++) {
           if (stopped()) return;
@@ -113,6 +114,7 @@ export async function runAlgoAutomationLoop(
           if (result.outcome === 'bought') {
             totalBought += result.quantity;
             lastPrice = result.buyPrice;
+            lastItemId = result.itemId;
             await engine.setLastEvent(
               `Bought ${algoSignal.player_name} for ${result.buyPrice.toLocaleString()}`,
             );
@@ -133,16 +135,18 @@ export async function runAlgoAutomationLoop(
           }
         }
 
-        // Report completion to backend
-        if (!stopped()) {
-          const outcome = totalBought > 0 ? 'bought' : 'skipped';
+        // Report completion to backend — only if we actually bought something.
+        // If skipped/error, leave the signal CLAIMED — the 5-min stale timeout
+        // resets it to PENDING for retry. The 3h TTL eventually expires it.
+        if (!stopped() && totalBought > 0) {
           try {
             await sendMessage({
               type: 'ALGO_SIGNAL_COMPLETE',
               signal_id: algoSignal.id,
-              outcome,
+              outcome: 'bought',
               price: lastPrice,
               quantity: totalBought,
+              ea_item_id: lastItemId,
             } satisfies ExtensionMessage);
           } catch (err) {
             await engine.log(`Signal complete report failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -152,6 +156,22 @@ export async function runAlgoAutomationLoop(
       } else if (algoSignal.action === 'SELL') {
         await engine.setState('LISTING', `Listing: ${algoSignal.player_name} x${algoSignal.quantity}`);
 
+        // Look up ea_item_id from status data for this position
+        let sellEaItemId: number | undefined;
+        try {
+          const statusRes2 = await sendMessage({ type: 'ALGO_STATUS_REQUEST' } satisfies ExtensionMessage);
+          if (statusRes2?.type === 'ALGO_STATUS_RESULT' && statusRes2.data) {
+            const matchingPos = statusRes2.data.positions.find(
+              (p: AlgoPosition) => p.ea_id === algoSignal.ea_id && p.ea_item_id,
+            );
+            if (matchingPos) {
+              sellEaItemId = matchingPos.ea_item_id;
+            }
+          }
+        } catch {
+          // Fall back to unassigned pile search if status lookup fails
+        }
+
         let totalListed = 0;
         let lastPrice = 0;
 
@@ -159,7 +179,7 @@ export async function runAlgoAutomationLoop(
           if (stopped()) return;
 
           await engine.setState('LISTING', `Listing: ${algoSignal.player_name} (${i + 1}/${algoSignal.quantity})`);
-          const result: AlgoSellCycleResult = await executeAlgoSellCycle(algoSignal, sendMessage);
+          const result: AlgoSellCycleResult = await executeAlgoSellCycle(algoSignal, sendMessage, sellEaItemId);
 
           if (result.outcome === 'listed') {
             totalListed += result.quantity;
@@ -184,15 +204,14 @@ export async function runAlgoAutomationLoop(
           }
         }
 
-        // Report listing to backend — outcome is 'listed', NOT 'sold'
-        // Position stays alive until the TL sweep detects actual sale
-        if (!stopped()) {
-          const outcome = totalListed > 0 ? 'listed' : 'skipped';
+        // Only report to backend if we actually listed. Otherwise leave
+        // signal CLAIMED — stale timeout resets to PENDING for retry.
+        if (!stopped() && totalListed > 0) {
           try {
             await sendMessage({
               type: 'ALGO_SIGNAL_COMPLETE',
               signal_id: algoSignal.id,
-              outcome,
+              outcome: 'listed',
               price: lastPrice,
               quantity: totalListed,
             } satisfies ExtensionMessage);

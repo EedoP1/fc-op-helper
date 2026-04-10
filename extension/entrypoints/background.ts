@@ -89,7 +89,7 @@ export default defineBackground({
           handleAlgoSignalRequest().then(sendResponse);
           return true;
         case 'ALGO_SIGNAL_COMPLETE':
-          handleAlgoSignalComplete(msg.signal_id, msg.outcome, msg.price, msg.quantity).then(sendResponse);
+          handleAlgoSignalComplete(msg.signal_id, msg.outcome, msg.price, msg.quantity, msg.ea_item_id).then(sendResponse);
           return true;
         case 'ALGO_POSITION_SOLD':
           handleAlgoPositionSold(msg.ea_id, msg.sell_price, msg.quantity).then(sendResponse);
@@ -486,13 +486,13 @@ async function handleAlgoSignalRequest(): Promise<ExtensionMessage> {
 }
 
 async function handleAlgoSignalComplete(
-  signal_id: number, outcome: string, price: number, quantity: number,
+  signal_id: number, outcome: string, price: number, quantity: number, ea_item_id?: number,
 ): Promise<ExtensionMessage> {
   try {
     const res = await fetch(`${BACKEND_URL}/api/v1/algo/signals/${signal_id}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ outcome, price, quantity }),
+      body: JSON.stringify({ outcome, price, quantity, ea_item_id }),
     });
     if (!res.ok) {
       return { type: 'ALGO_SIGNAL_COMPLETE_RESULT', success: false, error: `Backend ${res.status}` };

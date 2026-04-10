@@ -1,7 +1,7 @@
 """SQLAlchemy ORM table definitions for the persistent scanner."""
 from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Integer, Float, DateTime, Boolean, Index, Text, UniqueConstraint
+from sqlalchemy import String, Integer, BigInteger, Float, DateTime, Boolean, Index, Text, UniqueConstraint
 from src.server.db import Base
 
 
@@ -241,6 +241,7 @@ class AlgoPosition(Base):
     buy_price: Mapped[int] = mapped_column(Integer)
     buy_time: Mapped[datetime] = mapped_column(DateTime)
     peak_price: Mapped[int] = mapped_column(Integer)
+    ea_item_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     listed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     listed_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

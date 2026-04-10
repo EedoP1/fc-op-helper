@@ -70,6 +70,7 @@ declare const services: {
     refreshAuctions(items: EAItem[]): EAObservable;
     requestTransferItems(): EAObservable;
     requestUnassignedItems(): EAObservable;
+    requestItemsById(itemIds: number[]): EAObservable;
   };
   User: {
     getUser(): { coins: { amount: number } };
@@ -81,6 +82,7 @@ declare const repositories: {
     isPileFull(pile: number): boolean;
     numItemsInCache(pile: number): number;
     getUnassignedItems(): EAItem[];
+    getClubItems(): EAItem[];
   };
 };
 
@@ -356,6 +358,14 @@ export async function getUnassigned(): Promise<{ items: EAItem[]; success: boole
   return { items: data?.items ?? [], success, error };
 }
 
+/** Fetch specific items by their EA instance IDs. */
+export async function requestItemsById(itemIds: number[]): Promise<{ items: EAItem[]; success: boolean; error?: number }> {
+  const { data, success, error } = await observableToPromise(
+    services.Item.requestItemsById(itemIds),
+  );
+  return { items: data?.items ?? [], success, error };
+}
+
 /**
  * Move an item to a pile (e.g. ItemPile.TRANSFER, ItemPile.CLUB).
  * Returns false if the target pile is full (for TRANSFER and STORAGE).
@@ -396,77 +406,128 @@ export function isPileFull(pile: number): boolean {
   return repositories.Item.isPileFull(pile);
 }
 
-// ── Unassigned Glitch ────────────────────────────────────────────────────────
+// ── Unassigned Pile Clearing ─────────────────────────────────────────────────
 
 /** Error code EA returns when the unassigned pile (INBOX) is full. */
 export const DESTINATION_FULL_ERROR_CODE = 473;
 
 /**
- * Check if the unassigned glitch can be performed.
- * Mirrors FUT Enhancer's canPerformUnassignedGlitch:
- *   - Unassigned pile has >= 50 items
- *   - There are duplicate items (cards also in club)
- *   - INBOX item count < duplicate count (room to swap)
- */
-export function canPerformUnassignedGlitch(): boolean {
-  const inboxCount = repositories.Item.numItemsInCache(ItemPile.INBOX);
-  const unassigned = repositories.Item.getUnassignedItems();
-  const duplicateCount = unassigned.filter(item => item.isDuplicate()).length;
-  return unassigned.length >= 50 && inboxCount < duplicateCount && duplicateCount > 0;
-}
-
-/**
- * Perform the unassigned glitch — exactly mirrors FUT Enhancer's algorithm:
+ * Free space in the unassigned pile using the unassigned glitch.
+ * Mirrors FUT Enhancer's algorithm:
  *
- * 1. Search transfer market for any cheap card (maxBuy=200)
- * 2. Bid 200 on the first result — intentionally triggers error 473
- * 3. After 473, refresh the unassigned pile from the server
- * 4. Find duplicate items in unassigned (cards also in club)
- * 5. Move each duplicate to club, freeing unassigned slots
+ *   1. Search market for any cheap card (maxBuy=200)
+ *   2. Dummy bid at 200 → triggers error 473 → forces EA to resync pile
+ *   3. Refresh unassigned pile cache from server
+ *   4. Find duplicate items (cards also in club)
+ *   5. Move each duplicate to club, freeing slots
+ *
+ * The dummy bid is required because EA won't let you move duplicates
+ * to club until the pile state is resynced via a 473 error.
+ *
+ * IMPORTANT: This must be called BEFORE buyItem() — if buyItem()
+ * triggers 473 first, FUT Enhancer intercepts it with a blocking dialog.
  *
  * Returns the number of slots freed.
  */
-export async function performUnassignedGlitch(): Promise<number> {
-  // Step 1: Search for any cheap card
+export async function freeUnassignedSlots(): Promise<number> {
+  console.log('[ea-services] freeUnassignedSlots: starting glitch...');
+
+  // Step 1: Search for any cheap card for dummy bid
   const criteria = new UTSearchCriteriaDTO();
   criteria.maxBuy = 200;
 
   const searchResult = await searchMarket(criteria);
   const dummyItem = searchResult.items[0];
-  if (!dummyItem) return 0;
+  if (!dummyItem) {
+    console.log('[ea-services] freeUnassignedSlots: no cheap card found for dummy bid');
+    return 0;
+  }
 
-  // Step 2: Dummy bid to trigger error 473
+  // Step 2: Dummy bid to trigger 473 and force EA to resync pile.
+  // FUT Enhancer will show a "Destination Full" dialog — auto-dismiss it.
   await delay(500);
+  console.log(`[ea-services] freeUnassignedSlots: dummy bid on defId=${dummyItem.definitionId}`);
   const bidResult = await observableToPromise(
     services.Item.bid(dummyItem, 200),
   );
-  if (bidResult.error !== DESTINATION_FULL_ERROR_CODE) return 0;
+  console.log(`[ea-services] freeUnassignedSlots: dummy bid result error=${bidResult.error} success=${bidResult.success}`);
+
+  // Auto-dismiss FUT Enhancer's "Destination Full" dialog if it appeared
+  await delay(300);
+  dismissDestinationFullDialog();
+
+  if (bidResult.error !== DESTINATION_FULL_ERROR_CODE) {
+    console.log(`[ea-services] freeUnassignedSlots: expected 473, got ${bidResult.error} — attempting moves anyway`);
+  }
 
   // Step 3: Refresh unassigned pile from server
   await delay(500);
   await getUnassigned();
   await delay(1000);
 
-  // Step 4: Find duplicates in the refreshed cache
+  // Step 4: Find duplicates in refreshed cache
   const duplicates = repositories.Item.getUnassignedItems()
     .filter(item => item.isDuplicate());
+  console.log(`[ea-services] freeUnassignedSlots: ${duplicates.length} duplicates after refresh`);
+
+  if (duplicates.length === 0) return 0;
 
   // Step 5: Move duplicates to club
-  let slotsFreed = 0;
+  let freed = 0;
   for (let i = duplicates.length - 1; i >= 0; i--) {
     const item = repositories.Item.getUnassignedItems()
       .filter(it => it.isDuplicate())[i];
     if (!item) break;
 
-    await moveItem(item, ItemPile.CLUB);
-    await delay(500);
-    slotsFreed++;
+    const result = await moveItem(item, ItemPile.CLUB);
+    console.log(`[ea-services] freeUnassignedSlots: move defId=${item.definitionId} to club: success=${result.success}`);
+    if (result.success) freed++;
+    await delay(300);
   }
 
-  return slotsFreed;
+  console.log(`[ea-services] freeUnassignedSlots: freed ${freed} slots total`);
+  return freed;
+}
+
+/**
+ * Get items from the club cache.
+ */
+export function getClubItems(): EAItem[] {
+  try {
+    return repositories.Item.getClubItems();
+  } catch {
+    console.log('[ea-services] getClubItems: not available');
+    return [];
+  }
 }
 
 /** Simple delay helper. */
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Dismiss FUT Enhancer's "Destination Full" dialog if present.
+ * Clicks the Cancel button to close it without enabling their glitch.
+ */
+function dismissDestinationFullDialog(): void {
+  // FUT Enhancer uses an alertdialog role
+  const dialog = document.querySelector('[role="alertdialog"]') as HTMLElement | null;
+  if (dialog && (dialog.textContent || '').includes('Destination Full')) {
+    const buttons = dialog.querySelectorAll('button');
+    for (const btn of buttons) {
+      if (btn.textContent?.trim() === 'Cancel') {
+        console.log('[ea-services] dismissDestinationFullDialog: clicking Cancel');
+        btn.click();
+        return;
+      }
+    }
+    // Fallback: click first button
+    if (buttons.length > 0) {
+      console.log('[ea-services] dismissDestinationFullDialog: clicking first button');
+      buttons[0].click();
+      return;
+    }
+  }
+  console.log('[ea-services] dismissDestinationFullDialog: no dialog found');
 }
