@@ -32,6 +32,9 @@ export async function runAlgoAutomationLoop(
   const signal = engine.getAbortSignal();
   const stopped = () => signal?.aborted ?? false;
 
+  let consecutiveFailures = 0;
+  const FAILURE_THRESHOLD = 3;
+
   try {
     while (!stopped()) {
       // ── Phase A: Transfer List Sweep ────────────────────────────────────
@@ -112,6 +115,7 @@ export async function runAlgoAutomationLoop(
           const result: AlgoBuyCycleResult = await executeAlgoBuyCycle(algoSignal, sendMessage);
 
           if (result.outcome === 'bought') {
+            consecutiveFailures = 0;
             totalBought += result.quantity;
             lastPrice = result.buyPrice;
             lastItemId = result.itemId;
@@ -119,14 +123,24 @@ export async function runAlgoAutomationLoop(
               `Bought ${algoSignal.player_name} for ${result.buyPrice.toLocaleString()}`,
             );
           } else if (result.outcome === 'skipped') {
+            consecutiveFailures = 0;
             await engine.setLastEvent(
               `Skipped ${algoSignal.player_name}: ${result.reason}`,
             );
             break;
           } else {
+            consecutiveFailures++;
             await engine.setLastEvent(
               `Error buying ${algoSignal.player_name}: ${result.reason}`,
             );
+            if (consecutiveFailures >= FAILURE_THRESHOLD) {
+              await engine.log(`${consecutiveFailures} consecutive failures — reporting session dead`);
+              try {
+                await sendMessage({ type: 'ALGO_SESSION_DEAD' } satisfies ExtensionMessage);
+              } catch { /* background worker may be dead too */ }
+              await engine.setError('Session expired — recovery in progress');
+              return;
+            }
             break;
           }
 
@@ -182,20 +196,31 @@ export async function runAlgoAutomationLoop(
           const result: AlgoSellCycleResult = await executeAlgoSellCycle(algoSignal, sendMessage, sellEaItemId);
 
           if (result.outcome === 'listed') {
+            consecutiveFailures = 0;
             totalListed += result.quantity;
             lastPrice = result.sellPrice;
             await engine.setLastEvent(
               `Listed ${algoSignal.player_name} for ${result.sellPrice.toLocaleString()}`,
             );
           } else if (result.outcome === 'skipped') {
+            consecutiveFailures = 0;
             await engine.setLastEvent(
               `Skipped sell ${algoSignal.player_name}: ${result.reason}`,
             );
             break;
           } else {
+            consecutiveFailures++;
             await engine.setLastEvent(
               `Error selling ${algoSignal.player_name}: ${result.reason}`,
             );
+            if (consecutiveFailures >= FAILURE_THRESHOLD) {
+              await engine.log(`${consecutiveFailures} consecutive failures — reporting session dead`);
+              try {
+                await sendMessage({ type: 'ALGO_SESSION_DEAD' } satisfies ExtensionMessage);
+              } catch { /* background worker may be dead too */ }
+              await engine.setError('Session expired — recovery in progress');
+              return;
+            }
             break;
           }
 
