@@ -14,13 +14,20 @@ export default defineContentScript({
   main() {
     console.log('[OP Seller Signin] Content script loaded on:', window.location.href);
 
+    // Visual marker so we can verify the content script loaded
+    const marker = document.createElement('div');
+    marker.id = 'op-seller-signin-marker';
+    marker.style.cssText = 'position:fixed;top:0;left:0;background:lime;color:black;padding:5px 10px;z-index:99999;font-size:12px;font-weight:bold;';
+    marker.textContent = 'OP Seller Signin CS loaded';
+    document.body.appendChild(marker);
+
     chrome.storage.local.get(['algoCredentials'], (stored: Record<string, any>) => {
       const creds = stored.algoCredentials as { email: string; password: string } | undefined;
 
-      console.log('[OP Seller Signin] Has credentials:', !!creds);
+      marker.textContent += ' | creds=' + (creds ? 'YES' : 'NO');
 
       if (!creds) {
-        console.log('[OP Seller Signin] No credentials configured — skipping auto-fill');
+        marker.textContent += ' | SKIPPED';
         return;
       }
 
@@ -31,11 +38,16 @@ export default defineContentScript({
     });
 
     function fillAndSubmit(email: string, password: string) {
-      const passwordInput = document.querySelector('input[type="password"]');
+      const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement | null;
       const emailInput = document.querySelector('#email') as HTMLInputElement | null;
 
-      if (passwordInput) {
-        console.log('[OP Seller Signin] Password page detected — filling password');
+      // The signin page has BOTH inputs on every step but hides the inactive one.
+      // Check visibility to determine which step we're actually on.
+      const passwordVisible = passwordInput && passwordInput.offsetWidth > 0 && passwordInput.offsetHeight > 0;
+
+      marker.textContent += ' | pwVis=' + passwordVisible + ' em=' + !!emailInput;
+
+      if (passwordVisible) {
         injectMainWorldScript(`
           (function() {
             var jq = window.$ || window.jQuery;
