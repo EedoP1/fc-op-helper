@@ -12,7 +12,7 @@
  */
 import { enabledItem, lastActionItem, portfolioItem, PortfolioPlayer, ConfirmedPortfolio } from '../src/storage';
 import { ExtensionMessage } from '../src/messages';
-import { initAlgoMaster, startAlgoMaster, stopAlgoMaster, onSessionDead } from '../src/algo-master';
+import { registerAlgoMasterListeners, initAlgoMaster, startAlgoMaster, stopAlgoMaster, onSessionDead } from '../src/algo-master';
 
 const BACKEND_URL = 'http://localhost:8000';
 const POLL_ALARM = 'poll';
@@ -40,7 +40,11 @@ export default defineBackground({
     // D-02: Poll immediately on wake — worker may have been terminated during a cycle.
     maybePoll();
 
-    // Initialize algo master state machine (re-registers listeners, resumes if active)
+    // Register algo master listeners synchronously (MUST happen before any async work
+    // so events aren't missed when the worker wakes from termination).
+    registerAlgoMasterListeners();
+
+    // Initialize algo master state (async — reads storage, resumes if active)
     initAlgoMaster();
 
     // Portfolio message handlers — proxy requests from content script to backend.

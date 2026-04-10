@@ -58,15 +58,24 @@ async function transition(status: AlgoMasterStatus, extra?: Partial<AlgoMasterSt
  * Initialize the master on service worker wake.
  * Reads persisted state and re-registers listeners if algo is active.
  */
-export async function initAlgoMaster(): Promise<void> {
-  await loadState();
-
-  // Register tab event listeners (always, so we catch events even after worker restart)
+/**
+ * Register all event listeners synchronously — MUST be called at module top level
+ * (not after an await) so listeners are registered before any events fire.
+ * MV3 workers can miss events if listeners are registered after async work.
+ */
+export function registerAlgoMasterListeners(): void {
   chrome.tabs.onRemoved.addListener(onTabRemoved);
   chrome.tabs.onUpdated.addListener(onTabUpdated);
-
-  // Register health check alarm listener
   chrome.alarms.onAlarm.addListener(onAlarm);
+}
+
+/**
+ * Initialize the master on service worker wake.
+ * Reads persisted state and resumes if algo was active.
+ * Call AFTER registerAlgoMasterListeners().
+ */
+export async function initAlgoMaster(): Promise<void> {
+  await loadState();
 
   // If we were active before worker restart, resume
   if (currentState.status === 'MONITORING') {
@@ -174,6 +183,7 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
     return;
   }
   if (alarm.name !== HEALTH_CHECK_ALARM) return;
+  await loadState();
   if (currentState.status !== 'MONITORING') return;
   if (currentState.tabId == null) return;
 
