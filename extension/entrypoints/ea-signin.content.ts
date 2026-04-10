@@ -1,66 +1,67 @@
 /**
  * Content script for EA sign-in page (signin.ea.com).
  *
- * Auto-fills email/password when the algo master needs login.
+ * Auto-fills email/password when credentials are configured.
  * Reads credentials from chrome.storage.local, then injects a <script>
  * tag to run jQuery-based form filling in the page's MAIN world.
+ *
+ * Runs on every signin.ea.com page load. If credentials exist, fills the form.
  */
 
 export default defineContentScript({
   matches: ['https://signin.ea.com/*'],
   runAt: 'document_idle',
   main() {
-    console.log('[OP Seller Signin] Content script loaded');
+    console.log('[OP Seller Signin] Content script loaded on:', window.location.href);
 
-    // Check if algo master needs us to log in
-    chrome.storage.local.get(['algoMasterState', 'algoCredentials'], (stored: Record<string, any>) => {
-      const state = stored.algoMasterState as { status: string } | undefined;
+    chrome.storage.local.get(['algoCredentials'], (stored: Record<string, any>) => {
       const creds = stored.algoCredentials as { email: string; password: string } | undefined;
 
-      console.log('[OP Seller Signin] Master state:', state?.status, 'Has creds:', !!creds);
+      console.log('[OP Seller Signin] Has credentials:', !!creds);
 
-      if (!state || !creds) return;
-      if (state.status !== 'SPAWNING' && state.status !== 'RECOVERING') return;
+      if (!creds) {
+        console.log('[OP Seller Signin] No credentials configured — skipping auto-fill');
+        return;
+      }
 
-      // Wait a moment for the page to fully render
+      // Wait for the page to fully render (jQuery + form elements)
       setTimeout(() => {
         fillAndSubmit(creds.email, creds.password);
       }, 2000);
     });
 
     function fillAndSubmit(email: string, password: string) {
-      // Check which step we're on
       const passwordInput = document.querySelector('input[type="password"]');
-      const emailInput = document.querySelector('input[placeholder*="email"]');
+      const emailInput = document.querySelector('#email') as HTMLInputElement | null;
 
       if (passwordInput) {
-        // Step 2: Password page
-        console.log('[OP Seller Signin] On password page — filling password');
+        console.log('[OP Seller Signin] Password page detected — filling password');
         injectMainWorldScript(`
           (function() {
             var jq = window.$ || window.jQuery;
-            if (!jq) { console.error('[OP Seller Signin] No jQuery'); return; }
+            if (!jq) { console.error('[OP Seller Signin] No jQuery on page'); return; }
             jq('input[type="password"]').val(${JSON.stringify(password)}).trigger('input').trigger('change');
+            console.log('[OP Seller Signin] Password set, clicking Sign In...');
             setTimeout(function() {
               jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
             }, 500);
           })();
         `);
       } else if (emailInput) {
-        // Step 1: Email page
-        console.log('[OP Seller Signin] On email page — filling email');
+        console.log('[OP Seller Signin] Email page detected — filling email:', email);
         injectMainWorldScript(`
           (function() {
             var jq = window.$ || window.jQuery;
-            if (!jq) { console.error('[OP Seller Signin] No jQuery'); return; }
+            if (!jq) { console.error('[OP Seller Signin] No jQuery on page'); return; }
             jq('#email').val(${JSON.stringify(email)}).trigger('input').trigger('change');
+            console.log('[OP Seller Signin] Email set to: ' + jq('#email').val() + ', clicking Next...');
             setTimeout(function() {
               jq('#logInBtn').trigger('mousedown').trigger('mouseup').trigger('click');
             }, 500);
           })();
         `);
       } else {
-        console.log('[OP Seller Signin] No email or password input found');
+        console.log('[OP Seller Signin] No email or password input found on page');
       }
     }
 
