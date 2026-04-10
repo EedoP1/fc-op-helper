@@ -121,7 +121,7 @@ function onTabRemoved(tabId: number): void {
   startRecovery();
 }
 
-function onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo): void {
+function onTabUpdated(tabId: number, changeInfo: { url?: string; status?: string }): void {
   if (tabId !== currentState.tabId) return;
   if (currentState.status !== 'MONITORING') return;
   if (!changeInfo.url) return;
@@ -267,7 +267,7 @@ function waitForPageLoad(tabId: number): Promise<boolean> {
       resolve(false);
     }, PAGE_LOAD_TIMEOUT_MS);
 
-    function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
+    function listener(updatedTabId: number, changeInfo: { url?: string; status?: string }) {
       if (updatedTabId !== tabId) return;
       if (changeInfo.status !== 'complete') return;
       chrome.tabs.onUpdated.removeListener(listener);
@@ -399,7 +399,7 @@ function waitForUrlMatch(tabId: number, urlFragment: string, timeoutMs: number):
       resolve(false);
     }, timeoutMs);
 
-    function listener(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
+    function listener(updatedTabId: number, changeInfo: { url?: string; status?: string }) {
       if (updatedTabId !== tabId) return;
       if (!changeInfo.url) return;
       if (changeInfo.url.includes(urlFragment)) {
