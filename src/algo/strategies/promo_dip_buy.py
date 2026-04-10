@@ -13,10 +13,13 @@ for 3 consecutive hours.
 
 Works on hourly market_snapshots data.
 """
+import logging
 from datetime import datetime
 from collections import defaultdict
 from src.algo.models import Signal, Portfolio
 from src.algo.strategies.base import Strategy
+
+logger = logging.getLogger(__name__)
 
 
 class PromoDipBuyStrategy(Strategy):
@@ -46,11 +49,15 @@ class PromoDipBuyStrategy(Strategy):
         self.stop_delay_hours: int = params.get("stop_delay_hours", 48)
         # Max hold time in hours before force-sell
         self.max_hold_hours: int = params.get("max_hold_hours", 336)
+        # Max days after release for strong buy signal
+        self.max_age_days: int = params.get("max_age_days", 10)
         # Price filters
         self.min_price: int = params.get("min_price", 12000)
         self.max_price: int = params.get("max_price", 61000)
-        # Position sizing: max % of portfolio per card
-        self.max_position_pct: float = params.get("max_position_pct", 0.10)
+        # Position sizing: max % of portfolio per card for snapshot (weak) buys
+        self.snapshot_max_pct: float = params.get("snapshot_max_pct", 0.20)
+        # Position sizing: max % of portfolio to spend per tick on strong buys
+        self.tick_max_pct: float = params.get("tick_max_pct", 0.20)
 
         # Internal state
         self._old_cards: set[int] = set()
@@ -153,6 +160,11 @@ class PromoDipBuyStrategy(Strategy):
 
                 if sell:
                     signals.append(Signal(action="SELL", ea_id=ea_id, quantity=holding))
+                    reason = "max_hold" if hold_hours >= self.max_hold_hours else "trend_stall"
+                    logger.debug(
+                        f"[{ts_clean}] SELL: ea_id={ea_id} qty={holding} price={price:,} "
+                        f"hold_hrs={hold_hours:.0f} reason={reason}"
+                    )
                     self._peak_prices.pop(ea_id, None)
                     self._buy_ts.pop(ea_id, None)
                     self._sell_stall_count.pop(ea_id, None)
@@ -163,15 +175,15 @@ class PromoDipBuyStrategy(Strategy):
         for ea_id, price in ticks:
             if ea_id not in self._created_at_map:
                 continue
-            if ea_id in self._bought or portfolio.holdings(ea_id) > 0:
-                continue
             if ea_id not in self._promo_ids:
+                continue
+            if portfolio.holdings(ea_id) > 0:
                 continue
 
             created = self._created_at_map[ea_id]
             cr_clean = created.replace(tzinfo=None) if created.tzinfo else created
             days_since = (ts_clean - cr_clean).days
-            if days_since < 0 or days_since > 13:
+            if days_since < 0 or days_since > self.max_age_days:
                 continue
 
             if not (self.min_price <= price <= self.max_price):
@@ -192,6 +204,12 @@ class PromoDipBuyStrategy(Strategy):
 
             if trend >= self.trend_pct:
                 strong_buys.append((ea_id, price))
+                self._bought.add(ea_id)  # exclude from snapshot layer
+                logger.debug(
+                    f"[{ts_clean}] STRONG SIGNAL: ea_id={ea_id} price={price:,} "
+                    f"trend={trend:.1%} days_since={days_since} "
+                    f"holding={portfolio.holdings(ea_id)}"
+                )
 
         # ── BUY LAYER 2: Snapshot (top N at 176h after release) ──
 
@@ -244,32 +262,82 @@ class PromoDipBuyStrategy(Strategy):
                 snapshot_buys.append((ea_id, price))
 
         # ── Size and execute all buys ──
+        # Strong buys go all-in, snapshot buys split leftovers capped at 20%
 
-        potential_buys = strong_buys + snapshot_buys
-        if potential_buys:
+        if strong_buys or snapshot_buys:
             sell_revenue = sum(
                 next((p * sig.quantity * 95 // 100 for eid, p in ticks if eid == sig.ea_id), 0)
                 for sig in signals if sig.action == "SELL"
             )
             available_cash = portfolio.cash + sell_revenue
-            per_card = available_cash // len(potential_buys)
 
-            if self.max_position_pct > 0:
+            held_value = sum(
+                next((p for eid, p in ticks if eid == pos.ea_id), pos.buy_price) * pos.quantity
+                for pos in portfolio.positions
+            )
+            logger.debug(
+                f"[{ts_clean}] BUY SIZING: cash={portfolio.cash:,} sell_rev={sell_revenue:,} "
+                f"available={available_cash:,} held_value={held_value:,} "
+                f"strong={[(eid, p) for eid, p in strong_buys]} "
+                f"snapshot={[(eid, p) for eid, p in snapshot_buys]} "
+                f"positions={[(pos.ea_id, pos.quantity, pos.buy_price) for pos in portfolio.positions]}"
+            )
+
+            # Strong buys: spend up to tick_max_pct of portfolio this tick
+            if strong_buys:
+                price_map = {eid: p for eid, p in ticks}
+                portfolio_value = available_cash + sum(
+                    price_map.get(pos.ea_id, pos.buy_price) * pos.quantity
+                    for pos in portfolio.positions
+                )
+                tick_budget = int(portfolio_value * self.tick_max_pct)
+                spend_this_tick = min(available_cash, tick_budget)
+                per_strong = spend_this_tick // len(strong_buys)
+                for ea_id, price in strong_buys:
+                    quantity = per_strong // price if price > 0 else 0
+                    if quantity > 0:
+                        spent = quantity * price
+                        available_cash -= spent
+                        signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))
+                        self._peak_prices[ea_id] = price
+                        self._buy_ts[ea_id] = timestamp
+                        logger.debug(
+                            f"  STRONG BUY: ea_id={ea_id} qty={quantity} price={price:,} "
+                            f"spent={spent:,} remaining={available_cash:,} "
+                            f"(tick_budget={tick_budget:,})"
+                        )
+                    else:
+                        logger.debug(
+                            f"  STRONG BUY SKIPPED (no cash): ea_id={ea_id} price={price:,} "
+                            f"per_strong={per_strong:,} qty=0"
+                        )
+
+            # Snapshot buys: use remaining cash, capped at 20% of portfolio per card
+            if snapshot_buys and available_cash > 0:
                 price_map = {eid: p for eid, p in ticks}
                 portfolio_value = portfolio.cash + sell_revenue + sum(
                     price_map.get(pos.ea_id, pos.buy_price) * pos.quantity
                     for pos in portfolio.positions
                 )
-                max_spend = int(portfolio_value * self.max_position_pct)
-                per_card = min(per_card, max_spend)
+                max_spend = int(portfolio_value * self.snapshot_max_pct)
+                per_snapshot = min(available_cash // len(snapshot_buys), max_spend)
 
-            for ea_id, price in potential_buys:
-                quantity = per_card // price if price > 0 else 0
-                if quantity > 0:
-                    signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))
-                    self._peak_prices[ea_id] = price
-                    self._buy_ts[ea_id] = timestamp
-                    self._bought.add(ea_id)
+                for ea_id, price in snapshot_buys:
+                    quantity = per_snapshot // price if price > 0 else 0
+                    if quantity > 0:
+                        signals.append(Signal(action="BUY", ea_id=ea_id, quantity=quantity))
+                        self._peak_prices[ea_id] = price
+                        self._buy_ts[ea_id] = timestamp
+                        self._bought.add(ea_id)
+                        logger.debug(
+                            f"  SNAPSHOT BUY: ea_id={ea_id} qty={quantity} price={price:,} "
+                            f"per_snapshot={per_snapshot:,}"
+                        )
+                    else:
+                        logger.debug(
+                            f"  SNAPSHOT BUY SKIPPED (no cash): ea_id={ea_id} price={price:,} "
+                            f"per_snapshot={per_snapshot:,} qty=0"
+                        )
 
         return signals
 
@@ -278,8 +346,8 @@ class PromoDipBuyStrategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        """Hourly market_snapshots grid — winning params from backtesting."""
-        return [{
+        """Hourly market_snapshots grid — sweep tick_max_pct."""
+        base = {
             "trend_pct": 0.21,
             "trend_lookback": 12,
             "snapshot_hour": 176,
@@ -290,7 +358,9 @@ class PromoDipBuyStrategy(Strategy):
             "sell_confirm_hours": 3,
             "stop_delay_hours": 48,
             "max_hold_hours": 336,
+            "max_age_days": 10,
             "min_price": 12000,
             "max_price": 61000,
-            "max_position_pct": 0.10,
-        }]
+            "snapshot_max_pct": 0.20,
+        }
+        return [{**base, "tick_max_pct": 0.20}]
