@@ -104,6 +104,15 @@ async def run_signal_engine(session_factory: async_sessionmaker) -> int:
         engine.strategy._buy_ts[pos.ea_id] = bt
         engine.strategy._peak_prices[pos.ea_id] = pos.peak_price
 
+    # Mark snapshot batches as done if we already hold cards from them.
+    # Without this, each runner invocation replays history with a fresh
+    # _batch_snapshot_done={}, the snapshot fires again, skips the cards
+    # already in _bought, and buys the NEXT top-N — defeating the cap.
+    for pos in positions:
+        batch_key = engine.strategy._batch_map.get(pos.ea_id)
+        if batch_key:
+            engine.strategy._batch_snapshot_done[batch_key] = True
+
     # Step 6: Replay all ticks — warm up strategy state on history,
     # but only keep signals from the LAST (current) tick.
     # The strategy needs the full price history to compute trends,
