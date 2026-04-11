@@ -209,6 +209,18 @@ async def algo_status(request: Request):
             )
             snapshot_map = {row.ea_id: row.current_lowest_bin for row in snap_result.all()}
 
+        # Check which positions have a completed SELL signal (= actively selling)
+        selling_ea_ids: set[int] = set()
+        if ea_ids:
+            sell_result = await session.execute(
+                select(AlgoSignal.ea_id).where(
+                    AlgoSignal.ea_id.in_(ea_ids),
+                    AlgoSignal.action == "SELL",
+                    AlgoSignal.status == "DONE",
+                )
+            )
+            selling_ea_ids = {r.ea_id for r in sell_result.all()}
+
         held_cost = 0
         position_rows = []
         for pos in positions:
@@ -228,6 +240,7 @@ async def algo_status(request: Request):
                 "ea_item_id": pos.ea_item_id,
                 "listed_price": pos.listed_price,
                 "listed_at": pos.listed_at.isoformat() if pos.listed_at else None,
+                "selling": pos.ea_id in selling_ea_ids,
             })
 
         # Count pending signals

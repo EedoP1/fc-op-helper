@@ -54,6 +54,7 @@ export async function runAlgoAutomationLoop(
               quantity: p.quantity,
               buy_price: p.buy_price,
               listed_price: p.listed_price,
+              selling: p.selling,
             }));
             const sweepResult = await runAlgoTransferListSweep(sendMessage, positions, stopped);
             if (sweepResult.soldCount > 0 || sweepResult.relistedCount > 0) {

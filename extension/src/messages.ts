@@ -92,6 +92,7 @@ export type AlgoPosition = {
   ea_item_id?: number;
   listed_price: number | null;
   listed_at: string | null;
+  selling: boolean;
 };
 
 /** Full response shape from GET /algo/status. */

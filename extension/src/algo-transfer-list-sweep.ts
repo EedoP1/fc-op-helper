@@ -7,11 +7,12 @@
  * No DOM interaction — all operations use EA's internal service APIs.
  *
  *   - Sold items matching algo positions -> report to backend via ALGO_POSITION_SOLD
- *   - Expired items matching algo positions -> discover current lowest BIN, relist individually
+ *   - Expired items matching algo positions -> relist
  *   - Clear sold items from the TL
  *
- * Does NOT use relistAll() (which relists at original locked price).
- * Instead, individually relists each expired card at current lowest BIN.
+ * Relist behavior depends on whether a sell signal has fired:
+ *   - Not selling: relist at same listed_price (hold position)
+ *   - Selling: discover current lowest BIN and undercut (move the card)
  */
 import {
   getTransferList,
@@ -28,10 +29,6 @@ import {
 import { jitter } from './automation';
 import type { ExtensionMessage } from './messages';
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const RATE_LIMIT_ERROR_CODE = 460;
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type AlgoSweepResult = {
@@ -46,7 +43,12 @@ type PositionMatch = {
   quantity: number;
   buy_price: number;
   listed_price: number | null;
+  selling: boolean;
 };
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const RATE_LIMIT_ERROR_CODE = 460;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ function matchItemToPosition(
 
 /**
  * Discover current lowest BIN for a player via transfer market search.
- * Narrows down through price tiers to find the true floor.
+ * Used when relisting cards that have a sell signal (need to undercut market).
  */
 async function discoverLowestBin(
   ea_id: number,
@@ -192,7 +194,7 @@ export async function runAlgoTransferListSweep(
 
   if (stopped()) return result;
 
-  // Step 3: Match expired items to algo positions and relist at current lowest BIN
+  // Step 3: Match expired items to algo positions and relist
   const expiredByPosition = new Map<number, { items: EAItem[]; match: PositionMatch }>();
   for (const item of groups.expired) {
     const match = matchItemToPosition(item, positions);
@@ -208,17 +210,20 @@ export async function runAlgoTransferListSweep(
   for (const [ea_id, { items: expiredItems, match }] of expiredByPosition) {
     if (stopped()) return result;
 
-    // Discover current lowest BIN for this player
-    const fallback = match.listed_price ?? match.buy_price;
-    await jitter(1000, 2000);
-    const lowestBin = await discoverLowestBin(ea_id, fallback);
-
-    if (stopped()) return result;
-
-    const listBin = roundToNearestStep(getBeforeStepValue(lowestBin));
+    let listBin: number;
+    if (match.selling) {
+      // Sell signal fired — undercut current market to move the card
+      const fallback = match.listed_price ?? match.buy_price;
+      await jitter(1000, 2000);
+      const lowestBin = await discoverLowestBin(ea_id, fallback);
+      listBin = roundToNearestStep(getBeforeStepValue(lowestBin));
+    } else {
+      // No sell signal — relist at same OP price
+      listBin = match.listed_price ?? match.buy_price;
+    }
     const listStart = roundToNearestStep(getBeforeStepValue(listBin));
 
-    // Relist each expired card individually at current market price
+    // Relist each expired card individually
     for (const expItem of expiredItems) {
       if (stopped()) return result;
 
