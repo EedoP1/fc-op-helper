@@ -12,3 +12,4 @@ __pycache__/
 # Ignore root-level test scripts (legacy), but not tests/ directory
 /test_*.py
 .worktrees/
+brand/
