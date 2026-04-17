@@ -463,75 +463,6 @@ async def save_result(session_factory: async_sessionmaker[AsyncSession], result:
         await session.commit()
 
 
-async def load_price_data(
-    session_factory: async_sessionmaker[AsyncSession],
-    min_price: int = 0,
-    max_price: int = 0,
-    min_data_points: int = 24,
-    days: int = 0,
-) -> dict[int, list[tuple[dt, int]]]:
-    """Load price history from DB into memory.
-
-    Returns {ea_id: [(timestamp, price), ...]} sorted by timestamp.
-    """
-    if days > 0:
-        cutoff = dt.utcnow() - __import__('datetime').timedelta(days=days)
-        # Align cutoff to previous Sunday so existing_ids catches full weeks
-        days_since_sunday = (cutoff.weekday() + 1) % 7  # Mon=0 -> 1, Sun=6 -> 0
-        cutoff = cutoff - __import__('datetime').timedelta(days=days_since_sunday)
-        cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
-        query = text(
-            "SELECT futbin_id, timestamp, price FROM price_history "
-            "WHERE timestamp >= :cutoff AND futbin_id IS NOT NULL "
-            "ORDER BY futbin_id, timestamp"
-        )
-        params = {"cutoff": cutoff}
-    else:
-        query = text(
-            "SELECT futbin_id, timestamp, price FROM price_history "
-            "WHERE futbin_id IS NOT NULL ORDER BY futbin_id, timestamp"
-        )
-        params = {}
-
-    async with session_factory() as session:
-        result = await session.execute(query, params)
-        rows = result.fetchall()
-
-    if days > 0:
-        ea_query = text(
-            "SELECT DISTINCT futbin_id, ea_id FROM price_history "
-            "WHERE timestamp >= :cutoff AND futbin_id IS NOT NULL"
-        )
-        ea_params = {"cutoff": params["cutoff"]}
-    else:
-        ea_query = text(
-            "SELECT DISTINCT futbin_id, ea_id FROM price_history "
-            "WHERE futbin_id IS NOT NULL"
-        )
-        ea_params = {}
-
-    async with session_factory() as session:
-        ea_rows = await session.execute(ea_query, ea_params)
-        futbin_to_ea = {r[0]: r[1] for r in ea_rows.fetchall()}
-
-    data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
-    for row in rows:
-        futbin_id, ts, price = row
-        if isinstance(ts, str):
-            ts = dt.fromisoformat(ts)
-        if min_price and price < min_price:
-            continue
-        if max_price and price > max_price:
-            continue
-        data[futbin_id].append((ts, price))
-
-    filtered = {
-        fid: points for fid, points in data.items()
-        if len(points) >= min_data_points
-    }
-    return filtered, futbin_to_ea
-
-
 async def load_market_snapshot_data(
     session_factory: async_sessionmaker[AsyncSession],
     min_price: int = 0,
@@ -642,7 +573,6 @@ async def run_cli(
     days: int = 0,
     min_price: int = 0,
     max_price: int = 0,
-    source: str = "price_history",
 ):
     """CLI entrypoint: load data, run strategies, save results."""
     from src.algo.strategies import discover_strategies
@@ -653,34 +583,27 @@ async def run_cli(
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    use_market_snapshots = source == "market_snapshots"
-    futbin_to_ea: dict[int, int] | None = None
     created_at_map: dict[int, dt] | None = None
 
-    price_label = f" [source: {source}]"
+    price_label = ""
     if days:
         price_label += f" (last {days} days)"
     if min_price:
         price_label += f" (min {min_price:,})"
     if max_price:
         price_label += f" (max {max_price:,})"
-    logger.info(f"Loading price data from database{price_label}...")
+    logger.info(f"Loading price data from market_snapshots{price_label}...")
 
-    if use_market_snapshots:
-        price_data, created_at_map = await load_market_snapshot_data(
-            session_factory, min_price=min_price, max_price=max_price,
-        )
-    else:
-        price_data, futbin_to_ea = await load_price_data(
-            session_factory, min_price=min_price, max_price=max_price, days=days,
-        )
+    price_data, created_at_map = await load_market_snapshot_data(
+        session_factory,
+        min_price=min_price,
+        max_price=max_price,
+        days=days,
+    )
     logger.info(f"Loaded {len(price_data)} players with price data")
 
     if not price_data:
-        if use_market_snapshots:
-            logger.error("No market snapshot data found. Is the scanner running?")
-        else:
-            logger.error("No price data found. Run the scraper first: python -m src.algo.scraper")
+        logger.error("No market snapshot data found. Is the scanner running?")
         await engine.dispose()
         return
 
@@ -722,23 +645,12 @@ async def run_cli(
     # Load player name mapping for trade log
     player_names: dict[int, str] = {}
     try:
-        if use_market_snapshots:
-            async with session_factory() as session:
-                rows = await session.execute(text(
-                    "SELECT ea_id, name FROM players WHERE name IS NOT NULL"
-                ))
-                for row in rows.fetchall():
-                    player_names[row[0]] = row[1]
-        else:
-            async with session_factory() as session:
-                rows = await session.execute(text(
-                    "SELECT DISTINCT ph.futbin_id, p.name "
-                    "FROM price_history ph "
-                    "JOIN players p ON ph.ea_id = p.ea_id "
-                    "WHERE ph.futbin_id IS NOT NULL AND p.name IS NOT NULL"
-                ))
-                for row in rows.fetchall():
-                    player_names[row[0]] = row[1]
+        async with session_factory() as session:
+            rows = await session.execute(text(
+                "SELECT ea_id, name FROM players WHERE name IS NOT NULL"
+            ))
+            for row in rows.fetchall():
+                player_names[row[0]] = row[1]
         logger.info(f"Loaded {len(player_names)} player names")
     except Exception as e:
         logger.warning(f"Could not load player names: {e}")
@@ -829,17 +741,15 @@ async def run_cli(
 @click.option("--days", default=0, help="Only use last N days of price data (0 = all)")
 @click.option("--min-price", default=0, help="Only include cards with prices >= this value")
 @click.option("--max-price", default=0, help="Only include cards with prices <= this value")
-@click.option("--source", default="price_history", type=click.Choice(["price_history", "market_snapshots"]),
-              help="Data source: price_history (FUTBIN daily) or market_snapshots (real hourly)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG logging for strategy decisions")
-def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, source, db_url, verbose):
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, db_url, verbose):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if verbose:
         logging.getLogger("src.algo.strategies").setLevel(logging.DEBUG)
         logging.getLogger("src.algo.models").setLevel(logging.DEBUG)
-    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price, source=source))
+    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price))
 
 
 if __name__ == "__main__":
