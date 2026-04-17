@@ -80,18 +80,23 @@ async def get_portfolio(
             or last_scanned_at < stale_cutoff
         )
         epph = entry.get("expected_profit_per_hour")
+        sph = entry.get("sales_per_hour")
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
             "rating": entry["rating"],
             "position": entry["position"],
             "price": entry["buy_price"],
+            "sell_price": entry["sell_price"],
+            "net_profit": entry["net_profit"],
             "margin_pct": entry["margin_pct"],
             "op_sales": entry["op_sales"],
             "total_sales": entry["total_sales"],
             "op_ratio": round(entry["op_ratio"], 3),
             "expected_profit": round(entry["expected_profit"], 1),
             "efficiency": round(entry["efficiency"], 4),
+            "sales_per_hour": round(sph, 1) if sph is not None else None,
+            "card_type": entry.get("card_type"),
             "is_stale": is_stale,
             "last_scanned": (
                 last_scanned_at.isoformat() if last_scanned_at else None
