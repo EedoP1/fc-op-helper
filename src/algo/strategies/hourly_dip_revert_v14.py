@@ -1,14 +1,10 @@
-"""Hourly dip reversion v12 — smoothed-based stop-loss.
+"""Hourly dip reversion v14 — sweep median_window_h around v12 winner.
 
-v11 hit +$1.01M but the worst realized trades were -36 to -63% — far past the
-stop_loss=0.12 threshold. Root cause: `stop_loss` checks raw tick price, which
-can spike down to the hourly MIN for a single snapshot; we then fire SELL and
-execute at that same hourly MIN. Double-loss.
-
-v12 switches the stop-loss check to use SMOOTHED price (3h rolling median).
-That only triggers on SUSTAINED downward moves, not single-hour min-prints.
-A real 12% sustained drop is a real loss; a one-hour print of the hourly min
-during a broader flat period is not.
+v12's best params: median_window_h=24, profit_target=0.25, stop_loss=0.15
+smoothed, max_price=80k, dip_pct=0.05, confirm=2. v14 holds those constants
+and sweeps the median window length. Hypothesis: a longer baseline window
+(36-72h) might reduce false dips, especially in W14 where the early data
+is noisier.
 """
 import logging
 from datetime import datetime
@@ -20,23 +16,23 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class HourlyDipRevertV12Strategy(Strategy):
-    """v11 structure but stop-loss fires on smoothed, not raw tick."""
+class HourlyDipRevertV14Strategy(Strategy):
+    """v12 with longer baseline median windows."""
 
-    name = "hourly_dip_revert_v12"
+    name = "hourly_dip_revert_v14"
 
     def __init__(self, params: dict):
         self.params = params
-        self.median_window_h: int = params.get("median_window_h", 24)
+        self.median_window_h: int = params.get("median_window_h", 36)
         self.smooth_window_h: int = params.get("smooth_window_h", 3)
         self.outlier_tol: float = params.get("outlier_tol", 0.05)
         self.dip_pct: float = params.get("dip_pct", 0.05)
         self.confirm_hours: int = params.get("confirm_hours", 2)
-        self.profit_target: float = params.get("profit_target", 0.20)
-        self.stop_loss: float = params.get("stop_loss", 0.10)
+        self.profit_target: float = params.get("profit_target", 0.25)
+        self.stop_loss: float = params.get("stop_loss", 0.15)
         self.max_hold_h: int = params.get("max_hold_h", 48)
         self.min_price: int = params.get("min_price", 10000)
-        self.max_price: int = params.get("max_price", 50000)
+        self.max_price: int = params.get("max_price", 80000)
         self.max_positions: int = params.get("max_positions", 8)
         self.min_age_days: int = params.get("min_age_days", 7)
         self.burn_in_h: int = params.get("burn_in_h", 72)
@@ -107,8 +103,6 @@ class HourlyDipRevertV12Strategy(Strategy):
                     smooth_pct = (smooth - buy_price) / buy_price if buy_price > 0 else 0
                     if smooth_pct >= self.profit_target:
                         sell = True
-                    # KEY CHANGE: stop-loss on SMOOTHED price (sustained drop),
-                    # not single-hour tick
                     if smooth_pct <= -self.stop_loss:
                         sell = True
 
@@ -191,22 +185,22 @@ class HourlyDipRevertV12Strategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        """Winning config from autonomous research on pessimistic loader:
-        +$1.24M (vs v5 baseline +$14k = 83x), W14 +22%/W15 +73%, 7-weekday
-        coverage, -0.49 correlation with promo_dip_buy."""
-        return [{
-            "median_window_h": 24,
+        base = {
             "smooth_window_h": 3,
             "outlier_tol": 0.05,
-            "dip_pct": 0.05,
-            "confirm_hours": 2,
-            "profit_target": 0.25,
-            "stop_loss": 0.15,
             "max_hold_h": 48,
             "min_price": 10000,
             "max_price": 80000,
-            "max_positions": 8,
             "min_age_days": 7,
             "burn_in_h": 72,
             "qty_cap": 3,
-        }]
+            "max_positions": 8,
+            "confirm_hours": 2,
+            "dip_pct": 0.05,
+            "stop_loss": 0.15,
+            "profit_target": 0.25,
+        }
+        return [
+            {**base, "median_window_h": w}
+            for w in [12, 18, 24, 36, 48, 72]
+        ]

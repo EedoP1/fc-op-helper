@@ -1,14 +1,18 @@
-"""Hourly dip reversion v12 — smoothed-based stop-loss.
+"""Hourly dip reversion v15 — market-breadth regime filter.
 
-v11 hit +$1.01M but the worst realized trades were -36 to -63% — far past the
-stop_loss=0.12 threshold. Root cause: `stop_loss` checks raw tick price, which
-can spike down to the hourly MIN for a single snapshot; we then fire SELL and
-execute at that same hourly MIN. Double-loss.
+v12 hits +$1.24M but its only negative W14 day is Apr 3 (-$28k from 15
+trades) — the Easter promo Friday, when broad-market sympathy dumps trigger
+many false individual signals. Hard-coding "skip Friday" would be cheating;
+the same condition (market-wide dump) can occur any day (server bug,
+TOTS reveal, EA bug, weekend reset).
 
-v12 switches the stop-loss check to use SMOOTHED price (3h rolling median).
-That only triggers on SUSTAINED downward moves, not single-hour min-prints.
-A real 12% sustained drop is a real loss; a one-hour print of the hourly min
-during a broader flat period is not.
+v15 measures DIP BREADTH each hour: count cards currently dipping ≥5% below
+their 24h median. When breadth exceeds a threshold (suggesting a market-wide
+dump rather than idiosyncratic dips), skip new BUYS — wait for the regime to
+clear. Existing positions follow normal exit rules.
+
+This is fully generic — no calendar dates, no day-of-week. It's a regime
+detector that triggers whenever the market-wide signal correlates.
 """
 import logging
 from datetime import datetime
@@ -20,10 +24,10 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class HourlyDipRevertV12Strategy(Strategy):
-    """v11 structure but stop-loss fires on smoothed, not raw tick."""
+class HourlyDipRevertV15Strategy(Strategy):
+    """v12 + dip-breadth market-regime filter."""
 
-    name = "hourly_dip_revert_v12"
+    name = "hourly_dip_revert_v15"
 
     def __init__(self, params: dict):
         self.params = params
@@ -32,15 +36,18 @@ class HourlyDipRevertV12Strategy(Strategy):
         self.outlier_tol: float = params.get("outlier_tol", 0.05)
         self.dip_pct: float = params.get("dip_pct", 0.05)
         self.confirm_hours: int = params.get("confirm_hours", 2)
-        self.profit_target: float = params.get("profit_target", 0.20)
-        self.stop_loss: float = params.get("stop_loss", 0.10)
+        self.profit_target: float = params.get("profit_target", 0.25)
+        self.stop_loss: float = params.get("stop_loss", 0.15)
         self.max_hold_h: int = params.get("max_hold_h", 48)
         self.min_price: int = params.get("min_price", 10000)
-        self.max_price: int = params.get("max_price", 50000)
+        self.max_price: int = params.get("max_price", 80000)
         self.max_positions: int = params.get("max_positions", 8)
         self.min_age_days: int = params.get("min_age_days", 7)
         self.burn_in_h: int = params.get("burn_in_h", 72)
         self.qty_cap: int = params.get("qty_cap", 3)
+        # NEW: max fraction of observed cards that may be currently dipping
+        # before we suspect a market-wide dump and skip new buys
+        self.max_breadth: float = params.get("max_breadth", 0.18)
 
         self._history: dict[int, deque] = defaultdict(
             lambda: deque(maxlen=self.median_window_h + 8)
@@ -88,6 +95,8 @@ class HourlyDipRevertV12Strategy(Strategy):
         if self._first_ts is None:
             self._first_ts = ts_clean
 
+        # Update history + sells
+        per_card_state: list[tuple[int, int, int, int]] = []  # (ea_id, price, smooth, dip*1e4 or -1)
         for ea_id, price in ticks:
             self._history[ea_id].append(price)
 
@@ -98,17 +107,15 @@ class HourlyDipRevertV12Strategy(Strategy):
                 bt_clean = buy_ts.replace(tzinfo=None) if buy_ts.tzinfo else buy_ts
                 hold_hours = (ts_clean - bt_clean).total_seconds() / 3600
 
-                smooth = self._smooth(self._history[ea_id])
+                smooth_h = self._smooth(self._history[ea_id])
 
                 sell = False
                 if hold_hours >= self.max_hold_h:
                     sell = True
-                elif smooth > 0:
-                    smooth_pct = (smooth - buy_price) / buy_price if buy_price > 0 else 0
+                elif smooth_h > 0:
+                    smooth_pct = (smooth_h - buy_price) / buy_price if buy_price > 0 else 0
                     if smooth_pct >= self.profit_target:
                         sell = True
-                    # KEY CHANGE: stop-loss on SMOOTHED price (sustained drop),
-                    # not single-hour tick
                     if smooth_pct <= -self.stop_loss:
                         sell = True
 
@@ -120,6 +127,28 @@ class HourlyDipRevertV12Strategy(Strategy):
         elapsed_h = (ts_clean - self._first_ts).total_seconds() / 3600
         if elapsed_h < self.burn_in_h:
             return signals
+
+        # Compute dip breadth for this hour: fraction of well-tracked cards
+        # currently exhibiting smoothed dip >= dip_pct vs their 24h median
+        dipping = 0
+        eligible = 0
+        for ea_id, price in ticks:
+            hist = self._history[ea_id]
+            if len(hist) < self.median_window_h:
+                continue
+            sm = self._smooth(hist)
+            if sm <= 0 or self._is_outlier(price, sm):
+                continue
+            md = self._median(hist)
+            if md <= 0:
+                continue
+            eligible += 1
+            d = (md - sm) / md
+            if d >= self.dip_pct:
+                dipping += 1
+
+        breadth = (dipping / eligible) if eligible > 0 else 0.0
+        market_dump = breadth > self.max_breadth
 
         candidates: list[tuple[int, int, float]] = []
         for ea_id, price in ticks:
@@ -138,7 +167,7 @@ class HourlyDipRevertV12Strategy(Strategy):
             dip = (med - smooth) / med
             if dip >= self.dip_pct:
                 self._dip_streak[ea_id] += 1
-                if self._dip_streak[ea_id] >= self.confirm_hours:
+                if not market_dump and self._dip_streak[ea_id] >= self.confirm_hours:
                     if portfolio.holdings(ea_id) > 0:
                         continue
                     if ea_id in self._promo_ids:
@@ -191,10 +220,7 @@ class HourlyDipRevertV12Strategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        """Winning config from autonomous research on pessimistic loader:
-        +$1.24M (vs v5 baseline +$14k = 83x), W14 +22%/W15 +73%, 7-weekday
-        coverage, -0.49 correlation with promo_dip_buy."""
-        return [{
+        base = {
             "median_window_h": 24,
             "smooth_window_h": 3,
             "outlier_tol": 0.05,
@@ -209,4 +235,6 @@ class HourlyDipRevertV12Strategy(Strategy):
             "min_age_days": 7,
             "burn_in_h": 72,
             "qty_cap": 3,
-        }]
+        }
+        # Sweep breadth thresholds; max_breadth=1.0 effectively disables filter
+        return [{**base, "max_breadth": b} for b in [0.10, 0.15, 0.20, 0.30, 0.50, 1.0]]

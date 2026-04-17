@@ -1,14 +1,14 @@
-"""Hourly dip reversion v12 — smoothed-based stop-loss.
+"""Hourly dip reversion v13 — tighter smoothed stop + 3h confirmation.
 
-v11 hit +$1.01M but the worst realized trades were -36 to -63% — far past the
-stop_loss=0.12 threshold. Root cause: `stop_loss` checks raw tick price, which
-can spike down to the hourly MIN for a single snapshot; we then fire SELL and
-execute at that same hourly MIN. Double-loss.
+v12 hit +$1.24M but W14 only +22.2% (just below the 25% bar). Bottom 5
+trades still bleed -42 to -54% because stop_loss=0.15 on smoothed lets
+losses compound before we exit at the hourly MIN.
 
-v12 switches the stop-loss check to use SMOOTHED price (3h rolling median).
-That only triggers on SUSTAINED downward moves, not single-hour min-prints.
-A real 12% sustained drop is a real loss; a one-hour print of the hourly min
-during a broader flat period is not.
+v13:
+  - tighter smoothed stop (-0.07) to bound losses sooner
+  - 3-hour dip confirmation (more conviction per entry)
+  - dip_pct=0.06 (slightly stricter)
+  - keep profit_target=0.25 (sweet spot from v12)
 """
 import logging
 from datetime import datetime
@@ -20,23 +20,23 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class HourlyDipRevertV12Strategy(Strategy):
-    """v11 structure but stop-loss fires on smoothed, not raw tick."""
+class HourlyDipRevertV13Strategy(Strategy):
+    """v12 with tighter smoothed stop + 3h confirm."""
 
-    name = "hourly_dip_revert_v12"
+    name = "hourly_dip_revert_v13"
 
     def __init__(self, params: dict):
         self.params = params
         self.median_window_h: int = params.get("median_window_h", 24)
         self.smooth_window_h: int = params.get("smooth_window_h", 3)
         self.outlier_tol: float = params.get("outlier_tol", 0.05)
-        self.dip_pct: float = params.get("dip_pct", 0.05)
-        self.confirm_hours: int = params.get("confirm_hours", 2)
-        self.profit_target: float = params.get("profit_target", 0.20)
-        self.stop_loss: float = params.get("stop_loss", 0.10)
+        self.dip_pct: float = params.get("dip_pct", 0.06)
+        self.confirm_hours: int = params.get("confirm_hours", 3)
+        self.profit_target: float = params.get("profit_target", 0.25)
+        self.stop_loss: float = params.get("stop_loss", 0.07)
         self.max_hold_h: int = params.get("max_hold_h", 48)
         self.min_price: int = params.get("min_price", 10000)
-        self.max_price: int = params.get("max_price", 50000)
+        self.max_price: int = params.get("max_price", 80000)
         self.max_positions: int = params.get("max_positions", 8)
         self.min_age_days: int = params.get("min_age_days", 7)
         self.burn_in_h: int = params.get("burn_in_h", 72)
@@ -107,8 +107,6 @@ class HourlyDipRevertV12Strategy(Strategy):
                     smooth_pct = (smooth - buy_price) / buy_price if buy_price > 0 else 0
                     if smooth_pct >= self.profit_target:
                         sell = True
-                    # KEY CHANGE: stop-loss on SMOOTHED price (sustained drop),
-                    # not single-hour tick
                     if smooth_pct <= -self.stop_loss:
                         sell = True
 
@@ -191,22 +189,28 @@ class HourlyDipRevertV12Strategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        """Winning config from autonomous research on pessimistic loader:
-        +$1.24M (vs v5 baseline +$14k = 83x), W14 +22%/W15 +73%, 7-weekday
-        coverage, -0.49 correlation with promo_dip_buy."""
-        return [{
+        base = {
             "median_window_h": 24,
             "smooth_window_h": 3,
             "outlier_tol": 0.05,
-            "dip_pct": 0.05,
-            "confirm_hours": 2,
-            "profit_target": 0.25,
-            "stop_loss": 0.15,
             "max_hold_h": 48,
             "min_price": 10000,
             "max_price": 80000,
-            "max_positions": 8,
             "min_age_days": 7,
             "burn_in_h": 72,
             "qty_cap": 3,
-        }]
+            "max_positions": 8,
+        }
+        combos = []
+        for confirm_hours in [2, 3]:
+            for dip_pct in [0.05, 0.06, 0.08]:
+                for stop_loss in [0.05, 0.07, 0.10]:
+                    for profit_target in [0.20, 0.25]:
+                        combos.append({
+                            **base,
+                            "confirm_hours": confirm_hours,
+                            "dip_pct": dip_pct,
+                            "stop_loss": stop_loss,
+                            "profit_target": profit_target,
+                        })
+        return combos
