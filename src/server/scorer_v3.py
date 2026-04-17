@@ -100,6 +100,8 @@ async def score_player_v3(
     best_net_profit = 0
     best_margin_pct = 0
     best_op_sell_rate = 0.0
+    best_op_sold = 0
+    best_op_total = 0
 
     for margin_pct, op_sold, op_expired in margin_rows:
         if margin_pct not in allowed_margins:
@@ -129,6 +131,8 @@ async def score_player_v3(
             best_net_profit = net_profit
             best_margin_pct = margin_pct
             best_op_sell_rate = op_sell_rate
+            best_op_sold = op_sold
+            best_op_total = op_total
 
     if best_net_profit <= 0:
         logger.debug(
@@ -152,6 +156,8 @@ async def score_player_v3(
         "net_profit": best_net_profit,
         "margin_pct": best_margin_pct,
         "op_sell_rate": round(best_op_sell_rate, 6),
+        "op_sold_count": int(best_op_sold),
+        "op_total_count": int(best_op_total),
         "sell_ratio": round(sell_ratio, 6),
         "sales_per_hour": round(sales_per_hour, 2),
         "visible_lph": round(visible_lph, 2),
