@@ -1,22 +1,23 @@
-"""Hourly dip reversion v5 — loosened filters on median-bucketed loader.
+"""Hourly dip reversion v8 — z-score entry on per-card volatility.
 
-The loader now returns hourly MEDIAN BIN, so per-hour outlier listings
-(like the 14k print in a 60k hour) are already suppressed upstream. v4's
-strategy-level outlier_tol=0.03 was partly duplicating that work and likely
-rejecting legitimate dips as a side effect.
+v5-v7 use a fixed dip_pct threshold (5-8% below 24h median). Problem: that's
+a raw % bar, so high-volatility cards trigger often (noise) and low-volatility
+cards never trigger (missed real dips).
 
-v5 relaxes:
-  - outlier_tol 0.03 → 0.08 (still guards against extreme anomalies that
-    slip past the median, e.g. hours with only 1-2 snapshots)
-  - keep 3-hour confirmation for now, sweep 2 vs 3 in grid
-  - keep qty_cap=3 for realistic execution
-  - try tighter (5%) and wider (10%) dip thresholds
+v8 uses a per-card z-score: smoothed price vs 48h mean, normalized by the
+card's own 48h stdev of prices. A dip at -2σ is significant for a stable card
+AND for a volatile one — the threshold auto-adjusts per-card.
 
-If the clean data + looser filter meaningfully improves weekly PnL without
-reintroducing fake margins (avg margin stays <20%, top-5 margins <80%), v5
-wins. Otherwise we diagnose and iterate.
+Combined with v5's 2-hour confirmation and outlier filter, this should
+concentrate trades on cards whose dip is statistically unusual for them,
+filtering out baseline noise in volatile cards while catching real dips in
+stable ones that might only be 2-3% raw.
+
+If this pushes v5's 3.75M higher on clean data WITHOUT expanding the tail of
+>50%-margin trades, v8 wins. Otherwise v5 is our answer.
 """
 import logging
+import math
 from datetime import datetime
 from collections import defaultdict, deque
 
@@ -26,17 +27,17 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class HourlyDipRevertV5Strategy(Strategy):
-    """v4 logic with outlier filter loosened for median-bucketed data."""
+class HourlyDipRevertV8Strategy(Strategy):
+    """v5 with z-score entry instead of fixed dip_pct."""
 
-    name = "hourly_dip_revert_v5"
+    name = "hourly_dip_revert_v8"
 
     def __init__(self, params: dict):
         self.params = params
-        self.median_window_h: int = params.get("median_window_h", 24)
+        self.median_window_h: int = params.get("median_window_h", 48)
         self.smooth_window_h: int = params.get("smooth_window_h", 3)
         self.outlier_tol: float = params.get("outlier_tol", 0.08)
-        self.dip_pct: float = params.get("dip_pct", 0.05)
+        self.z_threshold: float = params.get("z_threshold", 2.0)
         self.profit_target: float = params.get("profit_target", 0.10)
         self.stop_loss: float = params.get("stop_loss", 0.12)
         self.max_hold_h: int = params.get("max_hold_h", 48)
@@ -88,6 +89,20 @@ class HourlyDipRevertV5Strategy(Strategy):
         if smooth <= 0:
             return True
         return abs(tick - smooth) / smooth > self.outlier_tol
+
+    def _zscore(self, history: deque, smooth: int) -> float | None:
+        """z = (smooth - mean) / stdev across history."""
+        if len(history) < self.median_window_h or smooth <= 0:
+            return None
+        vals = list(history)
+        mean = sum(vals) / len(vals)
+        if mean <= 0:
+            return None
+        variance = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+        stdev = math.sqrt(variance)
+        if stdev < mean * 0.01:  # essentially flat → avoid /0
+            return None
+        return (smooth - mean) / stdev
 
     def on_tick_batch(
         self, ticks: list[tuple[int, int]], timestamp: datetime, portfolio: Portfolio,
@@ -147,12 +162,11 @@ class HourlyDipRevertV5Strategy(Strategy):
             if smooth <= 0 or self._is_outlier(price, smooth):
                 self._dip_streak[ea_id] = 0
                 continue
-            med = self._median(hist)
-            if med <= 0:
+            z = self._zscore(hist, smooth)
+            if z is None:
                 self._dip_streak[ea_id] = 0
                 continue
-            dip = (med - smooth) / med
-            if dip >= self.dip_pct:
+            if z <= -self.z_threshold:
                 self._dip_streak[ea_id] += 1
                 if self._dip_streak[ea_id] >= self.confirm_hours:
                     if portfolio.holdings(ea_id) > 0:
@@ -167,7 +181,12 @@ class HourlyDipRevertV5Strategy(Strategy):
                         age_days = (ts_clean - cr_clean).days
                         if age_days < self.min_age_days:
                             continue
-                    candidates.append((ea_id, price, dip))
+                    # Also require raw dip of at least 3% — pure z-score can trip
+                    # on tiny absolute moves after tax
+                    med = self._median(hist)
+                    if med <= 0 or (med - smooth) / med < 0.03:
+                        continue
+                    candidates.append((ea_id, price, -z))  # higher |z| = more oversold
             else:
                 self._dip_streak[ea_id] = 0
 
@@ -187,7 +206,7 @@ class HourlyDipRevertV5Strategy(Strategy):
 
         open_slots = self.max_positions - len(portfolio.positions)
         buys_made = 0
-        for ea_id, price, dip in candidates:
+        for ea_id, price, _ in candidates:
             if buys_made >= open_slots:
                 break
             if available <= 0:
@@ -207,14 +226,9 @@ class HourlyDipRevertV5Strategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        """Winning config from autonomous research on median-bucketed data:
-        clears 25%/week comfortably on both full ISO weeks, 7-weekday coverage,
-        -0.62 correlation with promo_dip_buy. Paranoid (tight) outlier filter."""
-        return [{
-            "median_window_h": 24,
+        base = {
             "smooth_window_h": 3,
-            "outlier_tol": 0.05,
-            "dip_pct": 0.05,
+            "outlier_tol": 0.08,
             "profit_target": 0.10,
             "stop_loss": 0.12,
             "max_hold_h": 48,
@@ -225,4 +239,15 @@ class HourlyDipRevertV5Strategy(Strategy):
             "burn_in_h": 72,
             "qty_cap": 3,
             "confirm_hours": 2,
-        }]
+        }
+        combos = []
+        for median_window_h in [24, 48, 72]:
+            for z_threshold in [1.5, 2.0, 2.5]:
+                for outlier_tol in [0.05, 0.08]:
+                    combos.append({
+                        **base,
+                        "median_window_h": median_window_h,
+                        "z_threshold": z_threshold,
+                        "outlier_tol": outlier_tol,
+                    })
+        return combos

@@ -1,13 +1,200 @@
 [
   {
-    "strategy_name": "promo_dip_buy",
-    "params": "{\"trend_pct\": 0.21, \"trend_lookback\": 12, \"snapshot_hour\": 176, \"snapshot_top_n\": 3, \"snapshot_floor\": 0.0, \"sell_lookback\": 24, \"sell_trend_pct\": 0.05, \"sell_confirm_hours\": 3, \"stop_delay_hours\": 48, \"max_hold_hours\": 336, \"max_age_days\": 10, \"min_price\": 12000, \"max_price\": 1500000, \"snapshot_max_pct\": 0.2, \"tick_max_pct\": 0.2}",
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 2.5}",
     "started_budget": 1000000,
-    "final_budget": 1780975,
-    "total_pnl": 780975,
-    "total_trades": 13,
-    "win_rate": 1.0,
-    "max_drawdown": 0.99375,
-    "sharpe_ratio": 1.2329401037210126
+    "final_budget": 2109990,
+    "total_pnl": 1109990,
+    "total_trades": 115,
+    "win_rate": 0.7913043478260869,
+    "max_drawdown": 0.8761628269065858,
+    "sharpe_ratio": 0.5279188243151712
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 2258455,
+    "total_pnl": 1258455,
+    "total_trades": 183,
+    "win_rate": 0.7704918032786885,
+    "max_drawdown": 0.950804,
+    "sharpe_ratio": 0.5179688798471389
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 2.5}",
+    "started_budget": 1000000,
+    "final_budget": 1986457,
+    "total_pnl": 986457,
+    "total_trades": 105,
+    "win_rate": 0.780952380952381,
+    "max_drawdown": 0.848523634312232,
+    "sharpe_ratio": 0.5079639622131079
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 1837269,
+    "total_pnl": 837269,
+    "total_trades": 128,
+    "win_rate": 0.78125,
+    "max_drawdown": 0.962176,
+    "sharpe_ratio": 0.4693433865979727
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1779907,
+    "total_pnl": 779907,
+    "total_trades": 123,
+    "win_rate": 0.7398373983739838,
+    "max_drawdown": 0.950743,
+    "sharpe_ratio": 0.44758929016710175
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1754771,
+    "total_pnl": 754771,
+    "total_trades": 138,
+    "win_rate": 0.7391304347826086,
+    "max_drawdown": 0.990536,
+    "sharpe_ratio": 0.4338750894820549
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 1643712,
+    "total_pnl": 643712,
+    "total_trades": 122,
+    "win_rate": 0.7459016393442623,
+    "max_drawdown": 0.969794,
+    "sharpe_ratio": 0.4333444957922328
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 1943260,
+    "total_pnl": 943260,
+    "total_trades": 188,
+    "win_rate": 0.7340425531914894,
+    "max_drawdown": 0.955425,
+    "sharpe_ratio": 0.42519550536065337
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 1877281,
+    "total_pnl": 877281,
+    "total_trades": 172,
+    "win_rate": 0.7616279069767442,
+    "max_drawdown": 0.850986166251376,
+    "sharpe_ratio": 0.424850355010906
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1768387,
+    "total_pnl": 768387,
+    "total_trades": 164,
+    "win_rate": 0.725609756097561,
+    "max_drawdown": 0.9997862254159229,
+    "sharpe_ratio": 0.4123488699249815
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1919037,
+    "total_pnl": 919037,
+    "total_trades": 145,
+    "win_rate": 0.7517241379310344,
+    "max_drawdown": 0.898577,
+    "sharpe_ratio": 0.40896731121934604
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 2.5}",
+    "started_budget": 1000000,
+    "final_budget": 1800090,
+    "total_pnl": 800090,
+    "total_trades": 115,
+    "win_rate": 0.7565217391304347,
+    "max_drawdown": 0.9971575247900062,
+    "sharpe_ratio": 0.40679794494971777
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 2.5}",
+    "started_budget": 1000000,
+    "final_budget": 1663698,
+    "total_pnl": 663698,
+    "total_trades": 103,
+    "win_rate": 0.7669902912621359,
+    "max_drawdown": 0.9746532764178478,
+    "sharpe_ratio": 0.3866668098589055
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 72, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1620567,
+    "total_pnl": 620567,
+    "total_trades": 173,
+    "win_rate": 0.7052023121387283,
+    "max_drawdown": 0.990756,
+    "sharpe_ratio": 0.3685699430543209
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 48, \"z_threshold\": 1.5}",
+    "started_budget": 1000000,
+    "final_budget": 1549871,
+    "total_pnl": 549871,
+    "total_trades": 127,
+    "win_rate": 0.7244094488188977,
+    "max_drawdown": 0.992687,
+    "sharpe_ratio": 0.34474786043610567
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 2.0}",
+    "started_budget": 1000000,
+    "final_budget": 1527000,
+    "total_pnl": 527000,
+    "total_trades": 152,
+    "win_rate": 0.7236842105263158,
+    "max_drawdown": 0.921420566119067,
+    "sharpe_ratio": 0.3005346597646243
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.05, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 2.5}",
+    "started_budget": 1000000,
+    "final_budget": 1186413,
+    "total_pnl": 186413,
+    "total_trades": 57,
+    "win_rate": 0.6666666666666666,
+    "max_drawdown": 0.7800740814974308,
+    "sharpe_ratio": 0.28666187788192493
+  },
+  {
+    "strategy_name": "hourly_dip_revert_v8",
+    "params": "{\"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.1, \"stop_loss\": 0.12, \"max_hold_h\": 48, \"min_price\": 10000, \"max_price\": 150000, \"max_positions\": 6, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 3, \"confirm_hours\": 2, \"median_window_h\": 24, \"z_threshold\": 2.5}",
+    "started_budget": 1000000,
+    "final_budget": 1114448,
+    "total_pnl": 114448,
+    "total_trades": 67,
+    "win_rate": 0.5970149253731343,
+    "max_drawdown": 0.8302949956025769,
+    "sharpe_ratio": 0.1933792482877863
   }
 ]
