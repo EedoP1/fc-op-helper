@@ -511,26 +511,32 @@ async def load_market_snapshot_data(
     async with session_factory() as session:
         dialect = session.bind.dialect.name
 
-        # Postgres: bucket server-side with DISTINCT ON — returns ~1 row per
-        # (ea_id, hour) instead of every raw snapshot. Critical for prod
-        # throughput (hundreds of thousands of raw rows -> tens of thousands).
+        # Postgres: bucket server-side using MEDIAN per (ea_id, hour). This is
+        # robust to outlier BIN prints that the previous DISTINCT ON last-of-hour
+        # approach leaked, e.g. an accidental 14k listing in an otherwise-60k
+        # hour. See docs/superpowers/specs/2026-04-17-hourly-dip-revert-v4-research.md
+        # for the investigation that motivated this switch.
         if dialect == "postgresql":
             pg_query = text(
-                "SELECT DISTINCT ON (ea_id, date_trunc('hour', captured_at)) "
-                "  ea_id, date_trunc('hour', captured_at) AS hour_ts, current_lowest_bin "
+                "SELECT ea_id, "
+                "       date_trunc('hour', captured_at) AS hour_ts, "
+                "       percentile_disc(0.5) WITHIN GROUP (ORDER BY current_lowest_bin) "
+                "         AS price "
                 "FROM market_snapshots "
                 f"WHERE {' AND '.join(where)} "
-                "ORDER BY ea_id, date_trunc('hour', captured_at), captured_at DESC"
+                "GROUP BY ea_id, date_trunc('hour', captured_at)"
             )
             result = await session.execute(pg_query, params)
             rows = result.fetchall()
-            logger.info(f"Loaded {len(rows)} hour-bucketed snapshots from market_snapshots (pg)")
+            logger.info(
+                f"Loaded {len(rows)} hour-bucketed (median) snapshots from market_snapshots (pg)"
+            )
 
             data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
             for ea_id, hour_ts, price in rows:
                 if isinstance(hour_ts, str):
                     hour_ts = dt.fromisoformat(hour_ts)
-                data[ea_id].append((hour_ts, price))
+                data[ea_id].append((hour_ts, int(price)))
         else:
             # Generic path: pull rows and bucket in Python (SQLite tests, etc).
             generic_query = text(
@@ -543,19 +549,19 @@ async def load_market_snapshot_data(
             rows = result.fetchall()
             logger.info(f"Loaded {len(rows)} raw snapshots from market_snapshots")
 
-            buckets: dict[tuple[int, dt], tuple[dt, int]] = {}
+            # Collect all prices per (ea_id, hour), then take the median
+            buckets: dict[tuple[int, dt], list[int]] = defaultdict(list)
             for ea_id, captured_at, price in rows:
                 if isinstance(captured_at, str):
                     captured_at = dt.fromisoformat(captured_at)
                 hour_ts = captured_at.replace(minute=0, second=0, microsecond=0)
-                key = (ea_id, hour_ts)
-                prev = buckets.get(key)
-                if prev is None or captured_at > prev[0]:
-                    buckets[key] = (captured_at, price)
+                buckets[(ea_id, hour_ts)].append(int(price))
 
             data = defaultdict(list)
-            for (ea_id, hour_ts), (_captured, price) in buckets.items():
-                data[ea_id].append((hour_ts, price))
+            for (ea_id, hour_ts), prices in buckets.items():
+                prices.sort()
+                median = prices[len(prices) // 2]
+                data[ea_id].append((hour_ts, median))
 
     for ea_id in data:
         data[ea_id].sort(key=lambda x: x[0])
