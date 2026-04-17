@@ -176,49 +176,37 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
         console.print("[red]No players selected.[/red]")
         return
 
-    total_cph = sum((s.get("coins_per_hour") or 0) for s in selected)
-
     summary = Text()
     summary.append(f"Budget: {budget:,}", style="bold")
     summary.append(f"  |  Used: {total_used:,}")
     if total_used:
         summary.append(f"  ({total_used / budget:.1%})")
-    summary.append(f"\nExpected profit/hr: {total_cph:,.0f}", style="bold cyan")
-    summary.append(f"  |  Players: {len(selected)}")
+    summary.append(f"  |  Cards: {len(selected)}")
     console.print(Panel(summary, title="OP Sell Portfolio", border_style="green"))
 
     table = Table(title=f"Top {len(selected)} OP Sell Targets", show_lines=True)
     table.add_column("#", style="dim", width=3)
     table.add_column("Player", style="bold", min_width=16, max_width=20)
-    table.add_column("OVR", justify="center", width=3)
-    table.add_column("Pos", justify="center", width=3)
+    table.add_column("Card", justify="center", width=7)
     table.add_column("Buy", justify="right")
     table.add_column("Sell", justify="right")
-    table.add_column("Profit", justify="right")
     table.add_column("Margin", justify="right", width=6)
-    table.add_column("EP/hr", justify="right", style="cyan")
-    table.add_column("Win%", justify="right", width=5)
-    table.add_column("OP Sales", justify="right", width=7)
-    table.add_column("Sales/hr", justify="right", width=7)
+    table.add_column("Profit", justify="right")
+    table.add_column("Sales/hr", justify="right", width=8)
 
     for i, s in enumerate(selected):
         stale = bool(s.get("is_stale"))
         row_style = "dim" if stale else None
         name_cell = f"*{s['player_name'][:19]}" if stale else s["player_name"][:20]
-        cph = s.get("coins_per_hour")
         sph = s.get("sales_per_hour")
         table.add_row(
             str(i + 1),
             name_cell,
-            str(s["rating"]),
-            s["position"],
+            f"{s['rating']} {s['position']}",
             f"{s['buy_price']:,}",
             f"{s['sell_price']:,}",
-            f"{s['net_profit']:,}",
             f"{s['margin_pct']}%",
-            f"{cph:,.0f}" if cph is not None else "-",
-            f"{s['op_ratio']:.0%}",
-            f"{s['op_sold']}/{s['op_total']}",
+            f"{s['net_profit']:,}",
             f"{sph:.1f}" if sph is not None else "-",
             style=row_style,
         )
@@ -240,19 +228,14 @@ def export_csv(selected: list[dict]) -> str:
         w = csv.writer(f)
         w.writerow([
             "Rank", "Player", "Rating", "Position",
-            "Buy", "Sell", "Profit", "Margin",
-            "EP/hr", "Win%", "OP Sales", "Sales/hr", "Stale",
+            "Buy", "Sell", "Margin", "Profit", "Sales/hr", "Stale",
         ])
         for i, s in enumerate(selected):
-            cph = s.get("coins_per_hour")
             sph = s.get("sales_per_hour")
             w.writerow([
                 i + 1, s["player_name"], s["rating"], s["position"],
-                s["buy_price"], s["sell_price"], s["net_profit"],
-                f"{s['margin_pct']}%",
-                f"{cph:.0f}" if cph is not None else "",
-                f"{s['op_ratio']:.1%}",
-                f"{s['op_sold']}/{s['op_total']}",
+                s["buy_price"], s["sell_price"],
+                f"{s['margin_pct']}%", s["net_profit"],
                 f"{sph:.1f}" if sph is not None else "",
                 1 if s.get("is_stale") else 0,
             ])
