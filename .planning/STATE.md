@@ -187,9 +187,10 @@ None yet.
 | 260404-qwj | Fix portfolio removal race condition: replace swap-preview with idempotent regenerate-with-banned-ids | 2026-04-04 | e063cd0 | [260404-qwj-fix-portfolio-removal-race-condition-ext](./quick/260404-qwj-fix-portfolio-removal-race-condition-ext/) |
 | 260407-bh0 | Refactor backtesting engine to single-pass timeline walk across all strategy combos | 2026-04-07 | 5a88db2 | [260407-bh0-refactor-backtesting-engine-to-single-pa](./quick/260407-bh0-refactor-backtesting-engine-to-single-pa/) |
 | 260408-sn5 | Implement hybrid promo_dip_buy: 21% strong signal + 176h snapshot top3 + 48h delay with 24h/5%/3h sell | 2026-04-08 | 92ff8c9 | [260408-sn5-implement-hybrid-promo-dip-buy-strategy-](./quick/260408-sn5-implement-hybrid-promo-dip-buy-strategy-/) |
+| 260417-s8n | Make portfolio CLI table relevant: fix EP/hr wiring, add Sell/Profit/Sales/hr, drop Efficiency, rename Sell%→Win%, flag stale rows | 2026-04-17 | df39b39c | [260417-s8n-make-portfolio-cli-table-relevant-audit-](./quick/260417-s8n-make-portfolio-cli-table-relevant-audit-/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-08 - Completed quick task 260408-sn5: Implement hybrid promo_dip_buy strategy
-Stopped at: Completed quick-260408-sn5
+Last activity: 2026-04-17 - Completed quick task 260417-s8n: Make portfolio CLI table relevant
+Stopped at: Completed quick-260417-s8n
 Resume file: None
