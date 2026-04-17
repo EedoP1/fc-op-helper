@@ -8,6 +8,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime as dt
 from datetime import datetime
+from datetime import timedelta
 
 import click
 from sqlalchemy import text
@@ -566,8 +567,6 @@ async def load_market_snapshot_data(
         price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
         created_at_map: {ea_id: created_at} from players table.
     """
-    import datetime as _dt
-
     params: dict = {}
     where = ["current_lowest_bin > 0"]
     if min_price:
@@ -579,11 +578,11 @@ async def load_market_snapshot_data(
 
     if days > 0:
         ref = now or dt.utcnow()
-        cutoff = ref - _dt.timedelta(days=days)
+        cutoff = ref - timedelta(days=days)
         # Align cutoff to previous Sunday 00:00 UTC so strategies that key
         # off full week boundaries (e.g. Friday promos) get whole weeks.
         days_since_sunday = (cutoff.weekday() + 1) % 7  # Mon=0->1, Sun=6->0
-        cutoff = cutoff - _dt.timedelta(days=days_since_sunday)
+        cutoff = cutoff - timedelta(days=days_since_sunday)
         cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
         where.append("captured_at >= :cutoff")
         params["cutoff"] = cutoff
