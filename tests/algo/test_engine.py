@@ -204,3 +204,146 @@ async def test_run_and_save_results():
         assert all_rows[0].strategy_name == "test"
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_market_snapshot_data_hour_bucketing():
+    """Multiple snapshots within the same hour collapse to the latest one."""
+    from datetime import datetime, timedelta
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import text
+    from src.server.db import Base
+    from src.server.models_db import MarketSnapshot, PlayerRecord  # noqa: F401
+    from src.algo.engine import load_market_snapshot_data
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    async with session_factory() as session:
+        # Three snapshots in the same hour, increasing prices
+        for i, price in enumerate([100, 200, 300]):
+            await session.execute(
+                text(
+                    "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                    "VALUES (:ea_id, :captured_at, :price, 1)"
+                ),
+                {"ea_id": 1, "captured_at": (base + timedelta(minutes=i * 10)).isoformat(), "price": price},
+            )
+        # Six snapshots in the next six hours to meet min_data_points=6
+        for h in range(1, 7):
+            await session.execute(
+                text(
+                    "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                    "VALUES (:ea_id, :captured_at, :price, 1)"
+                ),
+                {"ea_id": 1, "captured_at": (base + timedelta(hours=h)).isoformat(), "price": 500 + h},
+            )
+        await session.commit()
+
+    price_data, _ = await load_market_snapshot_data(session_factory, min_data_points=6)
+
+    assert 1 in price_data, "ea_id 1 should be present"
+    # First hour collapses to the last snapshot (price=300 at base+20min)
+    first_ts, first_price = price_data[1][0]
+    assert first_ts == base.replace(minute=0, second=0, microsecond=0)
+    assert first_price == 300, f"Expected last snapshot in hour (300), got {first_price}"
+    assert len(price_data[1]) == 7, "1 bucket for the first hour + 6 hourly rows after"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_market_snapshot_data_days_filter_sunday_aligned():
+    """--days cutoff rolls back to the previous Sunday 00:00 UTC."""
+    from datetime import datetime, timedelta
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import text
+    from src.server.db import Base
+    from src.server.models_db import MarketSnapshot, PlayerRecord  # noqa: F401
+    from src.algo.engine import load_market_snapshot_data
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Reference "now" = Wednesday 2026-04-15 10:00:00 UTC
+    now = datetime(2026, 4, 15, 10, 0, 0)
+    # With days=5, naive cutoff = 2026-04-10 10:00:00 (a Friday).
+    # Sunday-aligned cutoff rolls back to previous Sunday = 2026-04-05 00:00:00.
+    # So anything at or after 2026-04-05 00:00 is kept; anything before is dropped.
+
+    async with session_factory() as session:
+        # Old row: 2026-04-04 23:59 — should be dropped
+        await session.execute(
+            text(
+                "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                "VALUES (:ea_id, :captured_at, :price, 1)"
+            ),
+            {"ea_id": 1, "captured_at": datetime(2026, 4, 4, 23, 59).isoformat(), "price": 100},
+        )
+        # Exactly on cutoff: 2026-04-05 00:00 — should be kept
+        await session.execute(
+            text(
+                "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                "VALUES (:ea_id, :captured_at, :price, 1)"
+            ),
+            {"ea_id": 1, "captured_at": datetime(2026, 4, 5, 0, 0).isoformat(), "price": 200},
+        )
+        # Pad with 5 more recent rows so ea_id 1 clears min_data_points=6
+        for h in range(1, 6):
+            await session.execute(
+                text(
+                    "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                    "VALUES (:ea_id, :captured_at, :price, 1)"
+                ),
+                {"ea_id": 1, "captured_at": (datetime(2026, 4, 5, h, 0)).isoformat(), "price": 200 + h},
+            )
+        await session.commit()
+
+    price_data, _ = await load_market_snapshot_data(
+        session_factory, min_data_points=6, days=5, now=now,
+    )
+
+    assert 1 in price_data
+    timestamps = [ts for ts, _ in price_data[1]]
+    assert datetime(2026, 4, 4, 23, 0) not in timestamps, "Pre-cutoff row should be filtered out"
+    assert datetime(2026, 4, 5, 0, 0) in timestamps, "Row at exact cutoff should be kept"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_market_snapshot_data_days_zero_means_no_filter():
+    from datetime import datetime
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import text
+    from src.server.db import Base
+    from src.server.models_db import MarketSnapshot, PlayerRecord  # noqa: F401
+    from src.algo.engine import load_market_snapshot_data
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as session:
+        for h in range(6):
+            await session.execute(
+                text(
+                    "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                    "VALUES (:ea_id, :captured_at, :price, 1)"
+                ),
+                {"ea_id": 1, "captured_at": datetime(2020, 1, 1, h, 0).isoformat(), "price": 100 + h},
+            )
+        await session.commit()
+
+    # days=0 → no filter; ancient data is returned
+    price_data, _ = await load_market_snapshot_data(session_factory, min_data_points=6, days=0)
+    assert 1 in price_data
+    assert len(price_data[1]) == 6
+
+    await engine.dispose()

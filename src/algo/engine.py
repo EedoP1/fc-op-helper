@@ -546,43 +546,77 @@ async def load_market_snapshot_data(
     min_price: int = 0,
     max_price: int = 0,
     min_data_points: int = 6,
+    days: int = 0,
+    now: dt | None = None,
 ) -> tuple[dict[int, list[tuple[dt, int]]], dict[int, dt]]:
     """Load hourly price data from market_snapshots.
 
     Aggregates to one price per player per hour (last snapshot in each hour).
+    Hour bucketing is done in Python so the function works on any SQL backend.
+
+    Args:
+        days: If >0, only include snapshots within the last N days, with
+              cutoff rolled back to the previous Sunday 00:00 UTC. Matches
+              the week-aligned semantics previously in load_price_data.
+        now: Reference "now" for cutoff calculation; defaults to utcnow().
+             Exposed for deterministic tests.
 
     Returns:
         (price_data, created_at_map)
         price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
         created_at_map: {ea_id: created_at} from players table.
     """
-    price_clause = ""
+    import datetime as _dt
+
+    params: dict = {}
+    where = ["current_lowest_bin > 0"]
     if min_price:
-        price_clause += f" AND current_lowest_bin >= {min_price}"
+        where.append("current_lowest_bin >= :min_price")
+        params["min_price"] = min_price
     if max_price:
-        price_clause += f" AND current_lowest_bin <= {max_price}"
+        where.append("current_lowest_bin <= :max_price")
+        params["max_price"] = max_price
+
+    if days > 0:
+        ref = now or dt.utcnow()
+        cutoff = ref - _dt.timedelta(days=days)
+        # Align cutoff to previous Sunday 00:00 UTC so strategies that key
+        # off full week boundaries (e.g. Friday promos) get whole weeks.
+        days_since_sunday = (cutoff.weekday() + 1) % 7  # Mon=0->1, Sun=6->0
+        cutoff = cutoff - _dt.timedelta(days=days_since_sunday)
+        cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
+        where.append("captured_at >= :cutoff")
+        params["cutoff"] = cutoff
 
     query = text(
-        "SELECT DISTINCT ON (ea_id, date_trunc('hour', captured_at)) "
-        "ea_id, date_trunc('hour', captured_at) AS hour_ts, current_lowest_bin "
+        "SELECT ea_id, captured_at, current_lowest_bin "
         "FROM market_snapshots "
-        f"WHERE current_lowest_bin > 0{price_clause} "
-        "ORDER BY ea_id, date_trunc('hour', captured_at), captured_at DESC"
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY ea_id, captured_at"
     )
 
     async with session_factory() as session:
-        result = await session.execute(query)
+        result = await session.execute(query, params)
         rows = result.fetchall()
 
-    logger.info(f"Loaded {len(rows)} hourly price points from market_snapshots")
+    logger.info(f"Loaded {len(rows)} raw snapshots from market_snapshots")
+
+    # App-side hour bucketing + dedup: keep the latest snapshot per (ea_id, hour).
+    # Replaces the Postgres-only DISTINCT ON / date_trunc query.
+    buckets: dict[tuple[int, dt], tuple[dt, int]] = {}
+    for ea_id, captured_at, price in rows:
+        if isinstance(captured_at, str):
+            captured_at = dt.fromisoformat(captured_at)
+        hour_ts = captured_at.replace(minute=0, second=0, microsecond=0)
+        key = (ea_id, hour_ts)
+        prev = buckets.get(key)
+        if prev is None or captured_at > prev[0]:
+            buckets[key] = (captured_at, price)
 
     data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
-    for ea_id, hour_ts, price in rows:
-        if isinstance(hour_ts, str):
-            hour_ts = dt.fromisoformat(hour_ts)
+    for (ea_id, hour_ts), (_captured, price) in buckets.items():
         data[ea_id].append((hour_ts, price))
 
-    # Sort each player's points by timestamp
     for ea_id in data:
         data[ea_id].sort(key=lambda x: x[0])
 
