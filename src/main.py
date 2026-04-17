@@ -72,7 +72,8 @@ async def run_portfolio(url: str, budget: int) -> None:
             "op_total": item["total_sales"],
             "op_ratio": item["op_ratio"],
             "expected_profit": item["expected_profit"],            # per-flip
-            "expected_profit_per_hour": item.get("expected_profit_per_hour"),  # ranking metric
+            "rank_score": item.get("expected_profit_per_hour"),    # composite — optimizer input
+            "coins_per_hour": item.get("coins_per_hour"),          # real coins/hr — for display
             "sales_per_hour": item.get("sales_per_hour"),
             "is_stale": item.get("is_stale", False),
         }
@@ -175,14 +176,14 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
         console.print("[red]No players selected.[/red]")
         return
 
-    total_eph = sum((s.get("expected_profit_per_hour") or 0) for s in selected)
+    total_cph = sum((s.get("coins_per_hour") or 0) for s in selected)
 
     summary = Text()
     summary.append(f"Budget: {budget:,}", style="bold")
     summary.append(f"  |  Used: {total_used:,}")
     if total_used:
         summary.append(f"  ({total_used / budget:.1%})")
-    summary.append(f"\nExpected profit/hr: {total_eph:,.0f}", style="bold cyan")
+    summary.append(f"\nExpected profit/hr: {total_cph:,.0f}", style="bold cyan")
     summary.append(f"  |  Players: {len(selected)}")
     console.print(Panel(summary, title="OP Sell Portfolio", border_style="green"))
 
@@ -204,7 +205,7 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
         stale = bool(s.get("is_stale"))
         row_style = "dim" if stale else None
         name_cell = f"*{s['player_name'][:19]}" if stale else s["player_name"][:20]
-        epph = s.get("expected_profit_per_hour")
+        cph = s.get("coins_per_hour")
         sph = s.get("sales_per_hour")
         table.add_row(
             str(i + 1),
@@ -215,7 +216,7 @@ def display_results(selected: list[dict], budget: int, total_used: int) -> None:
             f"{s['sell_price']:,}",
             f"{s['net_profit']:,}",
             f"{s['margin_pct']}%",
-            f"{epph:,.0f}" if epph is not None else "-",
+            f"{cph:,.0f}" if cph is not None else "-",
             f"{s['op_ratio']:.0%}",
             f"{s['op_sold']}/{s['op_total']}",
             f"{sph:.1f}" if sph is not None else "-",
@@ -243,13 +244,13 @@ def export_csv(selected: list[dict]) -> str:
             "EP/hr", "Win%", "OP Sales", "Sales/hr", "Stale",
         ])
         for i, s in enumerate(selected):
-            epph = s.get("expected_profit_per_hour")
+            cph = s.get("coins_per_hour")
             sph = s.get("sales_per_hour")
             w.writerow([
                 i + 1, s["player_name"], s["rating"], s["position"],
                 s["buy_price"], s["sell_price"], s["net_profit"],
                 f"{s['margin_pct']}%",
-                f"{epph:.0f}" if epph is not None else "",
+                f"{cph:.0f}" if cph is not None else "",
                 f"{s['op_ratio']:.1%}",
                 f"{s['op_sold']}/{s['op_total']}",
                 f"{sph:.1f}" if sph is not None else "",
