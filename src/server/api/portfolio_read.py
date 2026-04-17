@@ -81,13 +81,12 @@ async def get_portfolio(
         )
         epph = entry.get("expected_profit_per_hour")
         sph = entry.get("sales_per_hour")
-        # Real coins/hr: net_profit × sales/hr × OP success rate.
+        # Expected coins per hourly flip cycle: net_profit × OP success rate.
+        # sales_per_hour is market-wide activity (not your throughput) and does
+        # not belong here — mixing a rate with a per-attempt probability.
         net_profit = entry.get("net_profit") or 0
         op_ratio = entry.get("op_ratio") or 0.0
-        coins_per_hour = (
-            round(net_profit * sph * op_ratio, 2)
-            if sph is not None else None
-        )
+        coins_per_hour = round(net_profit * op_ratio, 2)
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
@@ -177,13 +176,12 @@ async def generate_portfolio(
         is_stale = last_scanned_at is None or last_scanned_at < stale_cutoff
         epph = entry.get("expected_profit_per_hour")
         sph = entry.get("sales_per_hour")
-        # Real coins/hr: net_profit × sales/hr × OP success rate.
+        # Expected coins per hourly flip cycle: net_profit × OP success rate.
+        # sales_per_hour is market-wide activity (not your throughput) and does
+        # not belong here — mixing a rate with a per-attempt probability.
         net_profit = entry.get("net_profit") or 0
         op_ratio = entry.get("op_ratio") or 0.0
-        coins_per_hour = (
-            round(net_profit * sph * op_ratio, 2)
-            if sph is not None else None
-        )
+        coins_per_hour = round(net_profit * op_ratio, 2)
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
