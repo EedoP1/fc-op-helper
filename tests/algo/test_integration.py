@@ -1,4 +1,4 @@
-"""End-to-end test: seed mock data -> run strategies -> check results."""
+"""End-to-end test: seed market_snapshots -> run strategies -> check results."""
 import pytest
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -9,7 +9,9 @@ from src.server.db import Base
 @pytest.fixture
 async def db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    from src.algo.models_db import PriceHistory, BacktestResult  # noqa: F401
+    # Ensure both algo + server tables are registered on the metadata
+    from src.algo.models_db import BacktestResult  # noqa: F401
+    from src.server.models_db import MarketSnapshot, PlayerRecord  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -18,35 +20,38 @@ async def db():
 
 
 async def seed_price_data(session_factory, num_players=3, num_hours=200):
-    """Insert synthetic price data with mean-reverting patterns."""
+    """Insert synthetic hourly snapshots with a mean-reverting sine-wave pattern."""
     import math
     base = datetime(2026, 1, 1)
     async with session_factory() as session:
         for pid in range(1, num_players + 1):
             base_price = 10_000 * pid
             for h in range(num_hours):
-                # Sine wave creates mean-reverting price action
                 price = int(base_price + base_price * 0.15 * math.sin(h / 12 * math.pi))
                 await session.execute(
                     text(
-                        "INSERT INTO price_history (ea_id, timestamp, price) "
-                        "VALUES (:ea_id, :timestamp, :price)"
+                        "INSERT INTO market_snapshots (ea_id, captured_at, current_lowest_bin, listing_count) "
+                        "VALUES (:ea_id, :captured_at, :price, 1)"
                     ),
-                    {"ea_id": pid, "timestamp": (base + timedelta(hours=h)).isoformat(), "price": price},
+                    {
+                        "ea_id": pid,
+                        "captured_at": (base + timedelta(hours=h)).isoformat(),
+                        "price": price,
+                    },
                 )
         await session.commit()
 
 
 @pytest.mark.asyncio
 async def test_full_pipeline(db):
-    from src.algo.engine import load_price_data, run_sweep, save_result
+    from src.algo.engine import load_market_snapshot_data, run_sweep, save_result
     from src.algo.strategies.mean_reversion import MeanReversionStrategy
 
-    # Seed data
+    # Seed
     await seed_price_data(db, num_players=3, num_hours=200)
 
     # Load
-    price_data = await load_price_data(db, min_data_points=10)
+    price_data, _ = await load_market_snapshot_data(db, min_data_points=10)
     assert len(price_data) == 3
 
     # Run sweep with a small grid
@@ -82,17 +87,16 @@ async def test_full_pipeline(db):
 @pytest.mark.asyncio
 async def test_all_strategies_run(db):
     """Every discovered strategy can complete a backtest without crashing."""
-    from src.algo.engine import run_backtest, load_price_data
+    from src.algo.engine import run_backtest, load_market_snapshot_data
     from src.algo.strategies import discover_strategies
 
     await seed_price_data(db, num_players=2, num_hours=100)
-    price_data = await load_price_data(db, min_data_points=10)
+    price_data, _ = await load_market_snapshot_data(db, min_data_points=10)
 
     strategies = discover_strategies()
     assert len(strategies) >= 4, f"Expected 4+ strategies, found {list(strategies.keys())}"
 
     for name, cls in strategies.items():
-        # Run with first param combo only
         grid = cls({}).param_grid()
         strategy = cls(grid[0])
         result = run_backtest(strategy, price_data, budget=100_000)
