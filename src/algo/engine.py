@@ -478,8 +478,8 @@ async def load_market_snapshot_data(
 
     Args:
         days: If >0, only include snapshots within the last N days, with
-              cutoff rolled back to the previous Sunday 00:00 UTC. Matches
-              the week-aligned semantics previously in load_price_data.
+              cutoff rolled back to the previous Sunday 00:00 UTC so
+              week-aligned strategies (e.g. Friday promos) get whole weeks.
         now: Reference "now" for cutoff calculation; defaults to utcnow().
              Exposed for deterministic tests.
 
