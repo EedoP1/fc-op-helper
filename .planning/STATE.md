@@ -188,9 +188,10 @@ None yet.
 | 260407-bh0 | Refactor backtesting engine to single-pass timeline walk across all strategy combos | 2026-04-07 | 5a88db2 | [260407-bh0-refactor-backtesting-engine-to-single-pa](./quick/260407-bh0-refactor-backtesting-engine-to-single-pa/) |
 | 260408-sn5 | Implement hybrid promo_dip_buy: 21% strong signal + 176h snapshot top3 + 48h delay with 24h/5%/3h sell | 2026-04-08 | 92ff8c9 | [260408-sn5-implement-hybrid-promo-dip-buy-strategy-](./quick/260408-sn5-implement-hybrid-promo-dip-buy-strategy-/) |
 | 260417-s8n | Make portfolio CLI table relevant: fix EP/hr wiring, add Sell/Profit/Sales/hr, drop Efficiency, rename Sell%→Win%, flag stale rows | 2026-04-17 | df39b39c | [260417-s8n-make-portfolio-cli-table-relevant-audit-](./quick/260417-s8n-make-portfolio-cli-table-relevant-audit-/) |
+| 260417-sp2 | Persist real op_sell_rate + real coins/hr: scorer exposes OP counts, scanner repurposes dead op_sales/total_sales/op_ratio columns, CLI shows coins_per_hour (no schema change, optimizer unchanged) | 2026-04-17 | b19620f5 | [260417-sp2-persist-real-op-sell-rate-show-real-coin](./quick/260417-sp2-persist-real-op-sell-rate-show-real-coin/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-17 - Completed quick task 260417-s8n: Make portfolio CLI table relevant
-Stopped at: Completed quick-260417-s8n
+Last activity: 2026-04-17 - Completed quick task 260417-sp2: Persist real op_sell_rate, show real coins/hr
+Stopped at: Completed quick-260417-sp2
 Resume file: None
