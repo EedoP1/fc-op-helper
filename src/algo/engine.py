@@ -508,34 +508,54 @@ async def load_market_snapshot_data(
         where.append("captured_at >= :cutoff")
         params["cutoff"] = cutoff
 
-    query = text(
-        "SELECT ea_id, captured_at, current_lowest_bin "
-        "FROM market_snapshots "
-        f"WHERE {' AND '.join(where)} "
-        "ORDER BY ea_id, captured_at"
-    )
-
     async with session_factory() as session:
-        result = await session.execute(query, params)
-        rows = result.fetchall()
+        dialect = session.bind.dialect.name
 
-    logger.info(f"Loaded {len(rows)} raw snapshots from market_snapshots")
+        # Postgres: bucket server-side with DISTINCT ON — returns ~1 row per
+        # (ea_id, hour) instead of every raw snapshot. Critical for prod
+        # throughput (hundreds of thousands of raw rows -> tens of thousands).
+        if dialect == "postgresql":
+            pg_query = text(
+                "SELECT DISTINCT ON (ea_id, date_trunc('hour', captured_at)) "
+                "  ea_id, date_trunc('hour', captured_at) AS hour_ts, current_lowest_bin "
+                "FROM market_snapshots "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY ea_id, date_trunc('hour', captured_at), captured_at DESC"
+            )
+            result = await session.execute(pg_query, params)
+            rows = result.fetchall()
+            logger.info(f"Loaded {len(rows)} hour-bucketed snapshots from market_snapshots (pg)")
 
-    # App-side hour bucketing + dedup: keep the latest snapshot per (ea_id, hour).
-    # Replaces the Postgres-only DISTINCT ON / date_trunc query.
-    buckets: dict[tuple[int, dt], tuple[dt, int]] = {}
-    for ea_id, captured_at, price in rows:
-        if isinstance(captured_at, str):
-            captured_at = dt.fromisoformat(captured_at)
-        hour_ts = captured_at.replace(minute=0, second=0, microsecond=0)
-        key = (ea_id, hour_ts)
-        prev = buckets.get(key)
-        if prev is None or captured_at > prev[0]:
-            buckets[key] = (captured_at, price)
+            data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
+            for ea_id, hour_ts, price in rows:
+                if isinstance(hour_ts, str):
+                    hour_ts = dt.fromisoformat(hour_ts)
+                data[ea_id].append((hour_ts, price))
+        else:
+            # Generic path: pull rows and bucket in Python (SQLite tests, etc).
+            generic_query = text(
+                "SELECT ea_id, captured_at, current_lowest_bin "
+                "FROM market_snapshots "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY ea_id, captured_at"
+            )
+            result = await session.execute(generic_query, params)
+            rows = result.fetchall()
+            logger.info(f"Loaded {len(rows)} raw snapshots from market_snapshots")
 
-    data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
-    for (ea_id, hour_ts), (_captured, price) in buckets.items():
-        data[ea_id].append((hour_ts, price))
+            buckets: dict[tuple[int, dt], tuple[dt, int]] = {}
+            for ea_id, captured_at, price in rows:
+                if isinstance(captured_at, str):
+                    captured_at = dt.fromisoformat(captured_at)
+                hour_ts = captured_at.replace(minute=0, second=0, microsecond=0)
+                key = (ea_id, hour_ts)
+                prev = buckets.get(key)
+                if prev is None or captured_at > prev[0]:
+                    buckets[key] = (captured_at, price)
+
+            data = defaultdict(list)
+            for (ea_id, hour_ts), (_captured, price) in buckets.items():
+                data[ea_id].append((hour_ts, price))
 
     for ea_id in data:
         data[ea_id].sort(key=lambda x: x[0])
