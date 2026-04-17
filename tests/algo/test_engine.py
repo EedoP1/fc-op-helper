@@ -208,7 +208,7 @@ async def test_run_and_save_results():
 
 @pytest.mark.asyncio
 async def test_load_market_snapshot_data_hour_bucketing():
-    """Multiple snapshots within the same hour collapse to the latest one."""
+    """Multiple snapshots within the same hour collapse to the hourly median."""
     from datetime import datetime, timedelta
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from sqlalchemy import text
@@ -243,13 +243,13 @@ async def test_load_market_snapshot_data_hour_bucketing():
             )
         await session.commit()
 
-    price_data, _ = await load_market_snapshot_data(session_factory, min_data_points=6)
+    price_data, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6)
 
     assert 1 in price_data, "ea_id 1 should be present"
-    # First hour collapses to the last snapshot (price=300 at base+20min)
+    # First hour collapses to the hourly median of [100, 200, 300] = 200
     first_ts, first_price = price_data[1][0]
     assert first_ts == base.replace(minute=0, second=0, microsecond=0)
-    assert first_price == 300, f"Expected last snapshot in hour (300), got {first_price}"
+    assert first_price == 200, f"Expected hourly median (200), got {first_price}"
     assert len(price_data[1]) == 7, "1 bucket for the first hour + 6 hourly rows after"
 
     await engine.dispose()
@@ -304,7 +304,7 @@ async def test_load_market_snapshot_data_days_filter_sunday_aligned():
             )
         await session.commit()
 
-    price_data, _ = await load_market_snapshot_data(
+    price_data, _, _ = await load_market_snapshot_data(
         session_factory, min_data_points=6, days=5, now=now,
     )
 
@@ -342,7 +342,7 @@ async def test_load_market_snapshot_data_days_zero_means_no_filter():
         await session.commit()
 
     # days=0 → no filter; ancient data is returned
-    price_data, _ = await load_market_snapshot_data(session_factory, min_data_points=6, days=0)
+    price_data, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6, days=0)
     assert 1 in price_data
     assert len(price_data[1]) == 6
 

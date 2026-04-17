@@ -51,7 +51,7 @@ async def test_full_pipeline(db):
     await seed_price_data(db, num_players=3, num_hours=200)
 
     # Load
-    price_data, _ = await load_market_snapshot_data(db, min_data_points=10)
+    price_data, _, _ = await load_market_snapshot_data(db, min_data_points=10)
     assert len(price_data) == 3
 
     # Run sweep with a small grid
@@ -91,7 +91,7 @@ async def test_all_strategies_run(db):
     from src.algo.strategies import discover_strategies
 
     await seed_price_data(db, num_players=2, num_hours=100)
-    price_data, _ = await load_market_snapshot_data(db, min_data_points=10)
+    price_data, _, _ = await load_market_snapshot_data(db, min_data_points=10)
 
     strategies = discover_strategies()
     assert len(strategies) >= 4, f"Expected 4+ strategies, found {list(strategies.keys())}"

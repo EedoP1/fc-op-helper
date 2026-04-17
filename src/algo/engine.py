@@ -28,20 +28,20 @@ def run_backtest(
     price_data: dict[int, list[tuple[datetime, int]]],
     budget: int = 1_000_000,
     created_at_map: dict[int, datetime] | None = None,
+    exec_prices: dict[tuple[int, datetime], tuple[int, int]] | None = None,
 ) -> dict:
     """Run a single strategy against historical price data.
 
     Args:
         strategy: A Strategy instance (already initialized with params).
-        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
+        price_data: {ea_id: [(timestamp, median_price), ...]} — strategy's view.
         budget: Starting coin balance.
-
-    Returns:
-        Dict with performance metrics.
+        exec_prices: Optional {(ea_id, ts): (max_price, min_price)} for
+            pessimistic fills: BUY at max, SELL at min. If None, use the
+            median tick price (prior behaviour).
     """
     portfolio = Portfolio(cash=budget)
 
-    # Build a timeline: {timestamp: [(ea_id, price), ...]}
     timeline: dict[datetime, list[tuple[int, int]]] = defaultdict(list)
     for ea_id, points in price_data.items():
         for ts, price in points:
@@ -49,7 +49,6 @@ def run_backtest(
 
     sorted_timestamps = sorted(timeline.keys())
 
-    # Tell strategy which IDs exist at the start of the data window
     if sorted_timestamps:
         first_ts = sorted_timestamps[0]
         existing_ids = {ea_id for ea_id, _ in timeline[first_ts]}
@@ -58,19 +57,33 @@ def run_backtest(
     if created_at_map:
         strategy.set_created_at_map(created_at_map)
 
-    # Walk through time
+    def buy_price_at(ea_id: int, ts: datetime, fallback: int) -> int:
+        if exec_prices is not None:
+            bm = exec_prices.get((ea_id, ts))
+            if bm is not None:
+                return bm[0]
+        return fallback
+
+    def sell_price_at(ea_id: int, ts: datetime, fallback: int) -> int:
+        if exec_prices is not None:
+            bm = exec_prices.get((ea_id, ts))
+            if bm is not None:
+                return bm[1]
+        return fallback
+
     for ts in sorted_timestamps:
         ticks = timeline[ts]
         signals = strategy.on_tick_batch(ticks, ts, portfolio)
         for signal in signals:
-            # Find price for this signal's ea_id
             sig_price = next((p for eid, p in ticks if eid == signal.ea_id), 0)
             if signal.action == "BUY":
-                portfolio.buy(signal.ea_id, signal.quantity, sig_price, ts)
+                fill = buy_price_at(signal.ea_id, ts, sig_price)
+                portfolio.buy(signal.ea_id, signal.quantity, fill, ts)
             elif signal.action == "SELL":
-                portfolio.sell(signal.ea_id, signal.quantity, sig_price, ts)
+                fill = sell_price_at(signal.ea_id, ts, sig_price)
+                portfolio.sell(signal.ea_id, signal.quantity, fill, ts)
 
-    # Force-sell open positions at last known price
+    # Force-sell open positions at last known MIN price (pessimistic)
     last_prices: dict[int, tuple[datetime, int]] = {}
     for ea_id, points in price_data.items():
         if points:
@@ -79,7 +92,8 @@ def run_backtest(
     for pos in list(portfolio.positions):
         if pos.ea_id in last_prices:
             ts, price = last_prices[pos.ea_id]
-            portfolio.sell(pos.ea_id, pos.quantity, price, ts)
+            fill = sell_price_at(pos.ea_id, ts, price)
+            portfolio.sell(pos.ea_id, pos.quantity, fill, ts)
 
     # Calculate metrics
     total_pnl = portfolio.cash - budget
@@ -249,29 +263,28 @@ def _worker_run_combos(
     combo_specs: list[tuple[str, dict]],
     budget: int,
     created_at_map: dict[int, datetime] | None = None,
+    exec_prices: dict[tuple[int, datetime], tuple[int, int]] | None = None,
 ) -> list[dict]:
     """Worker function for parallel sweep. Runs in a subprocess.
 
     Args:
-        sorted_timeline: [(timestamp, [(ea_id, price), ...]), ...] pre-sorted.
-        last_prices: {ea_id: (timestamp, price)} for force-selling.
+        sorted_timeline: [(timestamp, [(ea_id, median_price), ...]), ...] pre-sorted.
+        last_prices: {ea_id: (timestamp, median_price)} for force-selling.
         combo_specs: [(strategy_module_path, params), ...] to instantiate.
         budget: Starting coin balance for each combo.
+        exec_prices: Optional {(ea_id, ts): (max, min)} for pessimistic fills.
     """
     from src.algo.strategies import discover_strategies
     available = discover_strategies()
 
-    # Instantiate combos in this process
     combos = []
     for strategy_name, params in combo_specs:
         cls = available[strategy_name]
         strategy = cls(params)
         portfolio = Portfolio(cash=budget)
-        # Track sells per day: {date_str: count}
         sells_today: dict[str, int] = defaultdict(int)
         combos.append((strategy, portfolio, sells_today))
 
-    # Tell strategies which IDs exist at the start
     if sorted_timeline:
         existing_ids = {ea_id for ea_id, _ in sorted_timeline[0][1]}
         for strategy, _, _ in combos:
@@ -279,7 +292,13 @@ def _worker_run_combos(
             if created_at_map:
                 strategy.set_created_at_map(created_at_map)
 
-    # Walk timeline
+    def _fill(ea_id, ts, action, fallback):
+        if exec_prices is not None:
+            mm = exec_prices.get((ea_id, ts))
+            if mm is not None:
+                return mm[0] if action == "BUY" else mm[1]
+        return fallback
+
     for ts, ticks in sorted_timeline:
         day_key = ts.strftime("%Y-%m-%d")
         for strategy, portfolio, sells_today in combos:
@@ -287,19 +306,21 @@ def _worker_run_combos(
             for signal in signals:
                 sig_price = next((p for eid, p in ticks if eid == signal.ea_id), 0)
                 if signal.action == "BUY":
-                    portfolio.buy(signal.ea_id, signal.quantity, sig_price, ts)
+                    fill = _fill(signal.ea_id, ts, "BUY", sig_price)
+                    portfolio.buy(signal.ea_id, signal.quantity, fill, ts)
                 elif signal.action == "SELL":
                     if sells_today[day_key] < MAX_SELLS_PER_DAY:
-                        portfolio.sell(signal.ea_id, signal.quantity, sig_price, ts)
+                        fill = _fill(signal.ea_id, ts, "SELL", sig_price)
+                        portfolio.sell(signal.ea_id, signal.quantity, fill, ts)
                         sells_today[day_key] += signal.quantity
 
-    # Force-sell and compute metrics
     results = []
     for strategy, portfolio, sells_today in combos:
         for pos in list(portfolio.positions):
             if pos.ea_id in last_prices:
                 ts, price = last_prices[pos.ea_id]
-                portfolio.sell(pos.ea_id, pos.quantity, price, ts)
+                fill = _fill(pos.ea_id, ts, "SELL", price)
+                portfolio.sell(pos.ea_id, pos.quantity, fill, ts)
 
         total_pnl = portfolio.cash - budget
         trades = portfolio.trades
@@ -341,6 +362,7 @@ def run_sweep_parallel(
     budget: int = 1_000_000,
     max_workers: int | None = None,
     created_at_map: dict[int, datetime] | None = None,
+    exec_prices: dict[tuple[int, datetime], tuple[int, int]] | None = None,
 ) -> list[dict]:
     """Run all strategy+param combos in parallel across CPU cores.
 
@@ -392,7 +414,10 @@ def run_sweep_parallel(
     all_results = []
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = [
-            pool.submit(_worker_run_combos, sorted_timeline, last_prices, chunk, budget, created_at_map)
+            pool.submit(
+                _worker_run_combos, sorted_timeline, last_prices, chunk, budget,
+                created_at_map, exec_prices,
+            )
             for chunk in chunks
         ]
         for future in futures:
@@ -470,23 +495,29 @@ async def load_market_snapshot_data(
     min_data_points: int = 6,
     days: int = 0,
     now: dt | None = None,
-) -> tuple[dict[int, list[tuple[dt, int]]], dict[int, dt]]:
+) -> tuple[dict[int, list[tuple[dt, int]]], dict[int, dt], dict[tuple[int, dt], tuple[int, int]]]:
     """Load hourly price data from market_snapshots.
 
-    Aggregates to one price per player per hour (last snapshot in each hour).
-    Hour bucketing is done in Python so the function works on any SQL backend.
+    Per (ea_id, hour) we compute three stats:
+      - median BIN: what strategies see as "the price" for decision-making
+      - max BIN:    used by the engine to execute BUYs (pessimistic)
+      - min BIN:    used by the engine to execute SELLs (pessimistic)
+
+    The pessimistic execution prices simulate a maximum-spread fill assumption:
+    you always pay the hourly high when buying and receive the hourly low when
+    selling. That's the strictest possible "you couldn't time the hour" model.
 
     Args:
         days: If >0, only include snapshots within the last N days, with
               cutoff rolled back to the previous Sunday 00:00 UTC so
               week-aligned strategies (e.g. Friday promos) get whole weeks.
         now: Reference "now" for cutoff calculation; defaults to utcnow().
-             Exposed for deterministic tests.
 
     Returns:
-        (price_data, created_at_map)
-        price_data: {ea_id: [(timestamp, price), ...]} sorted by timestamp.
-        created_at_map: {ea_id: created_at} from players table.
+        (price_data, created_at_map, exec_prices)
+        price_data:   {ea_id: [(hour_ts, median_price), ...]} sorted.
+        created_at_map: {ea_id: created_at}
+        exec_prices:  {(ea_id, hour_ts): (max_bin, min_bin)} for engine fills.
     """
     params: dict = {}
     where = ["current_lowest_bin > 0"]
@@ -500,28 +531,26 @@ async def load_market_snapshot_data(
     if days > 0:
         ref = now or dt.utcnow()
         cutoff = ref - timedelta(days=days)
-        # Align cutoff to previous Sunday 00:00 UTC so strategies that key
-        # off full week boundaries (e.g. Friday promos) get whole weeks.
-        days_since_sunday = (cutoff.weekday() + 1) % 7  # Mon=0->1, Sun=6->0
+        days_since_sunday = (cutoff.weekday() + 1) % 7
         cutoff = cutoff - timedelta(days=days_since_sunday)
         cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
         where.append("captured_at >= :cutoff")
         params["cutoff"] = cutoff
 
+    data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
+    exec_prices: dict[tuple[int, dt], tuple[int, int]] = {}
+
     async with session_factory() as session:
         dialect = session.bind.dialect.name
 
-        # Postgres: bucket server-side using MEDIAN per (ea_id, hour). This is
-        # robust to outlier BIN prints that the previous DISTINCT ON last-of-hour
-        # approach leaked, e.g. an accidental 14k listing in an otherwise-60k
-        # hour. See docs/superpowers/specs/2026-04-17-hourly-dip-revert-v4-research.md
-        # for the investigation that motivated this switch.
         if dialect == "postgresql":
             pg_query = text(
                 "SELECT ea_id, "
                 "       date_trunc('hour', captured_at) AS hour_ts, "
                 "       percentile_disc(0.5) WITHIN GROUP (ORDER BY current_lowest_bin) "
-                "         AS price "
+                "         AS median_price, "
+                "       MAX(current_lowest_bin) AS max_price, "
+                "       MIN(current_lowest_bin) AS min_price "
                 "FROM market_snapshots "
                 f"WHERE {' AND '.join(where)} "
                 "GROUP BY ea_id, date_trunc('hour', captured_at)"
@@ -529,16 +558,16 @@ async def load_market_snapshot_data(
             result = await session.execute(pg_query, params)
             rows = result.fetchall()
             logger.info(
-                f"Loaded {len(rows)} hour-bucketed (median) snapshots from market_snapshots (pg)"
+                f"Loaded {len(rows)} hour-bucketed (median + max/min) snapshots "
+                f"from market_snapshots (pg)"
             )
 
-            data: dict[int, list[tuple[dt, int]]] = defaultdict(list)
-            for ea_id, hour_ts, price in rows:
+            for ea_id, hour_ts, med_p, max_p, min_p in rows:
                 if isinstance(hour_ts, str):
                     hour_ts = dt.fromisoformat(hour_ts)
-                data[ea_id].append((hour_ts, int(price)))
+                data[ea_id].append((hour_ts, int(med_p)))
+                exec_prices[(ea_id, hour_ts)] = (int(max_p), int(min_p))
         else:
-            # Generic path: pull rows and bucket in Python (SQLite tests, etc).
             generic_query = text(
                 "SELECT ea_id, captured_at, current_lowest_bin "
                 "FROM market_snapshots "
@@ -549,7 +578,6 @@ async def load_market_snapshot_data(
             rows = result.fetchall()
             logger.info(f"Loaded {len(rows)} raw snapshots from market_snapshots")
 
-            # Collect all prices per (ea_id, hour), then take the median
             buckets: dict[tuple[int, dt], list[int]] = defaultdict(list)
             for ea_id, captured_at, price in rows:
                 if isinstance(captured_at, str):
@@ -557,11 +585,11 @@ async def load_market_snapshot_data(
                 hour_ts = captured_at.replace(minute=0, second=0, microsecond=0)
                 buckets[(ea_id, hour_ts)].append(int(price))
 
-            data = defaultdict(list)
             for (ea_id, hour_ts), prices in buckets.items():
                 prices.sort()
                 median = prices[len(prices) // 2]
                 data[ea_id].append((hour_ts, median))
+                exec_prices[(ea_id, hour_ts)] = (max(prices), min(prices))
 
     for ea_id in data:
         data[ea_id].sort(key=lambda x: x[0])
@@ -571,7 +599,6 @@ async def load_market_snapshot_data(
         if len(points) >= min_data_points
     }
 
-    # Load created_at from players table
     created_at_map: dict[int, dt] = {}
     async with session_factory() as session:
         ca_result = await session.execute(
@@ -587,7 +614,7 @@ async def load_market_snapshot_data(
         f"{len(created_at_map)} have created_at"
     )
 
-    return filtered, created_at_map
+    return filtered, created_at_map, exec_prices
 
 
 async def run_cli(
@@ -620,7 +647,7 @@ async def run_cli(
         price_label += f" (max {max_price:,})"
     logger.info(f"Loading price data from market_snapshots{price_label}...")
 
-    price_data, created_at_map = await load_market_snapshot_data(
+    price_data, created_at_map, exec_prices = await load_market_snapshot_data(
         session_factory,
         min_price=min_price,
         max_price=max_price,
@@ -658,14 +685,17 @@ async def run_cli(
         # Single strategy with explicit params: use direct run_backtest
         name, cls = to_run[0]
         strategy = cls(json.loads(params_json))
-        result = run_backtest(strategy, price_data, budget, created_at_map=created_at_map)
+        result = run_backtest(
+            strategy, price_data, budget,
+            created_at_map=created_at_map, exec_prices=exec_prices,
+        )
         total_results.append(result)
     else:
         # Sweep mode (--all or --strategy without --params): parallel
         classes = [cls for _, cls in to_run]
         total_results = run_sweep_parallel(
             classes, price_data, budget,
-            created_at_map=created_at_map,
+            created_at_map=created_at_map, exec_prices=exec_prices,
         )
 
     # Load player name mapping for trade log
