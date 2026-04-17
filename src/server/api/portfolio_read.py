@@ -81,6 +81,13 @@ async def get_portfolio(
         )
         epph = entry.get("expected_profit_per_hour")
         sph = entry.get("sales_per_hour")
+        # Real coins/hr: net_profit × sales/hr × OP success rate.
+        net_profit = entry.get("net_profit") or 0
+        op_ratio = entry.get("op_ratio") or 0.0
+        coins_per_hour = (
+            round(net_profit * sph * op_ratio, 2)
+            if sph is not None else None
+        )
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
@@ -102,6 +109,7 @@ async def get_portfolio(
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
             "expected_profit_per_hour": round(epph, 2) if epph else None,
+            "coins_per_hour": coins_per_hour,
             "futgg_url": entry.get("futgg_url"),
         })
 
@@ -168,6 +176,14 @@ async def generate_portfolio(
             last_scanned_at = last_scanned_at.replace(tzinfo=None)
         is_stale = last_scanned_at is None or last_scanned_at < stale_cutoff
         epph = entry.get("expected_profit_per_hour")
+        sph = entry.get("sales_per_hour")
+        # Real coins/hr: net_profit × sales/hr × OP success rate.
+        net_profit = entry.get("net_profit") or 0
+        op_ratio = entry.get("op_ratio") or 0.0
+        coins_per_hour = (
+            round(net_profit * sph * op_ratio, 2)
+            if sph is not None else None
+        )
         data.append({
             "ea_id": entry["ea_id"],
             "name": entry["name"],
@@ -186,6 +202,7 @@ async def generate_portfolio(
                 last_scanned_at.isoformat() if last_scanned_at else None
             ),
             "expected_profit_per_hour": round(epph, 2) if epph else None,
+            "coins_per_hour": coins_per_hour,
             "futgg_url": entry.get("futgg_url"),
         })
 
