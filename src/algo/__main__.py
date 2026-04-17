@@ -8,10 +8,7 @@ def main():
     # Remove the subcommand from argv so Click doesn't see it
     sys.argv = [sys.argv[0]] + sys.argv[2:]
 
-    if cmd == "scrape":
-        from src.algo.scraper import main as scrape_main
-        scrape_main()
-    elif cmd == "run":
+    if cmd == "run":
         from src.algo.engine import main as engine_main
         engine_main()
     elif cmd == "report":
@@ -21,7 +18,6 @@ def main():
         print("Usage: python -m src.algo <command>")
         print()
         print("Commands:")
-        print("  scrape   Fetch full price history from fut.gg")
         print("  run      Run backtests (--strategy NAME | --all)")
         print("  report   View backtest results (--strategy NAME, --sort COLUMN)")
         sys.exit(1)
