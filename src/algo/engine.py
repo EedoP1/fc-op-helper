@@ -341,7 +341,6 @@ def run_sweep_parallel(
     budget: int = 1_000_000,
     max_workers: int | None = None,
     created_at_map: dict[int, datetime] | None = None,
-    use_hourly_grid: bool = False,
 ) -> list[dict]:
     """Run all strategy+param combos in parallel across CPU cores.
 
@@ -375,7 +374,7 @@ def run_sweep_parallel(
     combo_specs: list[tuple[str, dict]] = []
     for cls in strategy_classes:
         sample = cls({})
-        grid = sample.param_grid_hourly() if use_hourly_grid and hasattr(sample, "param_grid_hourly") else sample.param_grid()
+        grid = sample.param_grid_hourly() if hasattr(sample, "param_grid_hourly") else sample.param_grid()
         for params in grid:
             combo_specs.append((cls.name, params))
 
@@ -718,7 +717,6 @@ async def run_cli(
         total_results = run_sweep_parallel(
             classes, price_data, budget,
             created_at_map=created_at_map,
-            use_hourly_grid=use_market_snapshots,
         )
 
     # Load player name mapping for trade log
