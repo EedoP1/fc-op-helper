@@ -122,9 +122,13 @@ export default defineBackground({
         case 'ALGO_POSITION_SOLD_RESULT':
         case 'ALGO_POSITION_RELIST_RESULT':
           return false;
-        case 'AUTOMATION_STATUS_REQUEST':
         case 'AUTOMATION_START':
+          handleAutomationStart().then(sendResponse);
+          return true;
         case 'AUTOMATION_STOP':
+          handleAutomationStop().then(sendResponse);
+          return true;
+        case 'AUTOMATION_STATUS_REQUEST':
         case 'AUTOMATION_START_RESULT':
         case 'AUTOMATION_STOP_RESULT':
         case 'AUTOMATION_STATUS_RESULT':
@@ -477,7 +481,7 @@ async function handleAlgoStart(budget: number): Promise<ExtensionMessage> {
     }
     const data = await res.json();
     // Start the master to monitor the worker tab
-    startAlgoMaster().catch(err => console.error('[background] Master start failed:', err));
+    startAlgoMaster('algo').catch(err => console.error('[background] Master start failed:', err));
     return { type: 'ALGO_START_RESULT', success: true, budget: data.budget, cash: data.cash };
   } catch (e) {
     return { type: 'ALGO_START_RESULT', success: false, error: String(e) };
@@ -495,6 +499,25 @@ async function handleAlgoStop(): Promise<ExtensionMessage> {
     return { type: 'ALGO_STOP_RESULT', success: true };
   } catch (e) {
     return { type: 'ALGO_STOP_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAutomationStart(): Promise<ExtensionMessage> {
+  try {
+    // OP selling does not require a backend activation call — just start the master
+    startAlgoMaster('op-selling').catch(err => console.error('[background] Master start failed:', err));
+    return { type: 'AUTOMATION_START_RESULT', success: true };
+  } catch (e) {
+    return { type: 'AUTOMATION_START_RESULT', success: false, error: String(e) };
+  }
+}
+
+async function handleAutomationStop(): Promise<ExtensionMessage> {
+  try {
+    await stopAlgoMaster();
+    return { type: 'AUTOMATION_STOP_RESULT', success: true };
+  } catch (e) {
+    return { type: 'AUTOMATION_STOP_RESULT', success: false };
   }
 }
 

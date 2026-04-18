@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { enabledItem, lastActionItem, portfolioItem } from '../src/storage';
+import { enabledItem, lastActionItem, portfolioItem, algoMasterStateItem } from '../src/storage';
 
 const MOCK_ACTION = {
   id: 1,
@@ -443,5 +443,49 @@ describe('trade report handler', () => {
         error: expect.stringContaining('Network failure'),
       }),
     );
+  });
+});
+
+// ── Mode selection via message handlers tests ─────────────────────────────────
+
+describe('mode selection via message handlers', () => {
+  beforeEach(async () => {
+    fakeBrowser.reset();
+    vi.restoreAllMocks();
+    // Stub backend + master-side chrome calls so handlers can run
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ budget: 100000, cash: 100000 }),
+    }) as any;
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([] as any);
+    vi.spyOn(chrome.tabs, 'create').mockResolvedValue({ id: 1, status: 'complete' } as any);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({ id: 1, url: 'https://www.ea.com/ea-sports-fc/ultimate-team/web-app/', status: 'complete' } as any);
+    vi.spyOn(chrome.tabs, 'sendMessage').mockResolvedValue({ type: 'PONG' } as any);
+  });
+
+  it('ALGO_START sets mode to "algo" on master state', async () => {
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener({ type: 'ALGO_START', budget: 100000 }, {}, sendResponse);
+    expect(returnVal).toBe(true);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    const state = await algoMasterStateItem.getValue();
+    expect(state.mode).toBe('algo');
+  });
+
+  it('AUTOMATION_START sets mode to "op-selling" on master state', async () => {
+    const { portfolioListener } = await runBackgroundAndCapture();
+
+    const sendResponse = vi.fn();
+    const returnVal = portfolioListener({ type: 'AUTOMATION_START' }, {}, sendResponse);
+    expect(returnVal).toBe(true);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    const state = await algoMasterStateItem.getValue();
+    expect(state.mode).toBe('op-selling');
   });
 });
