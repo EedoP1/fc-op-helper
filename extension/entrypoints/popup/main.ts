@@ -109,8 +109,6 @@ function applyModeUI(mode: TradeMode, isRunning: boolean): void {
   // Budget input is only relevant for algo mode
   budgetInput.style.display = mode === 'algo' ? '' : 'none';
   controlTitle.textContent = mode === 'algo' ? 'Algo Trading' : 'OP Selling';
-  startBtn.textContent = 'Start';
-  stopBtn.textContent = 'Stop';
 }
 
 async function onModeChange(): Promise<void> {
@@ -170,7 +168,7 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
-// ── Algo Start / Stop ───────────────────────────────────────────────────────
+// ── Start / Stop ────────────────────────────────────────────────────────────
 
 startBtn.addEventListener('click', async () => {
   const mode = modeSelect.value as TradeMode;
@@ -226,9 +224,9 @@ stopBtn.addEventListener('click', async () => {
     // Read current running mode from master state to decide which stop message to send
     const stored = await chrome.storage.local.get(MASTER_KEY);
     const master = (stored[MASTER_KEY] as AlgoMasterState | undefined) ?? null;
-    const runningMode: TradeMode = master?.mode ?? 'algo';
+    const runningMode: TradeMode = (master?.mode as TradeMode | undefined) ?? (modeSelect.value as TradeMode);
     const stopType = runningMode === 'op-selling' ? 'AUTOMATION_STOP' : 'ALGO_STOP';
-    const res: any = await chrome.runtime.sendMessage({ type: stopType });
+    const res = await chrome.runtime.sendMessage({ type: stopType });
     const resultType = runningMode === 'op-selling' ? 'AUTOMATION_STOP_RESULT' : 'ALGO_STOP_RESULT';
     if (res?.type === resultType && res.success) {
       algoStatus.textContent = `${runningMode === 'op-selling' ? 'OP selling' : 'Algo'} stopped`;
