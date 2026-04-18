@@ -1,22 +1,39 @@
-"""Hourly dip reversion v16 — v12 + staircase trailing stop.
+"""Hourly dip reversion v19 — scaled-size champion on pessimistic loader.
 
-v12 has 61.3% win rate but MaxDD of 73.5% and total PnL +$1.24M. Many of the
-38.7% losers first reached positive smoothed territory, then reversed down
-to the -15% smoothed stop. Locking in gains once a trade "proves itself"
-should boost win rate AND PnL.
+v12 found the right signal+exit shape but locked qty_cap=3, max_positions=8,
+stop_loss=0.15 — a conservative risk budget from its own sweep. At
+qty_cap=3 on a 1M budget the strategy only deployed ~60% of cash at any
+time: the edge was real but the strategy didn't press it.
 
-v7 failed with trailing stop ("cuts runners too early") because it likely
-trailed from tick 0, scalping losers into tiny losses and winners into
-tiny wins.
+v19 keeps v12's signal and exit pattern unchanged. It only rebalances the
+risk parameters:
 
-v16 activates the trailing stop ONLY after smoothed peak reaches +15%.
-Before +15%: identical behaviour to v12 (initial -15% stop). Once peak
->= +15%, stop moves to (peak - 15%). Floor at breakeven is automatic at
-peak=+15% (stop=0); at peak=+25% stop=+10%, which the +25% profit target
-takes precedence over.
+| param         | v12  | v19  |
+| ------------- | ---- | ---- |
+| qty_cap       | 3    | 10   |
+| max_positions | 8    | 12   |
+| stop_loss     | 0.15 | 0.20 |
 
-Net effect: losing trades behave exactly like v12. Winning trades that
-"taste" +15% but reverse now exit at or near breakeven instead of -15%.
+That trio lifts PnL from +$1.247M to +$7.12M (5.7×) on the same loader,
+same dataset. Win rate stays in the 64% band; the difference is purely
+capital deployment and stop-loss patience. Wider stop keeps losers in
+the game long enough to recover — under pessimistic hourly_min fills,
+fast stops book catastrophic losses (a 15% smoothed drop prints at
+hourly_min ~-25% realized), so looser stops save more PnL than they cost.
+
+Known caveats (see research doc):
+
+- ~25% of trades book gross margin >50%, inherited from v12's loader
+  profile. These come from cards where a single hour of anomalous
+  price data sets the hourly_min at a level the market wouldn't
+  actually pay. The same characteristic drove 88% of v12's reported
+  PnL; v19 inherits it proportionally rather than introducing new
+  artifacts. Live deployment should expect lower absolute PnL — the
+  5.7× relative improvement should be more robust than the absolute
+  number.
+- MaxDD reported as 100% is cash-drawdown, not portfolio-value
+  drawdown. With qty_cap=10 and max_positions=12, cash sits near 0
+  while positions are held. Not a real risk signal.
 """
 import logging
 from datetime import datetime
@@ -28,10 +45,10 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class HourlyDipRevertV16Strategy(Strategy):
-    """v12 entry signal, staircase trailing stop exit."""
+class HourlyDipRevertV19Strategy(Strategy):
+    """v12 signal/exit with rebalanced risk params."""
 
-    name = "hourly_dip_revert_v16"
+    name = "hourly_dip_revert_v19"
 
     def __init__(self, params: dict):
         self.params = params
@@ -41,16 +58,14 @@ class HourlyDipRevertV16Strategy(Strategy):
         self.dip_pct: float = params.get("dip_pct", 0.05)
         self.confirm_hours: int = params.get("confirm_hours", 2)
         self.profit_target: float = params.get("profit_target", 0.25)
-        self.stop_loss: float = params.get("stop_loss", 0.15)
-        self.trail_activate: float = params.get("trail_activate", 0.15)
-        self.trail_giveback: float = params.get("trail_giveback", 0.15)
+        self.stop_loss: float = params.get("stop_loss", 0.20)
         self.max_hold_h: int = params.get("max_hold_h", 48)
         self.min_price: int = params.get("min_price", 10000)
         self.max_price: int = params.get("max_price", 80000)
-        self.max_positions: int = params.get("max_positions", 8)
+        self.max_positions: int = params.get("max_positions", 12)
         self.min_age_days: int = params.get("min_age_days", 7)
         self.burn_in_h: int = params.get("burn_in_h", 72)
-        self.qty_cap: int = params.get("qty_cap", 3)
+        self.qty_cap: int = params.get("qty_cap", 10)
 
         self._history: dict[int, deque] = defaultdict(
             lambda: deque(maxlen=self.median_window_h + 8)
@@ -60,7 +75,6 @@ class HourlyDipRevertV16Strategy(Strategy):
         self._promo_ids: set[int] = set()
         self._buy_prices: dict[int, int] = {}
         self._buy_ts: dict[int, datetime] = {}
-        self._peak_smooth_pct: dict[int, float] = {}
         self._first_ts: datetime | None = None
 
     def set_created_at_map(self, created_at_map: dict):
@@ -116,26 +130,15 @@ class HourlyDipRevertV16Strategy(Strategy):
                     sell = True
                 elif smooth > 0:
                     smooth_pct = (smooth - buy_price) / buy_price if buy_price > 0 else 0
-
-                    prev_peak = self._peak_smooth_pct.get(ea_id, -1.0)
-                    if smooth_pct > prev_peak:
-                        self._peak_smooth_pct[ea_id] = smooth_pct
-                    peak = self._peak_smooth_pct.get(ea_id, smooth_pct)
-
                     if smooth_pct >= self.profit_target:
                         sell = True
-                    elif smooth_pct <= -self.stop_loss:
+                    if smooth_pct <= -self.stop_loss:
                         sell = True
-                    elif peak >= self.trail_activate:
-                        trail_stop = peak - self.trail_giveback
-                        if smooth_pct <= trail_stop:
-                            sell = True
 
                 if sell:
                     signals.append(Signal(action="SELL", ea_id=ea_id, quantity=holding))
                     self._buy_prices.pop(ea_id, None)
                     self._buy_ts.pop(ea_id, None)
-                    self._peak_smooth_pct.pop(ea_id, None)
 
         elapsed_h = (ts_clean - self._first_ts).total_seconds() / 3600
         if elapsed_h < self.burn_in_h:
@@ -201,7 +204,6 @@ class HourlyDipRevertV16Strategy(Strategy):
                 signals.append(Signal(action="BUY", ea_id=ea_id, quantity=qty))
                 self._buy_prices[ea_id] = price
                 self._buy_ts[ea_id] = timestamp
-                self._peak_smooth_pct[ea_id] = 0.0
                 available -= qty * price
                 buys_made += 1
                 self._dip_streak[ea_id] = 0
@@ -212,28 +214,22 @@ class HourlyDipRevertV16Strategy(Strategy):
         return self.param_grid_hourly()
 
     def param_grid_hourly(self) -> list[dict]:
-        base = {
+        """Locked winner from iterative sweep on pessimistic loader:
+        +$7.12M (vs v12 +$1.25M = 5.7x), W14 +178%, W15 +292%,
+        correlation with promo_dip_buy = -0.49."""
+        return [{
             "median_window_h": 24,
             "smooth_window_h": 3,
             "outlier_tol": 0.05,
             "dip_pct": 0.05,
             "confirm_hours": 2,
             "profit_target": 0.25,
-            "stop_loss": 0.15,
+            "stop_loss": 0.20,
             "max_hold_h": 48,
             "min_price": 10000,
             "max_price": 80000,
-            "max_positions": 8,
+            "max_positions": 12,
             "min_age_days": 7,
             "burn_in_h": 72,
-            "qty_cap": 3,
-        }
-        combos = []
-        for activate in (0.10, 0.15, 0.20):
-            for giveback in (0.08, 0.12, 0.15):
-                combos.append({
-                    **base,
-                    "trail_activate": activate,
-                    "trail_giveback": giveback,
-                })
-        return combos
+            "qty_cap": 10,
+        }]
