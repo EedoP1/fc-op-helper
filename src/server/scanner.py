@@ -26,7 +26,7 @@ from src.config import (
     SCAN_DISPATCH_BATCH_SIZE,
     MIN_SALES_PER_HOUR,
 )
-from src.futgg_client import FutGGClient
+from src.futgg_client import FutGGClient, PricesFetchError
 from src.server.circuit_breaker import CircuitBreaker
 from src.server.playwright_client import PlaywrightPricesClient
 from src.server.listing_tracker import record_listings, resolve_outcomes
@@ -244,7 +244,9 @@ class ScannerService:
             )
 
         @retry(
-            retry=retry_if_exception_type((HTTPError, ConnectionError, TimeoutError)),
+            retry=retry_if_exception_type(
+                (HTTPError, ConnectionError, TimeoutError, PricesFetchError)
+            ),
             stop=stop_after_attempt(3),
             wait=wait_exponential_jitter(initial=2, max=60, jitter=10),
             reraise=True,

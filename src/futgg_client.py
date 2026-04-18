@@ -28,6 +28,19 @@ from src.models import Player, PlayerMarketData, PricePoint, SaleRecord
 
 logger = logging.getLogger(__name__)
 
+
+class PricesFetchError(Exception):
+    """Raised when fut.gg definitions succeed but the prices endpoint returns no data.
+
+    Signals a transient/recoverable prices-endpoint failure to the scanner's
+    retry decorator. Differentiated from a full-outage 'both endpoints dead'
+    case (which still returns None) so the scanner can retry prices failures
+    without pointlessly retrying full outages, and from a 'card not on market'
+    case (current_bin missing) which is also a legitimate None.
+    """
+    pass
+
+
 POSITION_MAP = {
     0: "GK", 1: "RWB", 2: "RB", 3: "CB", 4: "LB", 5: "LWB",
     6: "RDM", 7: "CDM", 8: "LDM", 9: "RM", 10: "CM", 11: "LM",
@@ -120,13 +133,24 @@ class FutGGClient:
     # ── Data assembly ──────────────────────────────────────────────
 
     async def get_player_market_data(self, ea_id: int) -> Optional[PlayerMarketData]:
-        """Fetch and assemble full market data for a single player card."""
+        """Fetch and assemble full market data for a single player card.
+
+        Three-way result semantics:
+          - both endpoints failed → return None (full outage; silent skip)
+          - definitions OK but prices None → raise PricesFetchError (recoverable;
+            scanner's tenacity decorator will retry the prices fetch)
+          - both OK but no current_bin → return None (card not on market right now)
+        """
         defn, prices = await asyncio.gather(
             self.get_player_definition(ea_id),
             self.get_player_prices(ea_id),
         )
-        if not defn or not prices:
-            return None
+        if not defn and not prices:
+            return None  # full outage — both endpoints failed
+        if not defn:
+            return None  # defn-only failure (rare); preserve current silent behaviour
+        if not prices:
+            raise PricesFetchError(f"prices unavailable for ea_id={ea_id}")
 
         player = self._build_player(defn)
         current_bin = self._extract_current_bin(prices)
@@ -217,8 +241,13 @@ class FutGGClient:
         defn = defn_data["data"] if defn_data and "data" in defn_data else None
         prices = prices_data["data"] if prices_data and "data" in prices_data else None
 
-        if not defn or not prices:
-            return None
+        # Same three-way semantics as get_player_market_data (async version).
+        if not defn and not prices:
+            return None  # full outage — both endpoints failed
+        if not defn:
+            return None  # defn-only failure (rare); preserve current silent behaviour
+        if not prices:
+            raise PricesFetchError(f"prices unavailable for ea_id={ea_id}")
 
         player = self._build_player(defn)
         current_bin = self._extract_current_bin(prices)
