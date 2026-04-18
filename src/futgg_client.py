@@ -135,11 +135,15 @@ class FutGGClient:
     async def get_player_market_data(self, ea_id: int) -> Optional[PlayerMarketData]:
         """Fetch and assemble full market data for a single player card.
 
-        Three-way result semantics:
+        Four result paths:
           - both endpoints failed → return None (full outage; silent skip)
-          - definitions OK but prices None → raise PricesFetchError (recoverable;
-            scanner's tenacity decorator will retry the prices fetch)
-          - both OK but no current_bin → return None (card not on market right now)
+          - defn failed, prices OK → return None (rare defn-only failure)
+          - defn OK, prices None → raise PricesFetchError (recoverable; scanner retries)
+          - defn OK, prices OK → return PlayerMarketData. current_lowest_bin == 0
+            when the card is momentarily untradeable (no liveAuctions AND no currentPrice
+            AND no overview.averageBin); caller must guard MarketSnapshot writes on
+            current_lowest_bin > 0, but PlayerRecord.created_at / last_scanned_at should
+            still be updated from the shell.
         """
         defn, prices = await asyncio.gather(
             self.get_player_definition(ea_id),
@@ -154,10 +158,6 @@ class FutGGClient:
 
         player = self._build_player(defn)
         current_bin = self._extract_current_bin(prices)
-        if not current_bin:
-            return None
-
-        raw_auctions = prices.get("liveAuctions", [])
         max_price_range = prices.get("priceRange", {}).get("maxPrice")
         created_at_raw = defn.get("createdAt")
         created_at = None
@@ -166,6 +166,26 @@ class FutGGClient:
                 created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 pass
+
+        if not current_bin:
+            # Card momentarily untradeable (no liveAuctions AND no currentPrice.price).
+            # Return a shell so downstream can still populate PlayerRecord.created_at /
+            # last_scanned_at — critical for promo_dip_buy's Friday-batch detection.
+            # Scanner guards the MarketSnapshot write on current_lowest_bin > 0.
+            return PlayerMarketData(
+                player=player,
+                current_lowest_bin=0,
+                listing_count=0,
+                price_history=[],
+                sales=[],
+                live_auction_prices=[],
+                live_auctions_raw=[],
+                futgg_url=defn.get("url"),
+                max_price_range=max_price_range,
+                created_at=created_at,
+            )
+
+        raw_auctions = prices.get("liveAuctions", [])
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
@@ -241,7 +261,8 @@ class FutGGClient:
         defn = defn_data["data"] if defn_data and "data" in defn_data else None
         prices = prices_data["data"] if prices_data and "data" in prices_data else None
 
-        # Same three-way semantics as get_player_market_data (async version).
+        # Same four-way semantics as get_player_market_data (async version):
+        # both-None → None; defn-None → None; prices-None → raise; no current_bin → shell.
         if not defn and not prices:
             return None  # full outage — both endpoints failed
         if not defn:
@@ -251,10 +272,6 @@ class FutGGClient:
 
         player = self._build_player(defn)
         current_bin = self._extract_current_bin(prices)
-        if not current_bin:
-            return None
-
-        raw_auctions = prices.get("liveAuctions", [])
         max_price_range = prices.get("priceRange", {}).get("maxPrice")
         created_at_raw = defn.get("createdAt")
         created_at = None
@@ -263,6 +280,25 @@ class FutGGClient:
                 created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 pass
+
+        if not current_bin:
+            # Card momentarily untradeable — return a shell so downstream can
+            # still populate PlayerRecord.created_at / last_scanned_at.
+            # Scanner guards the MarketSnapshot write on current_lowest_bin > 0.
+            return PlayerMarketData(
+                player=player,
+                current_lowest_bin=0,
+                listing_count=0,
+                price_history=[],
+                sales=[],
+                live_auction_prices=[],
+                live_auctions_raw=[],
+                futgg_url=defn.get("url"),
+                max_price_range=max_price_range,
+                created_at=created_at,
+            )
+
+        raw_auctions = prices.get("liveAuctions", [])
         return PlayerMarketData(
             player=player,
             current_lowest_bin=current_bin,
