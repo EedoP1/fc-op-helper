@@ -35,8 +35,8 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class PostDumpV6Strategy(Strategy):
-    name = "post_dump_v6"
+class PostDumpV13Strategy(Strategy):
+    name = "post_dump_v13"
 
     def __init__(self, params: dict):
         self.params = params
@@ -45,9 +45,6 @@ class PostDumpV6Strategy(Strategy):
         self.dump_min_pct: float = params.get("dump_min_pct", -0.04)
         self.recovery_short_h: int = params.get("recovery_short_h", 6)
         self.recovery_min_pct: float = params.get("recovery_min_pct", 0.005)
-        # Trigger B: mild-dump
-        self.mild_dump_pct: float = params.get("mild_dump_pct", -0.015)
-        self.mild_recovery_pct: float = params.get("mild_recovery_pct", 0.002)
         # After triggering, throttle: don't fire again for X hours
         self.trigger_cooldown_h: int = params.get("trigger_cooldown_h", 96)
         # Card universe at trigger: cheapest N liquid cards
@@ -86,9 +83,12 @@ class PostDumpV6Strategy(Strategy):
             if cr.weekday() == 4:
                 bucket = (cr.year, cr.month, cr.day, cr.hour)
                 hour_buckets[bucket].append(ea_id)
+        self._promo_fridays: list[datetime] = []
         for bucket, ids in hour_buckets.items():
             if len(ids) >= 10:
                 self._promo_ids.update(ids)
+                self._promo_fridays.append(datetime(*bucket[:3], bucket[3]))
+        self._promo_fridays.sort()
 
     @staticmethod
     def _median(values) -> int:
@@ -167,15 +167,26 @@ class PostDumpV6Strategy(Strategy):
             if since < self.trigger_cooldown_h:
                 return signals
 
-        # Trigger A: dumped X% over 48h AND turned up over 6h (rapid dump-recovery)
+        # Trigger A: rapid dump + recovery (the v5 winner)
         d48 = self._g_delta(self.dump_lookback_h)
         d6 = self._g_delta(self.recovery_short_h)
         trig_a = (d48 <= self.dump_min_pct and d6 >= self.recovery_min_pct)
-        # Trigger B: drifted down over 24h AND just turned up over 3h (slow-drift bottom)
-        d24 = self._g_delta(24)
-        d3 = self._g_delta(3)
-        trig_b = (d24 <= self.mild_dump_pct and d24 > self.dump_min_pct
-                  and d3 >= self.mild_recovery_pct)
+
+        # Trigger B (promo-Sat alignment): when 18-30h post promo Friday
+        # AND G dropped 3% over last 24h. Buys the sympathy-dumped liquid
+        # cards on PROMO DAYS — overlaps promo_dip_buy's fire days,
+        # diluting the otherwise-perfect anti-correlation.
+        trig_b = False
+        if self._promo_fridays:
+            recent_promo = max((p for p in self._promo_fridays if p <= ts_clean), default=None)
+            if recent_promo:
+                hrs_since = (ts_clean - recent_promo).total_seconds() / 3600
+                if 18 <= hrs_since <= 36:
+                    d24 = self._g_delta(24)
+                    d3 = self._g_delta(3)
+                    if d24 <= -0.025 and d3 >= 0:
+                        trig_b = True
+
         if not (trig_a or trig_b):
             return signals
 
@@ -243,10 +254,8 @@ class PostDumpV6Strategy(Strategy):
             "dump_min_pct": -0.035,
             "recovery_short_h": 6,
             "recovery_min_pct": 0.004,
-            "trigger_cooldown_h": 36,
-            "basket_size": 5,
-            "mild_dump_pct": -0.015,
-            "mild_recovery_pct": 0.002,
+            "trigger_cooldown_h": 48,
+            "basket_size": 6,
             "smooth_window_h": 3,
             "outlier_tol": 0.06,
             "profit_target": 0.15,

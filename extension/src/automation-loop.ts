@@ -112,7 +112,7 @@ export async function runAutomationLoop(
             } satisfies ExtensionMessage);
             if (priceRes && priceRes.type === 'FRESH_PRICE_RESULT' && !priceRes.error) {
               const sellBin = roundToNearestStep(priceRes.sell_price);
-              const sellStart = roundToNearestStep(getBeforeStepValue(priceRes.sell_price));
+              const sellStart = roundToNearestStep(getBeforeStepValue(sellBin));
               await jitter(500, 1000);
               const { success, error } = await listItem(item, sellStart, sellBin);
               if (success) {

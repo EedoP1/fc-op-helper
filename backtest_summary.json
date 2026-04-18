@@ -1,13 +1,13 @@
 [
   {
-    "strategy_name": "post_dump_v5",
-    "params": "{\"dump_lookback_h\": 48, \"dump_min_pct\": -0.035, \"recovery_short_h\": 6, \"recovery_min_pct\": 0.004, \"trigger_cooldown_h\": 48, \"basket_size\": 6, \"smooth_window_h\": 3, \"outlier_tol\": 0.06, \"profit_target\": 0.15, \"stop_loss\": 0.1, \"stop_delay_h\": 36, \"max_hold_h\": 120, \"min_price\": 11000, \"max_price\": 35000, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 6, \"max_positions\": 12}",
+    "strategy_name": "post_dump_v11",
+    "params": "{\"dump_lookback_h\": 48, \"dump_min_pct\": -0.035, \"recovery_short_h\": 6, \"recovery_min_pct\": 0.004, \"trigger_cooldown_h\": 48, \"basket_size\": 6, \"filler_hour\": 8, \"smooth_window_h\": 3, \"outlier_tol\": 0.06, \"profit_target\": 0.15, \"stop_loss\": 0.1, \"stop_delay_h\": 36, \"max_hold_h\": 120, \"min_price\": 11000, \"max_price\": 35000, \"min_age_days\": 7, \"burn_in_h\": 72, \"qty_cap\": 6, \"max_positions\": 12}",
     "started_budget": 1000000,
-    "final_budget": 1159075,
-    "total_pnl": 159075,
-    "total_trades": 24,
+    "final_budget": 1166800,
+    "total_pnl": 166800,
+    "total_trades": 25,
     "win_rate": 1.0,
-    "max_drawdown": 0.8666558988439973,
-    "sharpe_ratio": 2.8580056561436846
+    "max_drawdown": 0.9344931816608597,
+    "sharpe_ratio": 2.921635940471723
   }
 ]

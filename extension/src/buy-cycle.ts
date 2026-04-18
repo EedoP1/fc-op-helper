@@ -162,7 +162,7 @@ export async function executeBuyCycle(
 
     // List at locked OP price — try directly first, then via move-to-TL
     const sellBin = roundToNearestStep(player.sell_price);
-    const sellStart = roundToNearestStep(getBeforeStepValue(player.sell_price));
+    const sellStart = roundToNearestStep(getBeforeStepValue(sellBin));
 
     await jitter(500, 1000);
     let listResult = await listItem(cheapest, sellStart, sellBin);

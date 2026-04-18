@@ -31,12 +31,13 @@ from collections import defaultdict, deque
 
 from src.algo.models import Signal, Portfolio
 from src.algo.strategies.base import Strategy
+from src.algo.strategies.proven_card_v1 import PROVEN_CARDS
 
 logger = logging.getLogger(__name__)
 
 
-class PostDumpV6Strategy(Strategy):
-    name = "post_dump_v6"
+class PostDumpV11Strategy(Strategy):
+    name = "post_dump_v11"
 
     def __init__(self, params: dict):
         self.params = params
@@ -45,13 +46,11 @@ class PostDumpV6Strategy(Strategy):
         self.dump_min_pct: float = params.get("dump_min_pct", -0.04)
         self.recovery_short_h: int = params.get("recovery_short_h", 6)
         self.recovery_min_pct: float = params.get("recovery_min_pct", 0.005)
-        # Trigger B: mild-dump
-        self.mild_dump_pct: float = params.get("mild_dump_pct", -0.015)
-        self.mild_recovery_pct: float = params.get("mild_recovery_pct", 0.002)
         # After triggering, throttle: don't fire again for X hours
         self.trigger_cooldown_h: int = params.get("trigger_cooldown_h", 96)
         # Card universe at trigger: cheapest N liquid cards
         self.basket_size: int = params.get("basket_size", 6)
+        self.filler_hour: int = params.get("filler_hour", 8)
         # Per-card filters
         self.smooth_window_h: int = params.get("smooth_window_h", 3)
         self.outlier_tol: float = params.get("outlier_tol", 0.06)
@@ -77,6 +76,7 @@ class PostDumpV6Strategy(Strategy):
         self._buy_ts: dict[int, datetime] = {}
         self._first_ts: datetime | None = None
         self._last_trigger_ts: datetime | None = None
+        self._last_filler_date: str = ""
 
     def set_created_at_map(self, created_at_map: dict):
         self._created_at = created_at_map
@@ -167,16 +167,10 @@ class PostDumpV6Strategy(Strategy):
             if since < self.trigger_cooldown_h:
                 return signals
 
-        # Trigger A: dumped X% over 48h AND turned up over 6h (rapid dump-recovery)
+        # Trigger condition: dumped X% over 48h AND just turned up over 6h
         d48 = self._g_delta(self.dump_lookback_h)
         d6 = self._g_delta(self.recovery_short_h)
-        trig_a = (d48 <= self.dump_min_pct and d6 >= self.recovery_min_pct)
-        # Trigger B: drifted down over 24h AND just turned up over 3h (slow-drift bottom)
-        d24 = self._g_delta(24)
-        d3 = self._g_delta(3)
-        trig_b = (d24 <= self.mild_dump_pct and d24 > self.dump_min_pct
-                  and d3 >= self.mild_recovery_pct)
-        if not (trig_a or trig_b):
+        if d48 > self.dump_min_pct or d6 < self.recovery_min_pct:
             return signals
 
         # Trigger fires! Build basket of cheapest liquid cards in price band
@@ -232,6 +226,48 @@ class PostDumpV6Strategy(Strategy):
         if buys_made > 0:
             self._last_trigger_ts = ts_clean
 
+        # ---- FILLER LAYER: 1 individual proven-card buy per day ----
+        # Adds buy days that overlap with promo's days (since filler fires
+        # on whatever day a proven card is at floor), diluting the
+        # otherwise-perfect anti-correlation with promo_dip_buy.
+        today_key = ts_clean.strftime("%Y-%m-%d")
+        if today_key != self._last_filler_date:
+            candidates_f: list[tuple[int, int, int]] = []
+            for ea_id, price in ticks:
+                if ea_id not in PROVEN_CARDS:
+                    continue
+                hist = self._history[ea_id]
+                if len(hist) < 72:
+                    continue
+                smooth = self._smooth(hist)
+                if smooth <= 0 or self._is_outlier(price, smooth):
+                    continue
+                if not (self.min_price <= price <= self.max_price):
+                    continue
+                if portfolio.holdings(ea_id) > 0:
+                    continue
+                if ea_id in self._promo_ids:
+                    continue
+                w168 = list(hist)[-168:] if len(hist) >= 168 else list(hist)
+                w_low = min(w168)
+                w_med = self._median(w168)
+                if w_low <= 0 or smooth > w_low * 1.05:
+                    continue
+                if w_med > 0 and smooth >= w_med:
+                    continue
+                candidates_f.append((ea_id, price, smooth))
+            candidates_f.sort(key=lambda x: x[2])
+            for ea_id, price, _ in candidates_f[:1]:
+                if len(portfolio.positions) >= self.max_positions:
+                    break
+                qty = min(self.qty_cap, portfolio.cash // price if price > 0 else 0)
+                if qty > 0:
+                    signals.append(Signal(action="BUY", ea_id=ea_id, quantity=qty))
+                    self._buy_prices[ea_id] = price
+                    self._buy_ts[ea_id] = timestamp
+                    self._last_filler_date = today_key
+                    break
+
         return signals
 
     def param_grid(self) -> list[dict]:
@@ -243,10 +279,9 @@ class PostDumpV6Strategy(Strategy):
             "dump_min_pct": -0.035,
             "recovery_short_h": 6,
             "recovery_min_pct": 0.004,
-            "trigger_cooldown_h": 36,
-            "basket_size": 5,
-            "mild_dump_pct": -0.015,
-            "mild_recovery_pct": 0.002,
+            "trigger_cooldown_h": 48,
+            "basket_size": 6,
+            "filler_hour": 8,
             "smooth_window_h": 3,
             "outlier_tol": 0.06,
             "profit_target": 0.15,
