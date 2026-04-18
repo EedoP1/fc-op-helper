@@ -104,10 +104,12 @@ class MockClient:
     async def discover_players(
         self, budget: int, min_price: int = 0, max_price: int = 0,
     ) -> list[dict]:
+        # Mirror real-client semantics: max_price <= 0 means "no upper bound".
         return [
             {"ea_id": p.player.resource_id, "price": p.current_lowest_bin}
             for p in self._players.values()
-            if min_price <= p.current_lowest_bin <= max_price
+            if p.current_lowest_bin >= min_price
+            and (max_price <= 0 or p.current_lowest_bin <= max_price)
         ]
 
     async def get_batch_market_data(

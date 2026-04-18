@@ -29,7 +29,10 @@ INITIAL_SCORING_BATCH_SIZE = 50   # players per batch to avoid overwhelming even
 
 # Price range for scanner discovery
 SCANNER_MIN_PRICE = 11_000
-SCANNER_MAX_PRICE = 500_000
+# Sentinel: 0 = no upper-bound price cap. Keeps high-priced release-day
+# TOTS/TOTY/Icon promos in the scanner's discovery set.
+# (Interpreted by FutGGClient.discover_players and MockClient.)
+SCANNER_MAX_PRICE = 0
 
 # Market data retention
 MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots

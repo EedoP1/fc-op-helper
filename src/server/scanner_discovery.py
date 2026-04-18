@@ -45,9 +45,9 @@ async def run_bootstrap(
     """
     t_discovery = time.monotonic()
     players = await client.discover_players(
-        budget=SCANNER_MAX_PRICE,
+        budget=0,                          # unused for filtering (auto-fill removed)
         min_price=SCANNER_MIN_PRICE,
-        max_price=SCANNER_MAX_PRICE,
+        max_price=SCANNER_MAX_PRICE,       # 0 = no upper bound
     )
     discovery_elapsed = time.monotonic() - t_discovery
     logger.info(
@@ -176,9 +176,9 @@ async def run_discovery(
         client: FutGG API client for player discovery.
     """
     players = await client.discover_players(
-        budget=SCANNER_MAX_PRICE,
+        budget=0,                          # unused for filtering (auto-fill removed)
         min_price=SCANNER_MIN_PRICE,
-        max_price=SCANNER_MAX_PRICE,
+        max_price=SCANNER_MAX_PRICE,       # 0 = no upper bound
     )
     logger.info(f"Discovery found {len(players)} players")
 
