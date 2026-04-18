@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
 stopped_at: Completed quick-260418-c65
-last_updated: "2026-04-18T05:58:27Z"
-last_activity: "2026-04-18 - Completed quick task 260418-c65: Fix scanner data-loss bugs (Cloudflare poll loop, PricesFetchError retry, cold-mark reset on rediscovery)"
+last_updated: "2026-04-18T15:17:00Z"
+last_activity: "2026-04-18 - Completed quick task 260418-kzb: Add GET /api/v1/portfolio/card-types endpoint + wire extension exclude dropdown dynamically (hardcoded 37-entry CARD_TYPES removed, replaced with live 73-entry fetch)"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -190,9 +190,10 @@ None yet.
 | 260417-s8n | Make portfolio CLI table relevant: fix EP/hr wiring, add Sell/Profit/Sales/hr, drop Efficiency, rename Sell%→Win%, flag stale rows | 2026-04-17 | df39b39c | [260417-s8n-make-portfolio-cli-table-relevant-audit-](./quick/260417-s8n-make-portfolio-cli-table-relevant-audit-/) |
 | 260417-sp2 | Persist real op_sell_rate + real coins/hr: scorer exposes OP counts, scanner repurposes dead op_sales/total_sales/op_ratio columns, CLI shows coins_per_hour (no schema change, optimizer unchanged) | 2026-04-17 | b19620f5 | [260417-sp2-persist-real-op-sell-rate-show-real-coin](./quick/260417-sp2-persist-real-op-sell-rate-show-real-coin/) |
 | 260418-c65 | Fix 3 scanner data-loss bugs: Playwright Cloudflare poll loop (30s deadline), PricesFetchError raised when defn ok + prices None (feeds tenacity retry), cold-marked players re-appearing in discovery get next_scan_at reset | 2026-04-18 | c9dc8caa | [260418-c65-fix-scanner-data-loss-bugs-playwright-ch](./quick/260418-c65-fix-scanner-data-loss-bugs-playwright-ch/) |
+| 260418-kzb | Add GET /api/v1/portfolio/card-types endpoint + wire extension exclude dropdown dynamically (73 card types from active players, replaces hardcoded 37-entry list) | 2026-04-18 | 9ed03dac | [260418-kzb-add-get-api-v1-portfolio-card-types-endp](./quick/260418-kzb-add-get-api-v1-portfolio-card-types-endp/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-18 - Completed quick task 260418-c65: Fix scanner data-loss bugs
-Stopped at: Completed quick-260418-c65
+Last activity: 2026-04-18 - Completed quick task 260418-kzb: Dynamic card-types dropdown
+Stopped at: Completed quick-260418-kzb
 Resume file: None
