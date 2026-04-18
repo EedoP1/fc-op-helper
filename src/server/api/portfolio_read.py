@@ -333,6 +333,31 @@ async def get_confirmed_portfolio(request: Request):
     }
 
 
+@router.get("/portfolio/card-types")
+async def get_card_types(request: Request):
+    """Return distinct card_types from active PlayerRecord rows with counts.
+
+    Used by the extension overlay to populate the "Exclude card types" dropdown
+    dynamically instead of a hardcoded list. Sorted by count DESC so the most
+    common rarities surface first.
+
+    Returns:
+        List of {card_type: str, count: int}, sorted by count DESC. Empty list
+        if no active players exist.
+    """
+    sf = _read_session_factory(request)
+    async with sf() as session:
+        stmt = (
+            select(PlayerRecord.card_type, func.count(PlayerRecord.ea_id).label("count"))
+            .where(PlayerRecord.is_active == True)  # noqa: E712
+            .group_by(PlayerRecord.card_type)
+            .order_by(func.count(PlayerRecord.ea_id).desc())
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+    return [{"card_type": r.card_type, "count": r.count} for r in rows]
+
+
 @router.get("/portfolio/actions-needed")
 async def get_actions_needed(request: Request):
     """Return a flat, prioritized list of exactly what to do for every player.
