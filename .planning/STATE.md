@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed quick-260407-bh0
-last_updated: "2026-04-07T05:20:56.148Z"
-last_activity: "2026-04-04 - Completed quick task 260404-qwj: Fix portfolio removal race condition (idempotent regenerate with banned_ea_ids)"
+stopped_at: Completed quick-260418-c65
+last_updated: "2026-04-18T05:58:27Z"
+last_activity: "2026-04-18 - Completed quick task 260418-c65: Fix scanner data-loss bugs (Cloudflare poll loop, PricesFetchError retry, cold-mark reset on rediscovery)"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -189,9 +189,10 @@ None yet.
 | 260408-sn5 | Implement hybrid promo_dip_buy: 21% strong signal + 176h snapshot top3 + 48h delay with 24h/5%/3h sell | 2026-04-08 | 92ff8c9 | [260408-sn5-implement-hybrid-promo-dip-buy-strategy-](./quick/260408-sn5-implement-hybrid-promo-dip-buy-strategy-/) |
 | 260417-s8n | Make portfolio CLI table relevant: fix EP/hr wiring, add Sell/Profit/Sales/hr, drop Efficiency, rename Sell%→Win%, flag stale rows | 2026-04-17 | df39b39c | [260417-s8n-make-portfolio-cli-table-relevant-audit-](./quick/260417-s8n-make-portfolio-cli-table-relevant-audit-/) |
 | 260417-sp2 | Persist real op_sell_rate + real coins/hr: scorer exposes OP counts, scanner repurposes dead op_sales/total_sales/op_ratio columns, CLI shows coins_per_hour (no schema change, optimizer unchanged) | 2026-04-17 | b19620f5 | [260417-sp2-persist-real-op-sell-rate-show-real-coin](./quick/260417-sp2-persist-real-op-sell-rate-show-real-coin/) |
+| 260418-c65 | Fix 3 scanner data-loss bugs: Playwright Cloudflare poll loop (30s deadline), PricesFetchError raised when defn ok + prices None (feeds tenacity retry), cold-marked players re-appearing in discovery get next_scan_at reset | 2026-04-18 | c9dc8caa | [260418-c65-fix-scanner-data-loss-bugs-playwright-ch](./quick/260418-c65-fix-scanner-data-loss-bugs-playwright-ch/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-17 - Completed quick task 260417-sp2: Persist real op_sell_rate, show real coins/hr
-Stopped at: Completed quick-260417-sp2
+Last activity: 2026-04-18 - Completed quick task 260418-c65: Fix scanner data-loss bugs
+Stopped at: Completed quick-260418-c65
 Resume file: None
