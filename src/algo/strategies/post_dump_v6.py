@@ -35,8 +35,8 @@ from src.algo.strategies.base import Strategy
 logger = logging.getLogger(__name__)
 
 
-class PostDumpV4Strategy(Strategy):
-    name = "post_dump_v4"
+class PostDumpV6Strategy(Strategy):
+    name = "post_dump_v6"
 
     def __init__(self, params: dict):
         self.params = params
@@ -234,8 +234,8 @@ class PostDumpV4Strategy(Strategy):
             "dump_min_pct": -0.035,
             "recovery_short_h": 6,
             "recovery_min_pct": 0.004,
-            "trigger_cooldown_h": 36,
-            "basket_size": 5,
+            "trigger_cooldown_h": 48,
+            "basket_size": 6,
             "smooth_window_h": 3,
             "outlier_tol": 0.06,
             "profit_target": 0.15,
