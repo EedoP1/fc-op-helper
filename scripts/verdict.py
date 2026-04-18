@@ -139,7 +139,7 @@ def report(strategy_name: str, filtered_path: str, unfiltered_path: str | None =
             uf = load(unfiltered_path, strategy_name)
             ratio = uf["total_pnl"] / fr["total_pnl"] if fr["total_pnl"] else float('inf')
             print(f"\n  Unfiltered PnL: {uf['total_pnl']:+,}    ratio uf/f: {ratio:+.2f}")
-            print(f"  [{'PASS' if abs(uf['total_pnl']) < abs(fr['total_pnl']) * 0.5 else 'FAIL'}] X. unfiltered < 50% of filtered")
+            print(f"  [{'PASS' if uf['total_pnl'] < fr['total_pnl'] * 0.5 else 'FAIL'}] X. unfiltered < 50% of filtered (edge is liquidity-driven)")
         except Exception as e:
             print(f"\n  unfiltered load failed: {e}")
 

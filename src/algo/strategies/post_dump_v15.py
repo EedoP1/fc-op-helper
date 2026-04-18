@@ -74,6 +74,8 @@ class PostDumpV15Strategy(Strategy):
         self._buy_ts: dict[int, datetime] = {}
         self._first_ts: datetime | None = None
         self._last_trigger_ts: datetime | None = None
+        self._last_a_ts: datetime | None = None
+        self._last_b_ts: datetime | None = None
 
     def set_created_at_map(self, created_at_map: dict):
         self._created_at = created_at_map
@@ -161,21 +163,16 @@ class PostDumpV15Strategy(Strategy):
         if elapsed_h < self.burn_in_h:
             return signals
 
-        # Trigger cooldown
-        if self._last_trigger_ts:
-            since = (ts_clean - self._last_trigger_ts).total_seconds() / 3600
-            if since < self.trigger_cooldown_h:
-                return signals
-
-        # Trigger A: rapid dump + recovery (the v5 winner)
+        # Trigger A: rapid dump + recovery (the v5 winner) — independent cooldown
         d48 = self._g_delta(self.dump_lookback_h)
         d6 = self._g_delta(self.recovery_short_h)
         trig_a = (d48 <= self.dump_min_pct and d6 >= self.recovery_min_pct)
+        if trig_a and self._last_a_ts:
+            since_a = (ts_clean - self._last_a_ts).total_seconds() / 3600
+            if since_a < self.trigger_cooldown_h:
+                trig_a = False
 
-        # Trigger B (promo-Sat alignment): when 18-30h post promo Friday
-        # AND G dropped 3% over last 24h. Buys the sympathy-dumped liquid
-        # cards on PROMO DAYS — overlaps promo_dip_buy's fire days,
-        # diluting the otherwise-perfect anti-correlation.
+        # Trigger B (promo-Sat alignment) — independent cooldown
         trig_b = False
         if self._promo_fridays:
             recent_promo = max((p for p in self._promo_fridays if p <= ts_clean), default=None)
@@ -185,6 +182,10 @@ class PostDumpV15Strategy(Strategy):
                     d24 = self._g_delta(24)
                     if d24 <= -0.025:
                         trig_b = True
+        if trig_b and self._last_b_ts:
+            since_b = (ts_clean - self._last_b_ts).total_seconds() / 3600
+            if since_b < self.trigger_cooldown_h:
+                trig_b = False
 
         if not (trig_a or trig_b):
             return signals
@@ -241,6 +242,10 @@ class PostDumpV15Strategy(Strategy):
 
         if buys_made > 0:
             self._last_trigger_ts = ts_clean
+            if trig_a:
+                self._last_a_ts = ts_clean
+            if trig_b:
+                self._last_b_ts = ts_clean
 
         return signals
 
