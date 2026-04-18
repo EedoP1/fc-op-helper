@@ -1454,14 +1454,14 @@ export function createOverlayPanel(): OverlayPanel {
       automationStatusItem.getValue().then(status => {
         if (status && status.isRunning) {
           // Dispatch stop event — content script listens (UI-04)
-          document.dispatchEvent(new CustomEvent('op-seller-automation-stop'));
+          document.dispatchEvent(new CustomEvent('op-seller-automation-stop-panel'));
         } else {
           // Dispatch start event — content script listens (UI-04)
-          document.dispatchEvent(new CustomEvent('op-seller-automation-start'));
+          document.dispatchEvent(new CustomEvent('op-seller-automation-start-panel'));
         }
       }).catch(() => {
         // Default to start if status unavailable
-        document.dispatchEvent(new CustomEvent('op-seller-automation-start'));
+        document.dispatchEvent(new CustomEvent('op-seller-automation-start-panel'));
       });
     });
 

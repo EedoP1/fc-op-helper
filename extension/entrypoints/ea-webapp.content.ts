@@ -204,6 +204,24 @@ export default defineContentScript({
       }
     });
 
+    // Panel-origin start/stop: route through the background master so the session-recovery
+    // tab is always spawned and maintained (spec non-goal: OP selling without a master).
+    document.addEventListener('op-seller-automation-start-panel', async () => {
+      try {
+        await chrome.runtime.sendMessage({ type: 'AUTOMATION_START' } satisfies ExtensionMessage);
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to send AUTOMATION_START:', err);
+      }
+    });
+
+    document.addEventListener('op-seller-automation-stop-panel', async () => {
+      try {
+        await chrome.runtime.sendMessage({ type: 'AUTOMATION_STOP' } satisfies ExtensionMessage);
+      } catch (err) {
+        console.error('[OP Seller CS] Failed to send AUTOMATION_STOP:', err);
+      }
+    });
+
     // ── Algo trading engine (runs in main world, relayed via bridge) ───────
     document.addEventListener('op-seller-algo-start', async () => {
       try {
