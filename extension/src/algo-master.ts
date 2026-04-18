@@ -33,6 +33,7 @@ let currentState: AlgoMasterState = {
   recoveryAttempts: 0,
   lastHealthCheck: null,
   errorMessage: null,
+  mode: 'algo',
 };
 
 // ── State Persistence ────────────────────────────────────────────────────────

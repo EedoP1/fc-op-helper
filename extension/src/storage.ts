@@ -128,8 +128,11 @@ export const algoCredentialsItem = storage.defineItem<AlgoCredentials | null>(
   { fallback: null },
 );
 
+/** Which automation mode the master tab is driving. */
+export type TradeMode = 'algo' | 'op-selling';
+
 /**
- * Master state machine for algo session management.
+ * Master state machine for session management.
  * Persisted so the background service worker can resume after MV3 restarts.
  */
 export type AlgoMasterStatus = 'IDLE' | 'SPAWNING' | 'MONITORING' | 'RECOVERING' | 'WAITING_FOR_LOGIN' | 'ERROR';
@@ -140,6 +143,7 @@ export type AlgoMasterState = {
   recoveryAttempts: number;
   lastHealthCheck: string | null;
   errorMessage: string | null;
+  mode: TradeMode;
 };
 
 export const algoMasterStateItem = storage.defineItem<AlgoMasterState>(
@@ -151,6 +155,7 @@ export const algoMasterStateItem = storage.defineItem<AlgoMasterState>(
       recoveryAttempts: 0,
       lastHealthCheck: null,
       errorMessage: null,
+      mode: 'algo',
     },
   },
 );
