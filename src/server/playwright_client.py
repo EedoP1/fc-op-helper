@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,9 @@ class PlaywrightPricesClient:
             future = asyncio.run_coroutine_threadsafe(
                 self._fetch_prices(ea_id), self._loop
             )
-            return future.result(timeout=30)
+            # Outer timeout > inner Cloudflare poll budget (30s) + a 15s slack
+            # for navigation, parsing, and queue contention.
+            return future.result(timeout=45)
         except TimeoutError:
             logger.error(f"PlaywrightPricesClient: timeout fetching prices for {ea_id}")
             return None
@@ -172,20 +175,26 @@ class PlaywrightPricesClient:
         url = _PRICES_URL.format(ea_id=ea_id)
         page = await self._page_pool.get()
         try:
-            await page.goto(url, timeout=15000)
+            await page.goto(url, timeout=30000)
             content = await page.content()
 
-            # Check for Cloudflare challenge
+            # Check for Cloudflare challenge — poll every 0.5s for up to 30s
+            # rather than guessing a single 5s sleep. Cloudflare's managed
+            # JS challenge can take anywhere from <1s to ~25s to clear.
             if "Just a moment" in content:
                 logger.warning(
                     f"PlaywrightPricesClient: Cloudflare challenge for ea_id={ea_id} "
-                    "— waiting for resolution..."
+                    "— polling up to 30s..."
                 )
-                await asyncio.sleep(5)
-                content = await page.content()
+                deadline = time.monotonic() + 30.0
+                while time.monotonic() < deadline:
+                    await asyncio.sleep(0.5)
+                    content = await page.content()
+                    if "Just a moment" not in content:
+                        break
                 if "Just a moment" in content:
                     logger.error(
-                        f"PlaywrightPricesClient: challenge not resolved for ea_id={ea_id}"
+                        f"PlaywrightPricesClient: challenge not resolved in 30s for ea_id={ea_id}"
                     )
                     return None
 

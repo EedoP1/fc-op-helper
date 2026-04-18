@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from src.config import (
@@ -222,6 +222,24 @@ async def run_discovery(
                 ),
             )
             await session.execute(stmt)
+
+        # Reset cold-marked players that have re-appeared in discovery.
+        # Without this, a player that drops out of the price range for one
+        # discovery cycle gets next_scan_at = now + 24h, and subsequent
+        # upserts do NOT restore next_scan_at (the on_conflict_do_update
+        # set_ dict deliberately omits it to avoid disturbing normal 5-minute
+        # scheduling). Single Core UPDATE — no Python loop, the active
+        # set is large.
+        if discovered_ids:
+            reset_threshold = now + timedelta(hours=1)
+            await session.execute(
+                update(PlayerRecord)
+                .where(
+                    PlayerRecord.ea_id.in_(discovered_ids),
+                    PlayerRecord.next_scan_at > reset_threshold,
+                )
+                .values(next_scan_at=now)
+            )
 
         # Mark players NOT in discovery as cold
         if discovered_ids:
