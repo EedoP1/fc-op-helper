@@ -502,6 +502,7 @@ async def load_market_snapshot_data(
     min_data_points: int = 6,
     days: int = 0,
     now: dt | None = None,
+    min_sales_per_hour: float = 0.0,
 ) -> tuple[dict[int, list[tuple[dt, int]]], dict[int, dt], dict[tuple[int, dt], tuple[int, int]], dict[tuple[int, dt], int]]:
     """Load hourly price data from market_snapshots.
 
@@ -612,6 +613,39 @@ async def load_market_snapshot_data(
         if len(points) >= min_data_points
     }
 
+    # Liquidity filter: drop cards whose avg daily sales (from
+    # daily_listing_summaries) imply sales/hour below threshold. A card
+    # that sells <5/hour can't realistically absorb the qty_cap=10-20
+    # position sizes modern strategies take.
+    if min_sales_per_hour > 0:
+        async with session_factory() as session:
+            lq_result = await session.execute(
+                text(
+                    "SELECT ea_id, AVG(total_sold_count / 24.0) AS sph "
+                    "FROM (SELECT DISTINCT ea_id, date, total_sold_count "
+                    "      FROM daily_listing_summaries "
+                    "      WHERE total_sold_count IS NOT NULL) d "
+                    "GROUP BY ea_id"
+                )
+            )
+            sph_by_ea: dict[int, float] = {}
+            for ea_id, sph in lq_result.fetchall():
+                sph_by_ea[ea_id] = float(sph or 0)
+
+        before = len(filtered)
+        filtered = {
+            eid: pts for eid, pts in filtered.items()
+            if sph_by_ea.get(eid, 0.0) >= min_sales_per_hour
+        }
+        logger.info(
+            f"Liquidity filter (>={min_sales_per_hour} sales/hr): "
+            f"{before} -> {len(filtered)} cards"
+        )
+        # Also drop exec_prices / listing_counts for filtered-out cards
+        kept = set(filtered.keys())
+        exec_prices = {k: v for k, v in exec_prices.items() if k[0] in kept}
+        listing_counts = {k: v for k, v in listing_counts.items() if k[0] in kept}
+
     created_at_map: dict[int, dt] = {}
     async with session_factory() as session:
         ca_result = await session.execute(
@@ -640,6 +674,7 @@ async def run_cli(
     days: int = 0,
     min_price: int = 0,
     max_price: int = 0,
+    min_sales_per_hour: float = 0.0,
 ):
     """CLI entrypoint: load data, run strategies, save results."""
     from src.algo.strategies import discover_strategies
@@ -666,6 +701,7 @@ async def run_cli(
         min_price=min_price,
         max_price=max_price,
         days=days,
+        min_sales_per_hour=min_sales_per_hour,
     )
     logger.info(f"Loaded {len(price_data)} players with price data")
 
@@ -813,15 +849,21 @@ async def run_cli(
 @click.option("--days", default=0, help="Only use last N days of price data (0 = all)")
 @click.option("--min-price", default=0, help="Only include cards with prices >= this value")
 @click.option("--max-price", default=0, help="Only include cards with prices <= this value")
+@click.option("--min-sph", "min_sales_per_hour", default=0.0, type=float,
+              help="Filter out cards with avg sales/hour below this threshold (liquidity filter)")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG logging for strategy decisions")
-def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, db_url, verbose):
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, min_sales_per_hour, db_url, verbose):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if verbose:
         logging.getLogger("src.algo.strategies").setLevel(logging.DEBUG)
         logging.getLogger("src.algo.models").setLevel(logging.DEBUG)
-    asyncio.run(run_cli(strategy_name, all_strategies, params_json, budget, db_url, days=days, min_price=min_price, max_price=max_price))
+    asyncio.run(run_cli(
+        strategy_name, all_strategies, params_json, budget, db_url,
+        days=days, min_price=min_price, max_price=max_price,
+        min_sales_per_hour=min_sales_per_hour,
+    ))
 
 
 if __name__ == "__main__":
