@@ -39,7 +39,16 @@ let currentState: AlgoMasterState = {
 // ── State Persistence ────────────────────────────────────────────────────────
 
 async function loadState(): Promise<void> {
-  currentState = await algoMasterStateItem.getValue();
+  const raw = await algoMasterStateItem.getValue();
+  // Migration: older versions didn't persist the `mode` field — default to 'algo'.
+  // WXT's `fallback` only fires when the key is absent entirely; a partial object
+  // persisted by a pre-mode version will be returned as-is with mode === undefined.
+  if (raw.mode === undefined) {
+    currentState = { ...raw, mode: 'algo' };
+    await algoMasterStateItem.setValue(currentState);
+  } else {
+    currentState = raw;
+  }
 }
 
 async function saveState(): Promise<void> {
