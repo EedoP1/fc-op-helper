@@ -265,6 +265,68 @@ async def test_no_snapshot_on_none_market_data(scanner):
     assert len(snaps) == 0, "Expected no MarketSnapshot rows for None market data"
 
 
+async def test_no_snapshot_when_current_lowest_bin_zero(scanner):
+    """Shell PlayerMarketData (current_lowest_bin=0) → no MarketSnapshot row
+    BUT PlayerRecord.last_scanned_at and created_at are still populated.
+
+    This is the fix for the last silent-data-loss hole: cards that are
+    momentarily untradeable must still have created_at set so promo_dip_buy
+    can find them by Friday-batch detection.
+    """
+    from src.models import PlayerMarketData, Player
+
+    svc, session_factory, mock_client = scanner
+
+    # Build a shell PlayerMarketData — real pydantic instance, NOT a mock,
+    # to match what futgg_client now returns for the no-current-bin case.
+    shell = PlayerMarketData(
+        player=Player(
+            resource_id=200, name="Shell Player", rating=85, position="ST",
+            nation="Brazil", league="LaLiga", club="Real Madrid", card_type="gold",
+        ),
+        current_lowest_bin=0,
+        listing_count=0,
+        price_history=[],
+        sales=[],
+        live_auction_prices=[],
+        live_auctions_raw=[],
+        futgg_url="https://www.fut.gg/players/shell-200/",
+        max_price_range=15_000_000,
+        created_at=datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    mock_client.get_player_market_data_sync = MagicMock(return_value=shell)
+
+    async with session_factory() as session:
+        session.add(PlayerRecord(
+            ea_id=200, name="Shell Player", rating=85, position="ST",
+            nation="Brazil", league="LaLiga", club="Real Madrid", card_type="gold",
+        ))
+        await session.commit()
+
+    await svc.scan_player(200)
+
+    async with session_factory() as session:
+        # No MarketSnapshot row — we skip the write for zero-BIN shells.
+        snaps = (await session.execute(
+            select(MarketSnapshot).where(MarketSnapshot.ea_id == 200)
+        )).scalars().all()
+        assert len(snaps) == 0, \
+            f"Expected no MarketSnapshot rows for zero-BIN shell, got {len(snaps)}"
+
+        # PlayerRecord MUST still get last_scanned_at and created_at set —
+        # that's the whole point of the shell over a silent None.
+        rec = await session.get(PlayerRecord, 200)
+        assert rec is not None
+        assert rec.last_scanned_at is not None, \
+            "Expected last_scanned_at populated even for shell market_data"
+        assert rec.created_at is not None, \
+            "Expected created_at populated from shell.created_at"
+        # PlayerRecord.created_at column is naive DateTime, shell value was tz-aware.
+        # Normalise both sides to naive UTC for comparison.
+        stored = rec.created_at.replace(tzinfo=None) if rec.created_at.tzinfo else rec.created_at
+        assert stored == datetime(2026, 4, 10, 12, 0, 0)
+
+
 async def test_cleanup_deletes_old_snapshots(scanner):
     """Test 19: run_cleanup deletes snapshots older than retention and preserves recent ones."""
     svc, session_factory, _ = scanner
