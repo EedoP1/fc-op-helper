@@ -809,20 +809,6 @@ export function createOverlayPanel(): OverlayPanel {
     Object.assign(excludeLabel.style, { color: '#aaa', fontSize: '12px', marginTop: '12px', display: 'block' });
     container.appendChild(excludeLabel);
 
-    const CARD_TYPES = [
-      'Rare', 'Team of the Week', 'FUT Birthday', 'FUT Birthday Icon', 'FUT Birthday Hero',
-      'Trophy Titans ICON', 'Trophy Titans Hero', 'Star Performer', 'Fantasy UT', 'Fantasy UT Hero',
-      'FoF: Answer the Call', 'Knockout Royalty', 'Knockout Royalty Icon', 'Thunderstruck',
-      'Thunderstruck ICON', 'Winter Wildcards', 'Winter Wildcards Icon', 'Time Warp', 'Time Warp Icon',
-      'Unbreakables', 'Unbreakables Icon', 'Champion Icon', 'TOTY ICON',
-      'Future Stars', 'Future Stars Icon', 'Cornerstones', 'Joga Bonito', 'Joga Bonito Hero',
-      'TOTY Honourable Mentions', 'Ratings Reload',
-      'UCL Road to the Knockouts', 'UEFA Champions League Road to the Final',
-      'UEL Road to the Final', 'UECL Road to the Final',
-      'UEFA Women\'s Champions League Road to the Final',
-      'Festival of Football: Captains', 'Ultimate Scream Hero',
-    ];
-
     const excludedTypes: Set<string> = new Set();
 
     const excludeRow = document.createElement('div');
@@ -842,14 +828,25 @@ export function createOverlayPanel(): OverlayPanel {
     defaultOpt.value = '';
     defaultOpt.textContent = '+ Add exclusion...';
     excludeSelect.appendChild(defaultOpt);
-    CARD_TYPES.forEach(ct => {
-      const opt = document.createElement('option');
-      opt.value = ct;
-      opt.textContent = ct;
-      excludeSelect.appendChild(opt);
-    });
     excludeRow.appendChild(excludeSelect);
     container.appendChild(excludeRow);
+
+    // Populate dropdown from backend (replaces old hardcoded CARD_TYPES list).
+    // Fetch is best-effort: if it fails, the select stays empty (just the placeholder)
+    // so Generate still works without exclusions.
+    chrome.runtime.sendMessage({ type: 'PORTFOLIO_CARD_TYPES_REQUEST' } satisfies ExtensionMessage)
+      .then((res: ExtensionMessage) => {
+        if (res?.type !== 'PORTFOLIO_CARD_TYPES_RESULT' || !res.data) return;
+        for (const entry of res.data) {
+          const opt = document.createElement('option');
+          opt.value = entry.card_type;
+          opt.textContent = entry.card_type;
+          excludeSelect.appendChild(opt);
+        }
+      })
+      .catch(() => {
+        // Silent fallback — dropdown just stays empty. No toast; this is non-essential UX.
+      });
 
     const excludeTags = document.createElement('div');
     Object.assign(excludeTags.style, {

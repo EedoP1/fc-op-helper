@@ -295,6 +295,69 @@ describe('overlay panel', () => {
     expect(input).toBeTruthy();
   });
 
+  it('populates exclude dropdown from PORTFOLIO_CARD_TYPES_RESULT on mount', async () => {
+    mockSendMessage.mockImplementation((msg: any) => {
+      if (msg.type === 'PORTFOLIO_CARD_TYPES_REQUEST') {
+        return Promise.resolve({
+          type: 'PORTFOLIO_CARD_TYPES_RESULT',
+          data: [
+            { card_type: 'Team of the Season', count: 54 },
+            { card_type: 'TOTY ICON', count: 1 },
+          ],
+        });
+      }
+      if (msg.type === 'ACTIONS_NEEDED_REQUEST') {
+        return Promise.resolve({
+          type: 'ACTIONS_NEEDED_RESULT',
+          data: { actions: [], summary: { to_buy: 0, to_list: 0, to_relist: 0, waiting: 0 } },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const panel = createOverlayPanel();
+    document.body.appendChild(panel.container);
+    // renderEmpty runs in the factory constructor, so the
+    // PORTFOLIO_CARD_TYPES_REQUEST fires immediately. Await microtasks to let
+    // the .then() populate the select.
+    await new Promise((r) => setTimeout(r, 10));
+
+    const select = panel.container.querySelector('select') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    const optionValues = Array.from(select.options).map(o => o.value);
+    // Default placeholder + 2 fetched card_types
+    expect(optionValues).toContain('');
+    expect(optionValues).toContain('Team of the Season');
+    expect(optionValues).toContain('TOTY ICON');
+    // Hardcoded list is gone — "FUT Birthday" (from old list) must NOT appear
+    expect(optionValues).not.toContain('FUT Birthday');
+  });
+
+  it('leaves exclude dropdown empty when PORTFOLIO_CARD_TYPES_RESULT returns error', async () => {
+    mockSendMessage.mockImplementation((msg: any) => {
+      if (msg.type === 'PORTFOLIO_CARD_TYPES_REQUEST') {
+        return Promise.resolve({ type: 'PORTFOLIO_CARD_TYPES_RESULT', data: null, error: 'Backend down' });
+      }
+      if (msg.type === 'ACTIONS_NEEDED_REQUEST') {
+        return Promise.resolve({
+          type: 'ACTIONS_NEEDED_RESULT',
+          data: { actions: [], summary: { to_buy: 0, to_list: 0, to_relist: 0, waiting: 0 } },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const panel = createOverlayPanel();
+    document.body.appendChild(panel.container);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const select = panel.container.querySelector('select') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    // Only the default "+ Add exclusion..." option
+    expect(select.options.length).toBe(1);
+    expect(select.options[0].value).toBe('');
+  });
+
   it('panel sends PORTFOLIO_GENERATE on Generate button click with budget value', async () => {
     mockSendMessage.mockResolvedValue({
       type: 'PORTFOLIO_GENERATE_RESULT',
