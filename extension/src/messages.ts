@@ -128,6 +128,9 @@ export type ExtensionMessage =
   // Actions needed (unified buy/list/relist view)
   | { type: 'ACTIONS_NEEDED_REQUEST' }
   | { type: 'ACTIONS_NEEDED_RESULT'; data: ActionsNeededData | null; error?: string }
+  // Card types for the exclude dropdown (panel -> service worker -> backend)
+  | { type: 'PORTFOLIO_CARD_TYPES_REQUEST' }
+  | { type: 'PORTFOLIO_CARD_TYPES_RESULT'; data: Array<{ card_type: string; count: number }> | null; error?: string }
   // Automation control (overlay panel -> content script -> service worker)
   | { type: 'AUTOMATION_START' }
   | { type: 'AUTOMATION_START_RESULT'; success: boolean; error?: string }

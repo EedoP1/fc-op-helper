@@ -63,6 +63,9 @@ export default defineBackground({
         case 'PORTFOLIO_LOAD':
           handlePortfolioLoad().then(sendResponse);
           return true;
+        case 'PORTFOLIO_CARD_TYPES_REQUEST':
+          handlePortfolioCardTypes().then(sendResponse);
+          return true;
         case 'TRADE_REPORT':
           handleTradeReport(msg.ea_id, msg.price, msg.outcome).then(sendResponse);
           return true; // async response
@@ -387,6 +390,24 @@ async function handleActionsNeeded(): Promise<ExtensionMessage> {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return { type: 'ACTIONS_NEEDED_RESULT', data: null, error: message };
+  }
+}
+
+/**
+ * Fetch distinct active card_types from the backend for the exclude dropdown.
+ * GET /api/v1/portfolio/card-types → PORTFOLIO_CARD_TYPES_RESULT
+ */
+async function handlePortfolioCardTypes(): Promise<ExtensionMessage> {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/v1/portfolio/card-types`);
+    if (!resp.ok) {
+      return { type: 'PORTFOLIO_CARD_TYPES_RESULT', data: null, error: `Backend returned ${resp.status}` };
+    }
+    const data = await resp.json();
+    return { type: 'PORTFOLIO_CARD_TYPES_RESULT', data };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return { type: 'PORTFOLIO_CARD_TYPES_RESULT', data: null, error: message };
   }
 }
 

@@ -100,6 +100,12 @@ export default defineContentScript({
           return false;
         case 'ACTIONS_NEEDED_RESULT':
           return false;
+        case 'PORTFOLIO_CARD_TYPES_REQUEST':
+          // Request type sent TO the service worker — content script should not receive it.
+          return false;
+        case 'PORTFOLIO_CARD_TYPES_RESULT':
+          // Response type — received as sendMessage return value, not via onMessage.
+          return false;
         // Automation control
         case 'AUTOMATION_START':
         case 'AUTOMATION_STOP':
