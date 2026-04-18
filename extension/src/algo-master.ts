@@ -10,7 +10,7 @@
  *                         ↑                         |
  *                         └─────────────────────────┘
  */
-import { algoMasterStateItem, algoCredentialsItem, type AlgoMasterState, type AlgoMasterStatus } from './storage';
+import { algoMasterStateItem, algoCredentialsItem, type AlgoMasterState, type AlgoMasterStatus, type TradeMode } from './storage';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -97,11 +97,12 @@ export async function initAlgoMaster(): Promise<void> {
 }
 
 /**
- * Start the algo master — called when user starts algo trading.
- * Finds or creates the EA tab, waits for worker ready, then signals algo-start.
+ * Start the master — called when user starts algo trading or OP selling.
+ * Finds or creates the EA tab, waits for worker ready, then signals the worker
+ * to run the loop corresponding to `mode`.
  */
-export async function startAlgoMaster(): Promise<void> {
-  await transition('SPAWNING', { recoveryAttempts: 0, errorMessage: null });
+export async function startAlgoMaster(mode: TradeMode): Promise<void> {
+  await transition('SPAWNING', { recoveryAttempts: 0, errorMessage: null, mode });
   await spawnWorker();
 }
 
@@ -570,11 +571,14 @@ async function waitForWorkerAndStart(tabId: number): Promise<void> {
     }
   }
 
-  // Session confirmed alive — start the algo loop
-  console.log('[algo-master] Session alive — starting algo');
+  // Session confirmed alive — dispatch the event matching the configured mode
+  const mode = currentState.mode ?? 'algo';
+  const eventName = mode === 'op-selling' ? 'op-seller-automation-start' : 'op-seller-algo-start';
+  console.log(`[algo-master] Session alive — dispatching ${eventName}`);
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => document.dispatchEvent(new CustomEvent('op-seller-algo-start')),
+    func: (event: string) => document.dispatchEvent(new CustomEvent(event)),
+    args: [eventName],
   });
 
   await transition('MONITORING', {

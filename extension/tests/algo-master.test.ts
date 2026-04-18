@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { algoMasterStateItem } from '../src/storage';
 
 // Storage key used by algoMasterStateItem
 const STORAGE_KEY = 'algoMasterState';
@@ -78,6 +79,35 @@ describe('AlgoMasterState migration — mode field backfill', () => {
     await initAlgoMaster();
 
     const state = getMasterState();
+    expect(state.mode).toBe('op-selling');
+  });
+});
+
+describe('startAlgoMaster mode', () => {
+  beforeEach(() => {
+    fakeBrowser.reset();
+    vi.restoreAllMocks();
+  });
+
+  it('persists the mode passed in when starting', async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    const mod = await import('../src/algo-master');
+    // Stub chrome.tabs/chrome.scripting to avoid real spawn work
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([] as any);
+    vi.spyOn(chrome.tabs, 'create').mockResolvedValue({ id: 1, status: 'complete' } as any);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({ id: 1, url: 'https://www.ea.com/ea-sports-fc/ultimate-team/web-app/', status: 'complete' } as any);
+    vi.spyOn(chrome.tabs, 'sendMessage').mockResolvedValue({ type: 'PONG' } as unknown as void);
+    // Stub scripting so checkSessionViaTab returns quickly (session alive = true)
+    vi.spyOn(chrome.scripting, 'executeScript').mockResolvedValue([{ result: true }] as unknown as void);
+
+    // Start async work then advance fake timers past the 3×3s session-check delays
+    const startPromise = mod.startAlgoMaster('op-selling');
+    await vi.runAllTimersAsync();
+    await startPromise;
+
+    vi.useRealTimers();
+    const state = await algoMasterStateItem.getValue();
     expect(state.mode).toBe('op-selling');
   });
 });
