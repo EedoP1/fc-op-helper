@@ -78,7 +78,15 @@
   </style>
 </head>
 <body>
-  <h2>OP Seller - Algo</h2>
+  <h2>OP Seller</h2>
+
+  <div class="section">
+    <div class="section-title">Mode</div>
+    <select id="mode-select" style="background:#2a2a3e;color:#fff;border:1px solid #444;padding:7px 10px;width:100%;border-radius:4px;font-size:13px;outline:none;">
+      <option value="algo">Algo Trading</option>
+      <option value="op-selling">OP Selling</option>
+    </select>
+  </div>
 
   <div class="section">
     <div class="section-title">EA Login (auto-recovery)</div>
@@ -91,11 +99,11 @@
   </div>
 
   <div class="section">
-    <div class="section-title">Algo Trading</div>
+    <div class="section-title" id="control-title">Algo Trading</div>
     <input type="number" id="budget" placeholder="Budget (coins)">
     <div class="btn-row">
-      <button id="start-btn" class="start">Start Algo</button>
-      <button id="stop-btn" class="stop">Stop Algo</button>
+      <button id="start-btn" class="start">Start</button>
+      <button id="stop-btn" class="stop">Stop</button>
     </div>
     <div class="status-text" id="algo-status" style="margin-top: 8px;"></div>
   </div>
