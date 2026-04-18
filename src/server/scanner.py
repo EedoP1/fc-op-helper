@@ -375,14 +375,20 @@ class ScannerService:
                 )
             session.add(ps)
 
-            # Persist raw market snapshot
-            if market_data is not None:
+            # Persist raw market snapshot. Skip when current_lowest_bin == 0
+            # (card momentarily untradeable) — we get a shell PlayerMarketData
+            # for those, and inserting a zero-BIN row would mislead any
+            # downstream analysis that treats a MarketSnapshot as evidence of
+            # an observed live BIN. The PlayerRecord update below still runs so
+            # created_at / last_scanned_at get populated — that's the whole
+            # point of the shell.
+            if market_data is not None and market_data.current_lowest_bin > 0:
                 snapshot = MarketSnapshot(
                     ea_id=ea_id,
                     captured_at=now,
                     current_lowest_bin=market_data.current_lowest_bin,
                     listing_count=market_data.listing_count,
-                    )
+                )
                 session.add(snapshot)
 
             # Update PlayerRecord fields (record already loaded above)
