@@ -280,12 +280,24 @@ export default defineContentScript({
 
     console.log('[OP Seller Main] Main world script loaded — EA globals accessible');
 
-    // Auto-start algo if master is in MONITORING state (handles page refresh).
-    // After a refresh, the content script re-injects but the algo engine is fresh/stopped.
-    // The master still thinks it's MONITORING. Check master state and restart if needed.
-    bridgedStorageGet<{ status: string }>('algoMasterState').then(state => {
-      if (state && (state.status === 'MONITORING' || state.status === 'SPAWNING')) {
-        console.log('[OP Seller Main] Master is active, auto-starting algo engine');
+    // Auto-start the configured mode if master is MONITORING or SPAWNING (handles page refresh).
+    // After a refresh, the content script re-injects but the engine is fresh/stopped.
+    // The master still tracks the active mode in state — read it and restart the matching engine.
+    bridgedStorageGet<{ status: string; mode?: string }>('algoMasterState').then(state => {
+      if (!state || (state.status !== 'MONITORING' && state.status !== 'SPAWNING')) return;
+      const mode = state.mode ?? 'algo';
+      if (mode === 'op-selling') {
+        console.log('[OP Seller Main] Master is active (op-selling), auto-starting OP selling engine');
+        automationEngine.start().then(result => {
+          if (result.success) {
+            runAutomationLoop(automationEngine, bridgedSendMessage)
+              .catch(err => automationEngine.setError(
+                err instanceof Error ? err.message : String(err),
+              ));
+          }
+        });
+      } else {
+        console.log('[OP Seller Main] Master is active (algo), auto-starting algo engine');
         algoEngine.start().then(result => {
           if (result.success) {
             runAlgoAutomationLoop(algoEngine, bridgedSendMessage)
