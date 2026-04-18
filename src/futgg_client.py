@@ -164,6 +164,8 @@ class FutGGClient:
         if created_at_raw:
             try:
                 created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+                if created_at.tzinfo is not None:
+                    created_at = created_at.replace(tzinfo=None)
             except (ValueError, AttributeError):
                 pass
 
@@ -278,6 +280,8 @@ class FutGGClient:
         if created_at_raw:
             try:
                 created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+                if created_at.tzinfo is not None:
+                    created_at = created_at.replace(tzinfo=None)
             except (ValueError, AttributeError):
                 pass
 
