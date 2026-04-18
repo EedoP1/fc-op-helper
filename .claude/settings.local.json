@@ -349,7 +349,8 @@
       "Bash(PYTHONIOENCODING=utf-8 COLUMNS=200 python -m src.main --budget 1000000)",
       "Bash(awk '{print $NF}')",
       "Bash(xargs head *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\")"
     ]
   }
 }

@@ -1,9 +1,88 @@
-# Hourly Dip Reversion v19 — Rebalanced-Risk Champion
+# Hourly Dip Reversion v19 → v20 — Rebalanced-Risk + Tiered Sizing
 
-## Summary
+## Summary (updated after iteration 6)
 
-`hourly_dip_revert_v19` succeeds `hourly_dip_revert_v12` as champion on the
-pessimistic loader (BUY @ hourly_max, SELL @ hourly_min). It keeps v12's
+The research loop produced two progressive champions on the pessimistic
+loader (BUY @ hourly_max, SELL @ hourly_min):
+
+- **v19** (+$7.12M, 5.7× v12): keeps v12's signal/exit; rebalances
+  risk — qty_cap 3→10, max_positions 8→12, stop_loss .15→.20.
+- **v20** (+$9.93M, **7.96× v12**): v19 plus dip-depth tiered sizing
+  after post-hoc analysis showed 30–50% dip entries had 2× the
+  big-winner rate of shallower entries.
+
+v19 is kept in the doc below for context and because it carries less
+outlier-dependency risk than v20. v20 is the chosen final champion.
+
+## v20 — Dip-depth tiered sizing (final winner)
+
+v20 profiled v19's 325-trade log by dip depth at entry:
+
+| dip at buy | n   | win% | avg gm  | avg net | big-winner % |
+| ---------- | --- | ---- | ------- | ------- | ------------ |
+| 5–10%      | 13  | 77%  | +0.143  | +$12k   | 0%           |
+| 10–15%     | 26  | 65%  | +0.224  | +$33k   | 8%           |
+| 15–20%     | 66  | 61%  | +0.128  | +$18k   | 9%           |
+| 20–30%     | 152 | 66%  | +0.184  | +$19k   | 10%          |
+| **30–50%** | **61**  | **61%**  | **+0.232**  | **+$32k**   | **21%**          |
+
+The 30–50% dip zone has nearly 2× the big-winner rate of the 15–25%
+zone. v20 sizes qty_cap in tiers:
+
+| dip at buy    | qty_cap |
+| ------------- | ------- |
+| < 0.15        | 5       |
+| 0.15 ≤ x < 0.20 | 10      |
+| ≥ 0.20        | **20**  |
+
+Weak signals only get capital if deep-dip signals haven't consumed
+it already (candidates already sort by dip descending).
+
+### v20 result (locked: qty_cap_large=20)
+
+| metric                        | v12           | v20            | Δ          |
+| ----------------------------- | ------------- | -------------- | ---------- |
+| Total PnL                     | +$1,247,357   | **+$9,932,913**| **7.96×**  |
+| Total trades                  | 235           | 293            | +25%       |
+| Win rate                      | 61.3%         | **69.3%**      | +8.0 pts   |
+| Sharpe                        | 0.339         | 0.514          | +52%       |
+| W14 % budget                  | 22%           | **106%**       | PASS       |
+| W15 % budget                  | 73%           | **359%**       | PASS       |
+| W16 (partial) % budget        | 30%           | 529%           |            |
+| Corr with `promo_dip_buy`     | −0.441        | −0.439         | PASS       |
+
+### v20 known risk: higher outlier share
+
+| | v12   | v19   | v20   |
+| - | ----- | ----- | ----- |
+| PnL total           | $1.25M | $7.12M | $9.93M |
+| Trades              | 235    | 325    | 293    |
+| Trades with >50% gross | 26     | 37     | 37     |
+| Outlier PnL share   | **88%** | 72%   | **81%** |
+
+v20's deep-dip tiered sizing amplifies **both** the real edge (deeper
+dips have higher true EV) and the loader's outlier payoffs (deep-dip
+cards correlate with the scanner-anomaly cards). v20 pushes the
+dollar PnL higher than v19 but at the cost of a higher outlier share.
+
+### v20 qty_cap sweep (all else equal, stop=.20, tier_med=.20)
+
+| qty_cap_large | PnL       | Note                              |
+| ------------- | --------- | --------------------------------- |
+| 15            | +$8.36M   | conservative                      |
+| **20**        | **+$9.93M** | **final choice (realistic)**    |
+| 30            | +$15.36M  | pushes realism                    |
+| 50            | +$15.50M  | saturated; overstates listing depth |
+
+Picked qty_cap_large=20 as the aggressive-but-defensible cap for
+realistic FUT listing depth on liquid 10–80k range cards.
+
+---
+
+## v19 — rebalanced risk (stepping stone)
+
+`hourly_dip_revert_v19` was the first breakthrough: v12 signal/exit
+unchanged, only three risk-budget params rebalanced. It keeps v12's
 entry signal and exit mechanic **unchanged**; the only differences are
 three risk-budget parameters. Those three changes turn a fully-formed
 edge that v12 under-pressed into one that deploys the capital available.
@@ -124,7 +203,8 @@ more on the days `promo_dip_buy` is quiet (non-Friday dips).
 | 2    | support_bounce_v1           | +$419k best       | Fail. 7-day floor signal is staler than 24h median. Longer windows dilute mean-reversion edge. |
 | 3    | v17 listing-count filter    | +$883k best       | Fail. listing_count trend (ratio of current to 24h avg) carries no predictive signal in this dataset. Loader infrastructure kept for future ideas. |
 | 4    | v18 multi-target partial-sell | +$2,336k best   | Beats v12 but via qty_cap=6, not partial sells. Partial sells lock in +8% at the cost of capping +9% winners — net loss under hourly_min execution. |
-| 5    | **v19 rebalanced risk**     | **+$7,119k**     | **Winner.** qty_cap=10 + max_positions=12 + stop_loss=0.20. v12's own sweep left ~$6M on the table by under-sizing. |
+| 5    | v19 rebalanced risk         | +$7,119k         | First breakthrough. qty_cap=10 + max_positions=12 + stop_loss=0.20. v12's own sweep left ~$6M on the table by under-sizing. |
+| 6    | **v20 dip-depth tiered size**   | **+$9,933k**     | **Final winner.** Post-hoc analysis showed 30–50% dip entries had 2× big-winner rate. Tier qty_cap: 5/10/20 for shallow/normal/deep dips. 7.96× v12, but higher outlier share (81% vs 72%). |
 
 Three consecutive iterations (v16, v2, v17) before the breakthrough;
 pivot from "filter/modify v12's signal" to "right-size v12's risk"
