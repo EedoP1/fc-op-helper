@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Chrome Extension — Automated OP Sell Cycle
 status: Ready to execute
-stopped_at: Completed quick-260418-c65
+stopped_at: Completed quick-260418-kzb
 last_updated: "2026-04-18T15:17:00Z"
 last_activity: "2026-04-18 - Completed quick task 260418-kzb: Add GET /api/v1/portfolio/card-types endpoint + wire extension exclude dropdown dynamically (hardcoded 37-entry CARD_TYPES removed, replaced with live 73-entry fetch)"
 progress:
