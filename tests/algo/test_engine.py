@@ -243,7 +243,7 @@ async def test_load_market_snapshot_data_hour_bucketing():
             )
         await session.commit()
 
-    price_data, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6)
+    price_data, _, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6)
 
     assert 1 in price_data, "ea_id 1 should be present"
     # First hour collapses to the hourly median of [100, 200, 300] = 200
@@ -304,7 +304,7 @@ async def test_load_market_snapshot_data_days_filter_sunday_aligned():
             )
         await session.commit()
 
-    price_data, _, _ = await load_market_snapshot_data(
+    price_data, _, _, _ = await load_market_snapshot_data(
         session_factory, min_data_points=6, days=5, now=now,
     )
 
@@ -342,7 +342,7 @@ async def test_load_market_snapshot_data_days_zero_means_no_filter():
         await session.commit()
 
     # days=0 → no filter; ancient data is returned
-    price_data, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6, days=0)
+    price_data, _, _, _ = await load_market_snapshot_data(session_factory, min_data_points=6, days=0)
     assert 1 in price_data
     assert len(price_data[1]) == 6
 

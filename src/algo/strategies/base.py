@@ -29,6 +29,14 @@ class Strategy(ABC):
         """
         pass
 
+    def set_listing_counts(self, listing_counts: dict):
+        """Called by the engine with hourly avg listing_count per card.
+
+        listing_counts: {(ea_id, hour_ts): avg_listing_count}
+        Used to gauge supply depth / turnover. Default: no-op.
+        """
+        pass
+
     def on_tick(
         self, ea_id: int, price: int, timestamp: datetime, portfolio: Portfolio,
     ) -> list[Signal]:
