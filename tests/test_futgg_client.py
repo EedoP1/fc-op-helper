@@ -196,3 +196,34 @@ def test_get_player_market_data_sync_returns_shell_when_no_current_bin(client):
     assert result.futgg_url == "https://www.fut.gg/players/foo-42/"
     assert result.max_price_range == 15000000
     assert result.created_at == datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+
+# ── Discovery URL construction ────────────────────────────────────────────────
+
+async def test_discover_players_no_max_price_omits_price_lte(client):
+    """max_price=0 sentinel → URL lacks price__lte query param."""
+    client._get = AsyncMock(return_value={"data": [], "next": None})
+    await client.discover_players(budget=0, min_price=11_000, max_price=0)
+    path = client._get.call_args.args[0]
+    assert "price__gte=11000" in path
+    assert "price__lte" not in path
+    assert "page=1" in path
+
+
+async def test_discover_players_with_max_price_includes_price_lte(client):
+    """Explicit max_price>0 → URL contains price__lte=<value>."""
+    client._get = AsyncMock(return_value={"data": [], "next": None})
+    await client.discover_players(budget=0, min_price=11_000, max_price=200_000)
+    path = client._get.call_args.args[0]
+    assert "price__gte=11000" in path
+    assert "price__lte=200000" in path
+
+
+async def test_discover_players_no_budget_autofill_when_max_price_zero(client):
+    """budget>0 with max_price=0 must NOT auto-fill max_price — old budget*0.10 bug."""
+    client._get = AsyncMock(return_value={"data": [], "next": None})
+    await client.discover_players(budget=500_000, min_price=11_000, max_price=0)
+    path = client._get.call_args.args[0]
+    assert "price__gte=11000" in path
+    # If auto-fill were still active, path would contain price__lte=50000.
+    assert "price__lte" not in path

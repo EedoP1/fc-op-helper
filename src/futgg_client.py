@@ -330,11 +330,17 @@ class FutGGClient:
         self, budget: int, max_pages: int = 999,
         min_price: int = 0, max_price: int = 0,
     ) -> list[dict]:
-        """Discover all tradeable player cards within a price range."""
-        if max_price <= 0:
-            max_price = int(budget * 0.10)
+        """Discover all tradeable player cards within a price range.
+
+        max_price=0 (or negative) is a sentinel meaning "no upper bound" — the
+        fut.gg URL is built without the price__lte query param. Callers wanting
+        an explicit cap must pass max_price > 0.
+        """
         if min_price <= 0:
             min_price = 1000
+        # max_price <= 0 is a valid sentinel meaning "no upper bound" —
+        # do NOT auto-fill from budget (that silently re-introduced a cap
+        # and hid high-priced release-day TOTS/TOTY/Icon promos).
 
         all_candidates = []
         seen_ids: set[int] = set()
