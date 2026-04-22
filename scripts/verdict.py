@@ -42,10 +42,22 @@ def iso_week(dt_str: str) -> tuple[int, int]:
     return (y, w)
 
 
+def _detect_boundary(trades: list[dict]) -> str:
+    """Find the latest sell_time date in trades (YYYY-MM-DD). Boundary = trades
+    sold on that date (force-sell at data end)."""
+    if not trades:
+        return ""
+    latest = max(t["sell_time"][:10] for t in trades)
+    return latest
+
+
+_BOUNDARY_DATE: str = ""
+
+
 def is_boundary(sell_time: str) -> bool:
-    """Trade is force-sell at end if its sell_time matches the data
-    boundary (last day in the window). For this dataset that's 2026-04-18."""
-    return sell_time.startswith("2026-04-18T")
+    """Trade is force-sell at end if sell_time is on the latest data day.
+    `_BOUNDARY_DATE` is set dynamically by `report()` from each run's trades."""
+    return bool(_BOUNDARY_DATE) and sell_time.startswith(_BOUNDARY_DATE)
 
 
 def correlation(my_trades, ref_path=PROMO_REF) -> float | None:
@@ -84,6 +96,11 @@ def correlation(my_trades, ref_path=PROMO_REF) -> float | None:
 def report(strategy_name: str, filtered_path: str, unfiltered_path: str | None = None):
     fr = load(filtered_path, strategy_name)
     trades = fr.get("trades", [])
+
+    global _BOUNDARY_DATE
+    _BOUNDARY_DATE = _detect_boundary(trades)
+    if _BOUNDARY_DATE:
+        print(f"  (detected boundary: {_BOUNDARY_DATE})")
 
     organic = [t for t in trades if not is_boundary(t["sell_time"])]
     boundary = [t for t in trades if is_boundary(t["sell_time"])]
