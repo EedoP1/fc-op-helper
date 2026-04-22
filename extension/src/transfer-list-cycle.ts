@@ -12,13 +12,14 @@
  */
 import {
   getTransferList,
-  relistAll,
+  listItem,
   clearSold,
   refreshAuctions,
   type TransferListResult,
   type EAItem,
 } from './ea-services';
 import { jitter } from './automation';
+import { getRelistBudget, recordRelist, MAX_RELISTS_PER_HOUR } from './relist-throttle';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,12 +57,32 @@ export async function executeTransferListCycle(
     ({ groups } = await getTransferList());
   }
 
-  // Step 2 — Relist expired cards (fire and ignore result, like FUT Enhancer)
+  // Step 2 — Relist expired cards one-by-one under the hourly throttle.
+  // Switched from bulk relistAll() so we can cap at MAX_RELISTS_PER_HOUR
+  // and spread listings across the day to stay under EA's daily cap.
   let relistedCount = 0;
   if (groups.expired.length > 0) {
-    await jitter(1000, 2000);
-    await relistAll();
-    relistedCount = groups.expired.length;
+    let budget = await getRelistBudget();
+    if (budget <= 0) {
+      console.log(`[transfer-list-cycle] Relist throttled: ${groups.expired.length} expired skipped (limit ${MAX_RELISTS_PER_HOUR}/hr reached)`);
+    }
+    for (const item of groups.expired) {
+      if (budget <= 0) break;
+      const auction = item.getAuctionData();
+      const buyNow = auction.buyNowPrice;
+      const startBid = auction.startingBid > 0 ? auction.startingBid : buyNow;
+      if (buyNow <= 0) continue;
+      await jitter(1000, 2000);
+      const res = await listItem(item, startBid, buyNow);
+      if (res.success) {
+        relistedCount++;
+        budget--;
+        await recordRelist();
+      }
+    }
+    if (relistedCount < groups.expired.length) {
+      console.log(`[transfer-list-cycle] Relisted ${relistedCount}/${groups.expired.length} expired (throttle ${MAX_RELISTS_PER_HOUR}/hr)`);
+    }
   }
 
   // Step 3 — Report expired to backend

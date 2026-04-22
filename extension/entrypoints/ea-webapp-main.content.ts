@@ -30,12 +30,13 @@ import {
   searchMarket,
   buildCriteria,
   listItem,
-  relistAll,
   roundToNearestStep,
   getBeforeStepValue,
   MAX_PRICE,
+  type EAItem,
 } from '../src/ea-services';
 import { jitter } from '../src/automation';
+import { getRelistBudget, recordRelist, MAX_RELISTS_PER_HOUR } from '../src/relist-throttle';
 
 const RATE_LIMIT_ERROR_CODE = 460;
 const EA_PAGE_SIZE = 20;
@@ -115,6 +116,13 @@ async function runHealthCheck(
     return { healthy: true, relisted_algo: 0, relisted_other: 0 };
   }
 
+  // Shared hourly relist budget (applies across algo + non-algo items)
+  let budget = await getRelistBudget();
+  if (budget <= 0) {
+    console.log(`[health-check] Relist throttled: ${groups.expired.length} expired skipped (limit ${MAX_RELISTS_PER_HOUR}/hr reached)`);
+    return { healthy: true, relisted_algo: 0, relisted_other: 0 };
+  }
+
   // Step 3: Get algo positions from backend to identify which expired items are algo
   let algoEaIds = new Set<number>();
   try {
@@ -125,11 +133,8 @@ async function runHealthCheck(
       }
     }
   } catch {
-    // Can't reach backend — skip algo-specific relist, just do relist-all
-    const relistResult = await relistAll();
-    if (relistResult.success) {
-      relistedOther = groups.expired.length;
-    }
+    // Can't reach backend — skip algo-specific relist, relist the non-algo expired batch per-item
+    relistedOther = await relistBatchAtPrevPrices(groups.expired, budget);
     return { healthy: true, relisted_algo: 0, relisted_other: relistedOther };
   }
 
@@ -146,6 +151,7 @@ async function runHealthCheck(
   }
 
   for (const [ea_id, items] of algoByEaId) {
+    if (budget <= 0) break;
     // Discover current lowest BIN
     const fallback = items[0].getAuctionData().buyNowPrice || 10000;
     await jitter(1000, 2000);
@@ -153,24 +159,29 @@ async function runHealthCheck(
     const listBin = roundToNearestStep(getBeforeStepValue(lowestBin));
     const listStart = roundToNearestStep(getBeforeStepValue(listBin));
 
+    let relistedForThisPosition = 0;
     for (const expItem of items) {
+      if (budget <= 0) break;
       await jitter(1000, 2000);
       const listResult = await listItem(expItem, listStart, listBin);
       if (listResult.success) {
         relistedAlgo++;
+        relistedForThisPosition++;
+        budget--;
+        await recordRelist();
       } else {
         console.warn(`[health-check] Relist failed for algo defId=${expItem.definitionId} (error ${listResult.error})`);
       }
     }
 
-    // Report relist to backend
-    if (relistedAlgo > 0) {
+    // Report relist to backend (only the cards actually relisted this cycle)
+    if (relistedForThisPosition > 0) {
       try {
         await sendMessage({
           type: 'ALGO_POSITION_RELIST',
           ea_id,
           price: listBin,
-          quantity: items.length,
+          quantity: relistedForThisPosition,
         });
       } catch {
         console.warn(`[health-check] ALGO_POSITION_RELIST report failed for ea_id=${ea_id}`);
@@ -178,16 +189,39 @@ async function runHealthCheck(
     }
   }
 
-  // Step 5: Relist all non-algo expired items at their previous prices
-  if (nonAlgoExpired.length > 0) {
-    await jitter(1000, 2000);
-    const relistResult = await relistAll();
-    if (relistResult.success) {
-      relistedOther = nonAlgoExpired.length;
-    }
+  // Step 5: Relist non-algo expired items at their previous prices, still under the throttle
+  if (nonAlgoExpired.length > 0 && budget > 0) {
+    relistedOther = await relistBatchAtPrevPrices(nonAlgoExpired, budget);
+  }
+
+  if (relistedAlgo + relistedOther < groups.expired.length) {
+    console.log(`[health-check] Relisted ${relistedAlgo + relistedOther}/${groups.expired.length} expired (throttle ${MAX_RELISTS_PER_HOUR}/hr)`);
   }
 
   return { healthy: true, relisted_algo: relistedAlgo, relisted_other: relistedOther };
+}
+
+/**
+ * Relist a batch of expired items individually at their previous prices.
+ * Returns the number actually relisted; stops once the shared hourly budget runs out.
+ */
+async function relistBatchAtPrevPrices(items: EAItem[], budget: number): Promise<number> {
+  let relisted = 0;
+  for (const item of items) {
+    if (budget <= 0) break;
+    const auction = item.getAuctionData();
+    const buyNow = auction.buyNowPrice;
+    const startBid = auction.startingBid > 0 ? auction.startingBid : buyNow;
+    if (buyNow <= 0) continue;
+    await jitter(1000, 2000);
+    const res = await listItem(item, startBid, buyNow);
+    if (res.success) {
+      relisted += 1;
+      budget -= 1;
+      await recordRelist();
+    }
+  }
+  return relisted;
 }
 
 const MSG_SOURCE = 'op-seller';

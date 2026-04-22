@@ -27,6 +27,7 @@ import {
   type EAItem,
 } from './ea-services';
 import { jitter } from './automation';
+import { getRelistBudget, recordRelist, MAX_RELISTS_PER_HOUR } from './relist-throttle';
 import type { ExtensionMessage } from './messages';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -207,8 +208,14 @@ export async function runAlgoTransferListSweep(
     }
   }
 
+  let budget = await getRelistBudget();
+  if (budget <= 0 && expiredByPosition.size > 0) {
+    console.log(`[algo-tl-sweep] Relist throttled: ${groups.expired.length} expired algo items skipped (limit ${MAX_RELISTS_PER_HOUR}/hr reached)`);
+  }
+
   for (const [ea_id, { items: expiredItems, match }] of expiredByPosition) {
     if (stopped()) return result;
+    if (budget <= 0) break;
 
     let listBin: number;
     if (match.selling) {
@@ -223,28 +230,33 @@ export async function runAlgoTransferListSweep(
     }
     const listStart = roundToNearestStep(getBeforeStepValue(listBin));
 
-    // Relist each expired card individually
+    // Relist each expired card individually, respecting the hourly throttle
+    let relistedForThisPosition = 0;
     for (const expItem of expiredItems) {
       if (stopped()) return result;
+      if (budget <= 0) break;
 
       await jitter(1000, 2000);
       const listResult = await listItem(expItem, listStart, listBin);
 
       if (listResult.success) {
         result.relistedCount += 1;
+        relistedForThisPosition += 1;
+        budget -= 1;
+        await recordRelist();
       } else {
         console.warn(`[algo-tl-sweep] Relist failed for defId=${expItem.definitionId} (error ${listResult.error})`);
       }
     }
 
-    // Report relist to backend
-    if (result.relistedCount > 0) {
+    // Report relist to backend (only the cards actually relisted this cycle)
+    if (relistedForThisPosition > 0) {
       try {
         await sendMessage({
           type: 'ALGO_POSITION_RELIST',
           ea_id,
           price: listBin,
-          quantity: expiredItems.length,
+          quantity: relistedForThisPosition,
         } satisfies ExtensionMessage);
       } catch (err) {
         console.warn(`[algo-tl-sweep] ALGO_POSITION_RELIST failed for ea_id=${ea_id}:`, err);
