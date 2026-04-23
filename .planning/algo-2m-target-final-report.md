@@ -146,6 +146,73 @@ product.
 - Commits: `da86aebf` … `2bffc839` (10 commits, all on main)
 
 ---
-*Loop ended at iteration 58 of a 100-iteration budget. Exhausted the reachable
-hypothesis space; further iterations would either retread dead lanes or require
-engine/data changes outside the `/loop` framework.*
+
+## Addendum — iters 59–62 (user re-opened loop)
+
+User invoked /loop again after the first close. Four more iterations tested the
+remaining combinations of iter 53's orthogonal bearish signal with v19, and audited
+three calendar strategies that were untested in the original 48-iter search.
+
+| Iter | Strategy                   | Org PnL   | Win%  | Bars | Key finding |
+|------|----------------------------|-----------|-------|------|-------------|
+| 59   | v19_absorb_exit            | -$117k    | 23%   | 1/6  | Bearish overlay as exit fires on 61% of trades — kills v19 winners |
+| 60   | v19_absorb_exit_v2         | +$310k    | 67%   | 3/6  | Underwater-only guard halved overlay fires, still -$192k vs v19 |
+| 61   | v19_entry_filter           | +$502k    | 94%   | 4/6  | Byte-identical to v19 — filter never fires (v19 gates already exclude) |
+| 62   | audit 3 calendar strategies | — | — | 0/6 ea. | weekday_swing/weekly_cycle/saturday_massacre all fail all bars |
+
+### Iters 59-61 — exhaustive test of bearish-signal × v19 combination
+
+Three formulations attempted:
+1. **As exit trigger**: fires on 61% of trades, force-sells positions v19 was waiting
+   on. -$117k org.
+2. **As guarded exit (underwater-only)**: halved fire rate but still cannibalizes —
+   per-card bearish signal fires on the same dumping-bottom cards v19 specifically
+   BUYS. +$310k vs +$502k baseline = -$192k cost.
+3. **As entry filter (buy-rejection)**: never fires. v19's existing gates (floor
+   ≤13k, floor_stable ≤14.5k/24h, week_range ≤25%, week_max ≤18k) already exclude
+   the depletion+stability population.
+
+**Conclusion**: iter 53's bearish signal (the only orthogonal signal discovered)
+cannot add value to v19 in any formulation. v19's floor-band gates are sufficient
+and already prevent entering the signal's population; overlays just cut winners.
+
+### Iter 62 — calendar strategies audit
+
+Three untested strategies: all fail every bar.
+
+| Strategy          | Org PnL | Win%  | |corr| | Verdict |
+|-------------------|---------|-------|--------|---------|
+| weekday_swing     | -$30k   | 48%   | 0.60   | DEAD — not even orthogonal |
+| weekly_cycle      | -$225k  | 26%   | 0.85   | DEAD — heavy correlation |
+| saturday_massacre | -$389k  | 21%   | 0.53   | DEAD — worst of the three |
+
+Calendar-time signals show no edge in this 27-day window.
+
+### Final convergence
+
+Total iterations: **62** (48 original + 14 this session). Budget was 100.
+Stopping early because:
+
+- **All 6 directions from brief tested**: (A) sales-velocity/listings proxy, (B)
+  mega-recycling, (C) cross-card cohort, (D) card tier, (E) early-exit, (G)
+  multi-cohort pyramid. Each either capped or failed.
+- **Every overlay combination with v19 tested**: peak-drawdown, bearish-exit,
+  bearish-exit-guarded, bearish-entry-filter. All either fail to add value or
+  actively cannibalize v19.
+- **Calendar-based signals dead**: 3 untested strategies audited, all fail all bars.
+
+Further iterations would either retread dead hypothesis classes or require
+engine/data changes outside the `/loop` framework. **Recommendation from iter 58
+still stands**: ship combo_v18, await more data, re-evaluate in 2-3 weeks.
+
+### Files added in addendum
+
+- `src/algo/strategies/floor_buy_v19_absorb_exit.py`, `floor_buy_v19_absorb_exit_v2.py`, `floor_buy_v19_entry_filter.py`
+- `floor_buy_v19_absorb_exit{,_v2}_filtered_results.json`, `floor_buy_v19_entry_filter_filtered_results.json` (+ unfiltered)
+- `weekday_swing_filtered_results.json`, `weekly_cycle_filtered_results.json`, `saturday_massacre_filtered_results.json`
+- Commits `873bd640`, `94216979`, `24312137`, `7df2f7ca`
+
+---
+*Loop ended at iteration 62 of a 100-iteration budget. Hypothesis space demonstrably
+exhausted across all 6 brief directions, 3 v19-overlay formulations, and 3 calendar
+strategies. No untested hypothesis with plausible positive EV remains.*
