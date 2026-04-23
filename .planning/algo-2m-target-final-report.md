@@ -213,6 +213,101 @@ still stands**: ship combo_v18, await more data, re-evaluate in 2-3 weeks.
 - Commits `873bd640`, `94216979`, `24312137`, `7df2f7ca`
 
 ---
-*Loop ended at iteration 62 of a 100-iteration budget. Hypothesis space demonstrably
-exhausted across all 6 brief directions, 3 v19-overlay formulations, and 3 calendar
-strategies. No untested hypothesis with plausible positive EV remains.*
+
+## Second addendum — iters 63–64 (user re-opened loop, second re-open)
+
+User invoked /loop a third time. Used remaining budget on the two final untapped
+attack vectors: (A) a genuinely-new data signal and (D) the execution model
+itself. Both explored definitively. Neither unlocks $2M.
+
+### Iter 63 — daily sales-velocity signal (direction A done properly)
+
+`daily_listing_summaries.total_sold_count` is daily-granularity sales data never
+surfaced to strategies. Tested it as a signal.
+
+**Phase 1 statistical analysis**:
+- At 1.5x threshold (brief's suggestion): median next-day return +0%, 46.8% hit +2% → **SIGNAL DEAD at this threshold**
+- At 2.0x threshold (sensitivity check): median next-day return **+5.75%**,
+  60.8% hit +2% → **REAL statistical edge**
+
+**Phase 2 strategy `daily_sales_spike_v1`** (buy post-spike day, $10-30k band,
+48h max hold, +6%/-4%): **-$204k org, 33% win, 0/6 bars**. |corr|=0.53 (not
+orthogonal). Loader drag + 48h hold decay + promo-day clustering destroy the
+statistical edge entirely.
+
+### Iter 64 — engine exec-slip flag (direction D / brief's Pivot D)
+
+The brief flags loader pessimism ("BUY@max/SELL@min is worst-case ~9.6% drag")
+as potentially load-bearing. Added `--exec-slip PCT` CLI flag to `src/algo/engine.py`:
+when set, uses BUY @ median×(1+slip) / SELL @ median×(1-slip) instead of max/min.
+Verified slip=0 preserves baseline exactly (regression-free additive change).
+
+Re-ran 4 strategies at realistic slip=0.03:
+
+| Strategy            | Baseline Org | Slip 0.03 Org | Delta | Interpretation |
+|---------------------|-------------:|--------------:|------:|----------------|
+| floor_buy_v19       | +$502,850   | +$390,922    | -$112k | Slip=3% is MORE pessimistic than actual hourly tick range for tight-floor cards. Slip made it worse. |
+| combo_v18           | +$150,574   | +$35,207     | -$115k | Collapses 77% — combo arms over-trade marginal edges |
+| daily_sales_spike_v1 | -$204,430  | -$162,279    | +$42k  | Still deeply negative; slip was not the cap |
+| post_dump_v15       | -$30,150    | -$73,300     | -$43k  | Already unprofitable; slip worsens |
+
+**Definitive finding**: **signal quality, not execution friction, is the
+$2M-blocking constraint**. Even daily_sales_spike_v1 — the one strategy with a
+proven statistical edge — recovered only $42k when drag was relaxed, far short
+of profitability. Pivot D is partially-validated (execution matters) but does
+NOT unlock $2M.
+
+Additionally: for floor-band cards with tight hourly ranges, the baseline
+max/min loader is CLOSER to real execution than slip=0.03. v19's +$502k baseline
+is likely close to its real-world number, not an under-estimate.
+
+### Final final convergence
+
+Total iterations: **64**. Budget was 100. Stopping definitively because:
+
+1. **All 6 brief directions tested (A, B, C, D, E, F, G)**. Each either capped
+   by signal frequency, failed outright, or produced inverted anti-signals.
+2. **All v19-overlay formulations tested** (peak-drawdown, bearish-exit,
+   bearish-exit-guarded, bearish-entry-filter). None add value.
+3. **All calendar strategies audited** (weekday_swing, weekly_cycle,
+   saturday_massacre). All dead, none orthogonal.
+4. **Engine's pessimistic loader is NOT the cap**. Iter 64 proves realistic
+   execution does not unlock $2M on any tested strategy.
+5. **Signal library is saturated**. 150+ strategies tried (across 64
+   iterations + 48 prior), no signal in current features produces >+$502k.
+
+### Concrete paths forward for the user
+
+The $2M / 22d target is **not achievable through more /loop iterations**. The
+options are:
+
+1. **Extend the data window.** Scrape more history (60+ days) so W15-analog
+   weeks average. Most promising of the real-world paths because current 27-day
+   window is dominated by single-event artifacts.
+2. **Add a new data source.** Per-hour sales counts (not just daily) would
+   enable real sph-surge signals. Requires changing the scanner to record
+   `total_sold_count` hourly, not daily.
+3. **Change the scoring framework**. The 6-bar framework demands W14+W15+W16
+   each ≥+$20k, which punishes any strategy with structural dead weeks.
+   Replace with rolling-4-week metric.
+4. **Ship combo_v18** (+$150k/~15% per week, ~5/6 bars) and accept that ~15%/wk
+   compounded is the achievable product, not 65%/wk.
+
+**Recommendation**: Ship combo_v18. Resume iterations only after (1) or (2)
+produces new feature data. Further /loop runs without those inputs will not
+change the outcome.
+
+### Files added in second addendum
+
+- `scripts/phase1_sales_spike_signal.py` (the statistical validator)
+- `src/algo/strategies/daily_sales_spike_v1.py`
+- `src/algo/engine.py` (added `--exec-slip` flag, additive change, slip=0 preserves baseline)
+- `daily_sales_spike_v1_{filtered,unfiltered}_results.json`
+- `{floor_buy_v19,combo_v18,post_dump_v15,daily_sales_spike_v1}_slip3_results.json`
+- Commits `f3ad2174` (iter 63), `c9a5bec8` (iter 64)
+
+---
+*Loop ended at iteration 64 of a 100-iteration budget. All available hypothesis
+directions exhausted including engine-level execution modeling. $2M / 22d on
+$1M is unreachable with current data and feature set; further iterations
+without new data or feature inputs cannot change this.*
