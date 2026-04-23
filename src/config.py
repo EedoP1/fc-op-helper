@@ -40,7 +40,7 @@ MARKET_DATA_RETENTION_DAYS = 30  # days to keep raw market snapshots
 # Listing tracking
 LISTING_RETENTION_DAYS = 7            # days to keep individual listing observations (per D-12)
 MIN_TOTAL_RESOLVED_OBSERVATIONS = 20  # quality threshold: min total resolved observations for a trustworthy score
-MIN_SALES_PER_HOUR = 7                # minimum real sales/hour from completedAuctions to be viable
+MIN_SALES_PER_HOUR = 20               # min real sales/hr to be viable; raised 7→20 on 2026-04-23 after outcome analysis showed <SPH=20 cards are 95% never-sold with near-zero realized profit (see .planning/analysis_tmp/op_sell_outcomes_report.md)
 AGGREGATION_HOUR_UTC = 3              # UTC hour for nightly daily summary aggregation
 MIN_OP_OBSERVATIONS = 3               # minimum OP listings at a margin to consider it viable
 
