@@ -675,8 +675,17 @@ async def run_cli(
     min_price: int = 0,
     max_price: int = 0,
     min_sales_per_hour: float = 0.0,
+    exec_slip: float = 0.0,
 ):
-    """CLI entrypoint: load data, run strategies, save results."""
+    """CLI entrypoint: load data, run strategies, save results.
+
+    Args:
+        exec_slip: If >0, override the pessimistic (max/min) exec_prices with
+            a realistic-slippage model:
+              BUY fill  = median_price * (1 + exec_slip)
+              SELL fill = median_price * (1 - exec_slip)
+            Default 0.0 preserves original BUY@max / SELL@min behaviour.
+    """
     from src.algo.strategies import discover_strategies
 
     engine = create_async_engine(db_url)
@@ -709,6 +718,27 @@ async def run_cli(
         logger.error("No market snapshot data found. Is the scanner running?")
         await engine.dispose()
         return
+
+    # Realistic-slippage execution override. When exec_slip>0, we replace
+    # the pessimistic loader (BUY@hourly-max / SELL@hourly-min) with
+    # BUY=median*(1+slip) / SELL=median*(1-slip). Default (0.0) preserves
+    # existing behaviour exactly.
+    if exec_slip and exec_slip > 0:
+        buy_mult = 1.0 + exec_slip
+        sell_mult = 1.0 - exec_slip
+        new_exec: dict[tuple[int, dt], tuple[int, int]] = {}
+        for ea_id, points in price_data.items():
+            for ts, med in points:
+                new_exec[(ea_id, ts)] = (
+                    int(med * buy_mult),
+                    int(med * sell_mult),
+                )
+        logger.info(
+            f"exec_slip={exec_slip:.4f}: overriding {len(exec_prices)} pessimistic "
+            f"exec_prices with median-based ({len(new_exec)} entries, "
+            f"BUY=med*{buy_mult:.4f}, SELL=med*{sell_mult:.4f})"
+        )
+        exec_prices = new_exec
 
     available = discover_strategies()
     if not available:
@@ -851,9 +881,13 @@ async def run_cli(
 @click.option("--max-price", default=0, help="Only include cards with prices <= this value")
 @click.option("--min-sph", "min_sales_per_hour", default=0.0, type=float,
               help="Filter out cards with avg sales/hour below this threshold (liquidity filter)")
+@click.option("--exec-slip", "exec_slip", default=0.0, type=float,
+              help="Execution slippage as a fraction (0.03 = 3%). When >0, overrides "
+                   "the pessimistic BUY@max/SELL@min loader with BUY=median*(1+slip), "
+                   "SELL=median*(1-slip). Default 0.0 preserves original behaviour.")
 @click.option("--db-url", default=DATABASE_URL, help="Database URL")
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG logging for strategy decisions")
-def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, min_sales_per_hour, db_url, verbose):
+def main(strategy_name, all_strategies, params_json, budget, days, min_price, max_price, min_sales_per_hour, exec_slip, db_url, verbose):
     """Run algo trading backtests."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if verbose:
@@ -863,6 +897,7 @@ def main(strategy_name, all_strategies, params_json, budget, days, min_price, ma
         strategy_name, all_strategies, params_json, budget, db_url,
         days=days, min_price=min_price, max_price=max_price,
         min_sales_per_hour=min_sales_per_hour,
+        exec_slip=exec_slip,
     ))
 
 
