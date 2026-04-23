@@ -338,23 +338,32 @@ class ScannerService:
                         "scan_player(%d): sales/hr %.1f below min %d — marking not viable",
                         ea_id, sph, MIN_SALES_PER_HOUR,
                     )
+                # Field semantics (CLAUDE.md):
+                #   expected_profit           = net_profit × op_ratio  (per-listing expected value)
+                #   efficiency                = expected_profit / buy_price
+                #   expected_profit_per_hour  = expected_profit × sales_per_hour
+                #   weighted_score            = scorer_v3 composite ranking score (sell_ratio × sph × net_profit)
+                net_profit = v3_result["net_profit"]
+                op_rate = v3_result["op_sell_rate"]
+                expected_profit = net_profit * op_rate
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
                     buy_price=v3_result["buy_price"],
                     sell_price=v3_result["sell_price"],
-                    net_profit=v3_result["net_profit"],
+                    net_profit=net_profit,
                     margin_pct=v3_result["margin_pct"],
                     op_sales=v3_result["op_sold_count"],
                     total_sales=v3_result["op_total_count"],
-                    op_ratio=v3_result["op_sell_rate"],
-                    expected_profit=v3_result["weighted_score"],
-                    efficiency=v3_result["weighted_score"] / v3_result["buy_price"],
+                    op_ratio=op_rate,
+                    expected_profit=expected_profit,
+                    efficiency=expected_profit / v3_result["buy_price"],
                     sales_per_hour=sph,
                     is_viable=viable,
-                    expected_profit_per_hour=v3_result["weighted_score"],
+                    expected_profit_per_hour=expected_profit * sph,
                     scorer_version="v3",
                     max_sell_price=market_data.max_price_range,
+                    weighted_score=v3_result["weighted_score"],
                 )
             else:
                 ps = PlayerScore(

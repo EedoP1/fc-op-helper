@@ -43,7 +43,7 @@ def optimize_portfolio(
     before = len(scored)
     scored = [
         s for s in scored
-        if (s.get("expected_profit_per_hour") or 0) > 0
+        if ((s.get("weighted_score") if s.get("weighted_score") is not None else s.get("expected_profit_per_hour")) or 0) > 0
         and (s.get("net_profit") or 0) >= 2000
     ]
     if exclude_card_types:
@@ -52,7 +52,7 @@ def optimize_portfolio(
     logger.warning("OPTIMIZER v3: %d -> %d after filters (excl=%s)", before, len(scored), exclude_card_types)
 
     # Sort by score descending for greedy fill
-    scored.sort(key=lambda s: s.get("expected_profit_per_hour") or 0, reverse=True)
+    scored.sort(key=lambda s: (s.get("weighted_score") if s.get("weighted_score") is not None else s.get("expected_profit_per_hour")) or 0, reverse=True)
 
     # ── 1. Greedy fill by score ──────────────────────────────────────────────
     selected: list[dict] = []
@@ -131,9 +131,12 @@ def optimize_portfolio(
             break
         remaining = budget - total_used
 
-        worst_idx = min(range(len(selected)), key=lambda i: selected[i].get("expected_profit_per_hour") or 0)
+        def _rank(s):
+            ws = s.get("weighted_score")
+            return ws if ws is not None else (s.get("expected_profit_per_hour") or 0)
+        worst_idx = min(range(len(selected)), key=lambda i: _rank(selected[i]))
         worst = selected[worst_idx]
-        worst_score = worst.get("expected_profit_per_hour") or 0
+        worst_score = _rank(worst)
 
         affordable = worst["buy_price"] + remaining
         best_upgrade = None
@@ -141,7 +144,7 @@ def optimize_portfolio(
             pid = s["player"].resource_id
             if pid in used_ids or pid in banned_ids:
                 continue
-            if (s.get("expected_profit_per_hour") or 0) <= worst_score:
+            if ((s.get("weighted_score") if s.get("weighted_score") is not None else s.get("expected_profit_per_hour")) or 0) <= worst_score:
                 break
             if s["buy_price"] <= affordable:
                 best_upgrade = s
@@ -162,6 +165,6 @@ def optimize_portfolio(
     if upgrades:
         logger.info("Upgrade loop: %d upgrades applied", upgrades)
 
-    selected.sort(key=lambda s: s.get("expected_profit_per_hour") or 0, reverse=True)
+    selected.sort(key=lambda s: (s.get("weighted_score") if s.get("weighted_score") is not None else s.get("expected_profit_per_hour")) or 0, reverse=True)
 
     return selected

@@ -555,10 +555,16 @@ async def rebalance_portfolio(
                 "sell_price": slot.sell_price,
                 "margin_pct": score.margin_pct if score else 0,
                 "efficiency": score.efficiency if score else 0.0,
+                "weighted_score": getattr(score, "weighted_score", None) if score else None,
             })
 
     # Step 3: Drop least efficient players if budget is too tight
-    kept_entries.sort(key=lambda x: x["efficiency"], reverse=True)
+    # Rank preserved: weighted_score is the composite scorer_v3 ranking value.
+    # Pre-migration rows may only have efficiency set — fall back to it.
+    kept_entries.sort(
+        key=lambda x: x.get("weighted_score") if x.get("weighted_score") is not None else x.get("efficiency", 0.0),
+        reverse=True,
+    )
     kept = []
     dropped = []
     kept_cost = 0

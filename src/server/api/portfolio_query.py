@@ -42,6 +42,7 @@ def _build_scored_entry(score: PlayerScore, record: PlayerRecord) -> dict:
         "scan_tier": record.scan_tier,
         "last_scanned_at": record.last_scanned_at,
         "expected_profit_per_hour": score.expected_profit_per_hour,
+        "weighted_score": score.weighted_score,
         "futgg_url": record.futgg_url,
     }
 
@@ -68,6 +69,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
             ps.op_sales, ps.total_sales, ps.op_ratio, ps.expected_profit,
             ps.efficiency, ps.sales_per_hour, ps.is_viable,
             ps.expected_profit_per_hour, ps.scorer_version, ps.max_sell_price,
+            ps.weighted_score,
             pr.ea_id   AS pr_ea_id, pr.name, pr.rating, pr.position,
             pr.nation, pr.league, pr.club, pr.card_type, pr.scan_tier,
             pr.last_scanned_at, pr.next_scan_at, pr.is_active,
@@ -113,6 +115,7 @@ async def _fetch_latest_viable_scores(session: AsyncSession) -> list[tuple]:
             expected_profit_per_hour=row["expected_profit_per_hour"],
             scorer_version=row["scorer_version"],
             max_sell_price=row["max_sell_price"],
+            weighted_score=row["weighted_score"],
         )
         record = PlayerRecord(
             ea_id=row["pr_ea_id"],
