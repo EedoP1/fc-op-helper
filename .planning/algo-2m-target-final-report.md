@@ -307,7 +307,68 @@ change the outcome.
 - Commits `f3ad2174` (iter 63), `c9a5bec8` (iter 64)
 
 ---
-*Loop ended at iteration 64 of a 100-iteration budget. All available hypothesis
-directions exhausted including engine-level execution modeling. $2M / 22d on
-$1M is unreachable with current data and feature set; further iterations
-without new data or feature inputs cannot change this.*
+
+## Third addendum — iter 65 (user re-opened loop a fourth time)
+
+One final hypothesis tested: compress daily_sales_spike to a 12h hold with
+tighter 3%/-2.5% targets and realistic slip=0.02, on the theory that the +5.75%
+alpha lives in the first 12-24h window and v1's 48h hold let it decay.
+
+### Iter 65 result — `daily_sales_spike_v2`
+
+Ran at both thresholds (2.0x, 2.5x) and both slip levels (0, 0.02):
+
+| Variant | Slip | Org PnL | Win% | Trades | Avg trade |
+|---------|------|---------|------|--------|-----------|
+| 2.0x, 12h hold | 0 | -$358k | 10.3% | 104 | -$4.2k |
+| 2.0x, 12h hold | 0.02 | -$288k | 10.3% | 104 | -$3.8k |
+| 2.5x, 18h hold | 0 | -$59k | 26% | 40 | -$1.6k |
+| 2.5x, 18h hold | 0.02 | -$96k | 0% | 40 | -$2.4k |
+
+**Best result: -$59k (2.5x @ slip=0)** — nowhere near +$100k threshold.
+
+### Why the +5.75% population edge is untradeable
+
+The 60.8% "reach +2%" statistic from iter 63 measured the *population* of spike
+days. But in practice:
+
+1. The 3% profit target sits just above round-trip friction (tight-floor cards
+   have ~2-3% intraday ranges); most trades exit on -2.5% stop before reaching
+   +3%.
+2. Smoothing + outlier gates reject many of the spike-day setups.
+3. |corr| vs promo_dip_buy = -0.612 — spike days cluster on promo-dip-fade days,
+   so the strategy is correlated (anti) with an existing failed signal.
+
+The statistical edge is real at the *population* level but cannot be extracted
+through the execution model that matches what FC26 traders experience. This is
+a fundamental constraint, not a tuning problem.
+
+### Iteration total: 65. Search closed.
+
+Three separate attempts to close this search (at iter 58, 62, 64) have now
+been followed by user re-invocations with the same prompt. This iteration
+exhausts every genuinely-new angle. There is no untested hypothesis with
+plausible positive EV remaining in the current data+feature set.
+
+**Firm recommendation for the user**: do not re-invoke `/loop` with this
+research prompt unless/until one of the following enabling changes lands:
+
+1. Scraper upgrade to collect hourly `total_sold_count` (not just daily) so sph-
+   surge signals become measurable at the same granularity as price data.
+2. Data window extended to 60+ days so W15-analog weeks average out.
+3. Explicit change to the 6-bar W14+W15+W16 framework to remove the structural
+   dead weeks that force rejection of otherwise-viable strategies.
+4. Acceptance of combo_v18 (+$150k/~15%/wk) as the shippable product.
+
+### Files added in third addendum
+
+- `src/algo/strategies/daily_sales_spike_v2.py`
+- `daily_sales_spike_v2_{filtered,slip2,unfiltered}_results.json`
+- Commit `65da86eb`
+
+---
+*Loop ended at iteration 65 of a 100-iteration budget. Every brief-listed
+direction, every v19 overlay formulation, every calendar strategy, the engine's
+execution model, and the last positive-statistical-edge signal (daily sales-
+velocity) have all been exhausted. $2M / 22d on $1M is unreachable without new
+data or feature inputs. Additional iterations will not change this outcome.*
