@@ -29,6 +29,20 @@ _PRE_JSON_RE = re.compile(r"<pre>(.*?)</pre>", re.DOTALL)
 # 5 triggers Cloudflare rate limiting; 3 is the sweet spot.
 _PAGE_POOL_SIZE = 3
 
+# How often to recycle the browser context (pages + cookies + cache).
+# Cloudflare's clearance cookie has a short lifetime, and a long-lived
+# browser context accumulates stale cache/state that causes fut.gg to
+# start returning responses with `liveAuctions: []` while keeping
+# `currentPrice` populated — a silent, differentially-throttled shape.
+# Recycling the context every ~30min re-solves the Cloudflare challenge
+# with fresh cookies and clears any accumulated session state.
+_CONTEXT_RECYCLE_SECONDS = 1800.0
+
+# If we see this many consecutive suspicious empty-liveAuctions responses,
+# recycle the context sooner than the timed interval. Catches the common
+# case where fut.gg's rate limiter kicks in earlier than the interval.
+_EMPTY_STREAK_TRIGGER = 20
+
 
 class PlaywrightPricesClient:
     """Playwright browser client for the player-prices endpoint.
@@ -54,6 +68,10 @@ class PlaywrightPricesClient:
         self._pages: list = []
         self._page_pool: Optional[asyncio.Queue] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Health tracking for automatic context recycle
+        self._context_started_at: float = 0.0
+        self._empty_la_streak: int = 0
+        self._recycle_lock: Optional[asyncio.Lock] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -73,6 +91,18 @@ class PlaywrightPricesClient:
             headless=False,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        self._recycle_lock = asyncio.Lock()
+        await self._build_context()
+        logger.info(
+            f"PlaywrightPricesClient: browser started with {_PAGE_POOL_SIZE} pages"
+        )
+
+    async def _build_context(self) -> None:
+        """Create a fresh browser_context + page pool and solve Cloudflare challenge.
+
+        Called from start() and _recycle_context(). Caller must ensure any
+        previous context/pages have been torn down.
+        """
         self._browser_context = await self._browser.new_context()
         # Remove webdriver flag to pass Cloudflare bot detection
         await self._browser_context.add_init_script(
@@ -81,6 +111,7 @@ class PlaywrightPricesClient:
 
         # Create page pool
         self._page_pool = asyncio.Queue()
+        self._pages = []
         for _ in range(_PAGE_POOL_SIZE):
             page = await self._browser_context.new_page()
             self._pages.append(page)
@@ -89,9 +120,44 @@ class PlaywrightPricesClient:
         # Solve Cloudflare challenge on the first page
         logger.info("PlaywrightPricesClient: solving Cloudflare challenge...")
         await self._resolve_challenge()
-        logger.info(
-            f"PlaywrightPricesClient: browser started with {_PAGE_POOL_SIZE} pages"
-        )
+        self._context_started_at = time.monotonic()
+        self._empty_la_streak = 0
+
+    async def _recycle_context(self, reason: str) -> None:
+        """Tear down and rebuild browser_context + pages.
+
+        Serialized via self._recycle_lock so only one coroutine recycles at
+        a time; the rest skip (their trigger has been satisfied by the
+        in-progress rebuild). After rebuild, the challenge is freshly solved
+        with new cookies — the most effective counter to fut.gg/Cloudflare
+        throttling the long-lived session into empty-liveAuctions responses.
+        """
+        if self._recycle_lock is None:
+            return
+        if self._recycle_lock.locked():
+            # Another coroutine is already recycling; skip.
+            return
+        async with self._recycle_lock:
+            logger.warning(
+                f"PlaywrightPricesClient: recycling browser context (reason={reason})"
+            )
+            try:
+                for page in self._pages:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                if self._browser_context is not None:
+                    try:
+                        await self._browser_context.close()
+                    except Exception:
+                        pass
+            finally:
+                self._pages = []
+                self._page_pool = None
+                self._browser_context = None
+            await self._build_context()
+            logger.info("PlaywrightPricesClient: context recycle complete")
 
     async def stop(self) -> None:
         """Close all pages, browser context, browser, and Playwright."""
@@ -172,8 +238,23 @@ class PlaywrightPricesClient:
         Returns:
             The parsed ``data`` dict from the API response, or None on error.
         """
+        # Time-based context recycling: Cloudflare's clearance cookie expires
+        # and the long-lived browser context has been observed to start
+        # returning liveAuctions=[] responses. Force a periodic refresh.
+        if (
+            self._context_started_at > 0
+            and time.monotonic() - self._context_started_at > _CONTEXT_RECYCLE_SECONDS
+        ):
+            await self._recycle_context(reason="age")
+
         url = _PRICES_URL.format(ea_id=ea_id)
-        page = await self._page_pool.get()
+        # Page pool may be torn down mid-recycle; loop until we get one.
+        while True:
+            if self._page_pool is None:
+                await asyncio.sleep(0.1)
+                continue
+            page = await self._page_pool.get()
+            break
         try:
             await page.goto(url, timeout=30000)
             content = await page.content()
@@ -198,12 +279,34 @@ class PlaywrightPricesClient:
                     )
                     return None
 
-            return self._parse_json_response(content, ea_id)
+            data = self._parse_json_response(content, ea_id)
+            # Streak-based recycle trigger: if we see many consecutive
+            # responses that have a priced card but zero liveAuctions, the
+            # session is almost certainly being throttled into stripped
+            # responses. Reset on any good response.
+            if data is not None:
+                cp = data.get("currentPrice") or {}
+                has_price = bool(cp.get("price"))
+                live_count = len(data.get("liveAuctions") or [])
+                if has_price and live_count == 0:
+                    self._empty_la_streak += 1
+                else:
+                    self._empty_la_streak = 0
+                if self._empty_la_streak >= _EMPTY_STREAK_TRIGGER:
+                    # Release this page first so recycle can close it cleanly.
+                    try:
+                        self._page_pool.put_nowait(page)
+                    except Exception:
+                        pass
+                    page = None  # prevent double-release in finally
+                    await self._recycle_context(reason="empty-la-streak")
+            return data
         except Exception as exc:
             logger.error(f"PlaywrightPricesClient: error fetching prices for ea_id={ea_id}: {exc}")
             return None
         finally:
-            self._page_pool.put_nowait(page)
+            if page is not None and self._page_pool is not None:
+                self._page_pool.put_nowait(page)
 
     def _parse_json_response(self, content: str, ea_id: int) -> dict | None:
         """Extract and parse JSON data from the browser's rendered response.

@@ -343,9 +343,9 @@ class ScannerService:
                 #   efficiency                = expected_profit / buy_price
                 #   expected_profit_per_hour  = expected_profit × sales_per_hour
                 #   weighted_score            = scorer_v3 composite ranking score (sell_ratio × sph × net_profit)
-                net_profit = v3_result["net_profit"]
-                op_rate = v3_result["op_sell_rate"]
-                expected_profit = net_profit * op_rate
+                net_profit = int(v3_result["net_profit"])
+                op_rate = float(v3_result["op_sell_rate"])
+                expected_profit = float(net_profit * op_rate)
                 ps = PlayerScore(
                     ea_id=ea_id,
                     scored_at=now,
