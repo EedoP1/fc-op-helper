@@ -1,0 +1,285 @@
+[
+  {
+    "strategy_name": "daily_trend_dip_v4",
+    "params": "{\"fire_hour_utc\": 0, \"trend_max\": -0.05, \"use_op_demand_gate\": true, \"op_demand_min\": 1.5, \"lookback_days\": 7, \"cheap_max\": 20000, \"mid_min\": 40000, \"mid_max\": 60000, \"min_price\": 11000, \"max_price\": 60000, \"smooth_window_h\": 3, \"outlier_tol\": 0.08, \"profit_target\": 0.2, \"max_hold_h\": 144, \"basket_size\": 6, \"qty_cap\": 8, \"notional_per_trade\": 100000, \"max_positions\": 12, \"min_age_days\": 7, \"burn_in_h\": 96}",
+    "started_budget": 1000000,
+    "final_budget": 1073462,
+    "total_pnl": 73462,
+    "total_trades": 30,
+    "win_rate": 0.6666666666666666,
+    "max_drawdown": 0.95175,
+    "sharpe_ratio": 0.1540420127512289,
+    "trades": [
+      {
+        "ea_id": 50570909,
+        "qty": 1,
+        "buy_price": 58500,
+        "sell_price": 62500,
+        "net_profit": 875,
+        "buy_time": "2026-04-13T00:00:00+00:00",
+        "sell_time": "2026-04-13T23:00:00+00:00"
+      },
+      {
+        "ea_id": 84102629,
+        "qty": 1,
+        "buy_price": 56500,
+        "sell_price": 72000,
+        "net_profit": 11900,
+        "buy_time": "2026-04-14T00:00:00+00:00",
+        "sell_time": "2026-04-14T19:00:00+00:00"
+      },
+      {
+        "ea_id": 100926159,
+        "qty": 2,
+        "buy_price": 46500,
+        "sell_price": 65000,
+        "net_profit": 30500,
+        "buy_time": "2026-04-13T00:00:00+00:00",
+        "sell_time": "2026-04-15T02:00:00+00:00"
+      },
+      {
+        "ea_id": 50610549,
+        "qty": 8,
+        "buy_price": 13000,
+        "sell_price": 13750,
+        "net_profit": 500,
+        "buy_time": "2026-04-13T00:00:00+00:00",
+        "sell_time": "2026-04-15T11:00:00+00:00"
+      },
+      {
+        "ea_id": 50573500,
+        "qty": 1,
+        "buy_price": 65000,
+        "sell_price": 67000,
+        "net_profit": -1350,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-16T15:00:00+00:00"
+      },
+      {
+        "ea_id": 67119823,
+        "qty": 2,
+        "buy_price": 50000,
+        "sell_price": 62000,
+        "net_profit": 17800,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-16T16:00:00+00:00"
+      },
+      {
+        "ea_id": 84153314,
+        "qty": 7,
+        "buy_price": 14000,
+        "sell_price": 15000,
+        "net_profit": 1750,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-17T07:00:00+00:00"
+      },
+      {
+        "ea_id": 67345363,
+        "qty": 1,
+        "buy_price": 59000,
+        "sell_price": 75000,
+        "net_profit": 12250,
+        "buy_time": "2026-04-18T00:00:00+00:00",
+        "sell_time": "2026-04-18T06:00:00+00:00"
+      },
+      {
+        "ea_id": 67347608,
+        "qty": 2,
+        "buy_price": 44000,
+        "sell_price": 50000,
+        "net_profit": 7000,
+        "buy_time": "2026-04-18T00:00:00+00:00",
+        "sell_time": "2026-04-18T11:00:00+00:00"
+      },
+      {
+        "ea_id": 67340311,
+        "qty": 2,
+        "buy_price": 56000,
+        "sell_price": 59500,
+        "net_profit": 1050,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-18T22:00:00+00:00"
+      },
+      {
+        "ea_id": 50595446,
+        "qty": 2,
+        "buy_price": 49750,
+        "sell_price": 12750,
+        "net_profit": -75275,
+        "buy_time": "2026-04-13T00:00:00+00:00",
+        "sell_time": "2026-04-19T00:00:00+00:00"
+      },
+      {
+        "ea_id": 84137039,
+        "qty": 5,
+        "buy_price": 22750,
+        "sell_price": 21500,
+        "net_profit": -11625,
+        "buy_time": "2026-04-19T00:00:00+00:00",
+        "sell_time": "2026-04-19T04:00:00+00:00"
+      },
+      {
+        "ea_id": 67338848,
+        "qty": 6,
+        "buy_price": 16500,
+        "sell_price": 17000,
+        "net_profit": -2100,
+        "buy_time": "2026-04-17T00:00:00+00:00",
+        "sell_time": "2026-04-19T10:00:00+00:00"
+      },
+      {
+        "ea_id": 84117512,
+        "qty": 2,
+        "buy_price": 40500,
+        "sell_price": 45000,
+        "net_profit": 4500,
+        "buy_time": "2026-04-18T00:00:00+00:00",
+        "sell_time": "2026-04-19T10:00:00+00:00"
+      },
+      {
+        "ea_id": 50545532,
+        "qty": 6,
+        "buy_price": 16500,
+        "sell_price": 15000,
+        "net_profit": -13500,
+        "buy_time": "2026-04-18T00:00:00+00:00",
+        "sell_time": "2026-04-19T12:00:00+00:00"
+      },
+      {
+        "ea_id": 84102629,
+        "qty": 2,
+        "buy_price": 50000,
+        "sell_price": 82000,
+        "net_profit": 55800,
+        "buy_time": "2026-04-19T00:00:00+00:00",
+        "sell_time": "2026-04-20T07:00:00+00:00"
+      },
+      {
+        "ea_id": 50410922,
+        "qty": 8,
+        "buy_price": 12250,
+        "sell_price": 13500,
+        "net_profit": 4600,
+        "buy_time": "2026-04-17T00:00:00+00:00",
+        "sell_time": "2026-04-20T18:00:00+00:00"
+      },
+      {
+        "ea_id": 67319466,
+        "qty": 6,
+        "buy_price": 16500,
+        "sell_price": 20750,
+        "net_profit": 19275,
+        "buy_time": "2026-04-21T00:00:00+00:00",
+        "sell_time": "2026-04-21T19:00:00+00:00"
+      },
+      {
+        "ea_id": 50565012,
+        "qty": 7,
+        "buy_price": 14000,
+        "sell_price": 13000,
+        "net_profit": -11550,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-22T00:00:00+00:00"
+      },
+      {
+        "ea_id": 50590888,
+        "qty": 2,
+        "buy_price": 42750,
+        "sell_price": 20750,
+        "net_profit": -46075,
+        "buy_time": "2026-04-16T00:00:00+00:00",
+        "sell_time": "2026-04-22T00:00:00+00:00"
+      },
+      {
+        "ea_id": 84150468,
+        "qty": 5,
+        "buy_price": 17250,
+        "sell_price": 20250,
+        "net_profit": 9937,
+        "buy_time": "2026-04-22T00:00:00+00:00",
+        "sell_time": "2026-04-22T17:00:00+00:00"
+      },
+      {
+        "ea_id": 67376784,
+        "qty": 6,
+        "buy_price": 16250,
+        "sell_price": 17500,
+        "net_profit": 2250,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-23T02:00:00+00:00"
+      },
+      {
+        "ea_id": 67375337,
+        "qty": 2,
+        "buy_price": 45000,
+        "sell_price": 52500,
+        "net_profit": 9750,
+        "buy_time": "2026-04-19T00:00:00+00:00",
+        "sell_time": "2026-04-23T11:00:00+00:00"
+      },
+      {
+        "ea_id": 50589594,
+        "qty": 8,
+        "buy_price": 11250,
+        "sell_price": 14750,
+        "net_profit": 22100,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-23T17:00:00+00:00"
+      },
+      {
+        "ea_id": 67345360,
+        "qty": 2,
+        "buy_price": 47250,
+        "sell_price": 47000,
+        "net_profit": -5200,
+        "buy_time": "2026-04-18T00:00:00+00:00",
+        "sell_time": "2026-04-23T18:00:00+00:00"
+      },
+      {
+        "ea_id": 84147130,
+        "qty": 2,
+        "buy_price": 54000,
+        "sell_price": 55000,
+        "net_profit": -3500,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-23T18:00:00+00:00"
+      },
+      {
+        "ea_id": 67373769,
+        "qty": 5,
+        "buy_price": 19250,
+        "sell_price": 22000,
+        "net_profit": 8250,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-23T21:00:00+00:00"
+      },
+      {
+        "ea_id": 84161408,
+        "qty": 2,
+        "buy_price": 44250,
+        "sell_price": 54000,
+        "net_profit": 14100,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-23T21:00:00+00:00"
+      },
+      {
+        "ea_id": 67384056,
+        "qty": 8,
+        "buy_price": 13500,
+        "sell_price": 13000,
+        "net_profit": -9200,
+        "buy_time": "2026-04-22T00:00:00+00:00",
+        "sell_time": "2026-04-24T01:00:00+00:00"
+      },
+      {
+        "ea_id": 67321675,
+        "qty": 1,
+        "buy_price": 54500,
+        "sell_price": 77000,
+        "net_profit": 18650,
+        "buy_time": "2026-04-23T00:00:00+00:00",
+        "sell_time": "2026-04-24T01:00:00+00:00"
+      }
+    ]
+  }
+]
